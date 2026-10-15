@@ -67,6 +67,8 @@ _db.executescript(
         duration_ms INTEGER, thumb TEXT, source TEXT, path TEXT, updated REAL);
     CREATE TABLE IF NOT EXISTS likes (id TEXT PRIMARY KEY, value INTEGER, at REAL);
     CREATE TABLE IF NOT EXISTS plays (id TEXT, at REAL, action TEXT);
+    CREATE TABLE IF NOT EXISTS playback_events (event_id TEXT PRIMARY KEY, id TEXT, action TEXT, at REAL);
+    CREATE TABLE IF NOT EXISTS station_batches (request_id TEXT PRIMARY KEY, station_id TEXT, tracks TEXT, at REAL);
     CREATE TABLE IF NOT EXISTS stations (id TEXT PRIMARY KEY, title TEXT, seed TEXT, state TEXT, at REAL);
     -- genre: Apple Music primary genre ('' = looked up, none found; NULL = not looked up yet)
     -- similar: JSON list of artists YouTube Music relates to this track's artists (fetched for thumbs-down)
@@ -851,7 +853,7 @@ def create_station(seed: dict) -> dict:
     return {"station": {"id": sid, "title": title, "more": f"{PUBLIC_PREFIX}/api/station/{sid}/more"}, "tracks": tracks}
 
 
-def _take(sid: str, state: dict, n: int) -> list[dict]:
+def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
     taste = taste_profile()
     out: list[dict] = []
     attempts = 0
@@ -876,7 +878,8 @@ def _take(sid: str, state: dict, n: int) -> list[dict]:
             if not state["queue"]:
                 break
     state["played"] = state["played"][-400:]
-    db("UPDATE stations SET state=?, at=? WHERE id=?", (json.dumps(state), time.time(), sid))
+    if persist:
+        db("UPDATE stations SET state=?, at=? WHERE id=?", (json.dumps(state), time.time(), sid))
     if any(score < 0 for score in taste.genre.values()):
         # Learn genres for what was just served and what comes next; the player prunes late finds via `drop`.
         for cid in [t["id"] for t in out] + state["queue"][:12]:
@@ -884,16 +887,46 @@ def _take(sid: str, state: dict, n: int) -> list[dict]:
     return out
 
 
-def station_more(sid: str, n: int) -> list[dict]:
+def station_more(sid: str, n: int, request_id: str = "") -> list[dict]:
+    if request_id and not re.fullmatch(r"[a-f0-9-]{36}", request_id):
+        raise ValueError("invalid continuation key")
     with _station_lock:
+        if request_id:
+            cached = db("SELECT station_id,tracks FROM station_batches WHERE request_id=?", (request_id,))
+            if cached:
+                if cached[0][0] != sid:
+                    raise ValueError("continuation belongs to another station")
+                return json.loads(cached[0][1])
         rows = db("SELECT state FROM stations WHERE id=?", (sid,))
         if not rows:
             raise LookupError("unknown station")
         state = json.loads(rows[0][0])
-        tracks = _take(sid, state, max(1, min(n, 25)))
+        tracks = _take(sid, state, max(1, min(n, 25)), False)
+        # Compute outside the DB transaction, commit advancement and receipt atomically.
+        with _db_lock, _db as con:
+            con.execute("UPDATE stations SET state=?,at=? WHERE id=?", (json.dumps(state), time.time(), sid))
+            if request_id and tracks:
+                con.execute("INSERT INTO station_batches VALUES(?,?,?,?)", (request_id, sid, json.dumps(tracks), time.time()))
+            con.execute("DELETE FROM station_batches WHERE at<?", (time.time() - 7*86400,))
     for t in tracks[:2]:
         prefetch(t["id"])
     return tracks
+
+
+def record_play(tid: str, action: str, event_id: str = "") -> bool:
+    """One play/skip per native transition, even across retries and view reloads."""
+    if event_id and (not re.fullmatch(r"[a-f0-9-]{36}:[a-f0-9-]{36}:(played|skipped)", event_id) or event_id.rsplit(":", 1)[-1] != action):
+        raise ValueError("invalid playback event")
+    with _db_lock, _db as con:
+        if event_id:
+            previous = con.execute("SELECT id,action FROM playback_events WHERE event_id=?", (event_id,)).fetchone()
+            if previous:
+                if previous != (tid, action):
+                    raise ValueError("conflicting playback event")
+                return False
+            con.execute("INSERT INTO playback_events VALUES(?,?,?,?)", (event_id, tid, action, time.time()))
+        con.execute("INSERT INTO plays(id,at,action) VALUES(?,?,?)", (tid, time.time(), action))
+        return True
 
 
 # ---------------------------------------------------------------- Audio cache
@@ -1089,7 +1122,7 @@ class Handler(BaseHTTPRequestHandler):
             m = re.match(r"^/api/station/([a-f0-9]{16})/more$", path)
             if m:
                 n = int((qs.get("n") or ["10"])[0])
-                return self._json(200, {"tracks": station_more(m.group(1), n)})
+                return self._json(200, {"tracks": station_more(m.group(1), n, qs.get("requestId", [""])[0])})
             m = re.match(r"^/stream/(.+)$", path)
             if m:
                 return self._stream(urllib.parse.unquote(m.group(1)))
@@ -1142,8 +1175,8 @@ class Handler(BaseHTTPRequestHandler):
                     elif action == "like":
                         queue_info(tid)
                 else:
-                    db("INSERT INTO plays(id,at,action) VALUES(?,?,?)", (tid, time.time(), action))
-                    if action == "played":
+                    fresh = record_play(tid, action, str(body.get("eventId", "")))
+                    if action == "played" and fresh:
                         prefetch(tid)
                 # The player sends what is queued after this track; answer with what no longer fits.
                 upcoming = body.get("upcoming") if isinstance(body.get("upcoming"), list) else []

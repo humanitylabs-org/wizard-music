@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { browserSessionStore, EMPTY_SNAPSHOT, musicEngine, playedTracks, readSession, WebEngine, type MusicEngine, type MusicSnapshot, type MusicStation, type MusicTrack } from './engine'
+import { hostedAudioBridge } from './backgroundAudio'
+if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNativeMusic = hostedAudioBridge()
 import './music.css'
 
 const BASE = new URL('./', document.baseURI).pathname
@@ -35,7 +37,11 @@ function sendFeedback(trackId: string, action: FeedbackAction): Promise<Feedback
   const snap = engine?.snapshot()
   const upcoming = snap ? snap.queue.slice(Math.max(0, snap.index + (action === 'dislike' ? 0 : 1))).map((item) => item.id).filter((id) => id !== trackId).slice(0, 60) : []
   return musicApi.feedback(trackId, action, upcoming).then((result) => {
-    if (result.drop?.length) engineIfStarted()?.removeUpcoming(result.drop)
+    // A successful taste change invalidates in-flight recommendations even if no
+    // currently queued IDs need pruning. Older retained engines may lack this method.
+    if (action === 'like' || action === 'unlike' || action === 'dislike' || result.drop?.length) {
+      engineIfStarted()?.removeUpcoming?.(result.drop ?? [])
+    }
     return result
   })
 }
@@ -125,7 +131,7 @@ function useFeedbackReporter(snapshot: MusicSnapshot) {
   const reported = useRef('')
   const current = snapshot.queue[snapshot.index]
   useEffect(() => {
-    if (!current || reported.current === current.id || !snapshot.playing) return
+    if (snapshot.engine === 'native' || !current || reported.current === current.id || !snapshot.playing) return
     reported.current = current.id
     void sendFeedback(current.id, 'played').catch(() => undefined)
   }, [current, snapshot.playing])
@@ -290,8 +296,8 @@ export function MiniPlayer({ onOpen, notify }: { onOpen: () => void; notify: (me
       <span className="music-row-text"><strong>{track.title}</strong><small>{track.artist}</small></span>
     </button>
     <button type="button" className="music-mini-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph size={22} /></button>
-    <button type="button" className="music-mini-toggle" aria-label={snapshot.playing ? 'Pause' : 'Play'} onClick={() => engineIfStarted()?.toggle()}>{snapshot.playing ? <PauseGlyph /> : <PlayGlyph />}</button>
-    <button type="button" className="music-mini-next" aria-label="Next song" onClick={() => { void sendFeedback(track.id, 'skipped').catch(() => undefined); engineIfStarted()?.next() }}><NextGlyph /></button>
+    <button type="button" className="music-mini-toggle" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engineIfStarted()?.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph /> : <PlayGlyph />}</button>
+    <button type="button" className="music-mini-next" aria-label="Next song" onClick={() => { if (snapshot.engine !== 'native') void sendFeedback(track.id, 'skipped').catch(() => undefined); engineIfStarted()?.next() }}><NextGlyph /></button>
     <span className="music-mini-progress" style={{ transform: `scaleX(${progress})` }} />
   </div>
 }
@@ -342,8 +348,8 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
       <div className="music-controls">
         <button type="button" className="music-icon-button music-thumb music-thumb-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph /></button>
         <button type="button" className="music-icon-button big" aria-label="Previous" onClick={() => engine.previous()}><PrevGlyph /></button>
-        <button type="button" className="music-play" aria-label={snapshot.playing ? 'Pause' : 'Play'} onClick={() => engine.toggle()}>{snapshot.playing ? <PauseGlyph size={30} /> : <PlayGlyph size={30} />}</button>
-        <button type="button" className="music-icon-button big" aria-label="Next" onClick={() => { void sendFeedback(track.id, 'skipped').catch(() => undefined); engine.next() }}><NextGlyph /></button>
+        <button type="button" className="music-play" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engine.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph size={30} /> : <PlayGlyph size={30} />}</button>
+        <button type="button" className="music-icon-button big" aria-label="Next" onClick={() => { if (snapshot.engine !== 'native') void sendFeedback(track.id, 'skipped').catch(() => undefined); engine.next() }}><NextGlyph /></button>
         <button type="button" className={`music-icon-button music-thumb music-like${liked ? ' on' : ''}`} aria-pressed={liked} aria-label={liked ? 'Thumbs up (on)' : 'Thumbs up'} onClick={like}><ThumbUpGlyph filled={liked} /></button>
       </div>
       {snapshot.error && <p className="music-status" role="status">{snapshot.error}</p>}
