@@ -1,0 +1,55 @@
+{
+  "id": "wizard-music",
+  "name": "Music",
+  "wizard_type": "service",
+  "available": true,
+  "short_desc": "Your music library inside Wizard. Backend setup required.",
+  "description": "Private test release; no bundled music or account. Configure your own library and hub token using SETUP.md. Native background playback not certified.",
+  "author": "Humanity Labs",
+  "port": 9205,
+  "categories": [
+    "media"
+  ],
+  "tipi_version": 1,
+  "version": "0.1.0",
+  "source": "https://github.com/humanitylabs-org/wizard-music",
+  "exposable": false,
+  "supported_architectures": [
+    "arm64",
+    "amd64"
+  ],
+  "dynamic_config": true,
+  "min_tipi_version": "4.8.0",
+  "uid": 1000,
+  "gid": 1000,
+  "no_gui": false,
+  "form_fields": [
+    {
+      "type": "password",
+      "label": "Music backend token (generate a new random value)",
+      "env_variable": "WIZARD_MUSIC_HUB_TOKEN",
+      "required": true
+    },
+    {
+      "type": "text",
+      "label": "Enable optional online catalogs (0 or 1)",
+      "env_variable": "WIZARD_MUSIC_ONLINE",
+      "required": false,
+      "default": "0"
+    },
+    {
+      "type": "text",
+      "label": "Trusted Wizard gateway hostname (no port)",
+      "env_variable": "WIZARD_TRUSTED_HOSTS",
+      "required": false,
+      "default": ""
+    },
+    {
+      "type": "text",
+      "label": "Trusted Wizard browser origin (scheme and port)",
+      "env_variable": "WIZARD_TRUSTED_ORIGINS",
+      "required": false,
+      "default": ""
+    }
+  ]
+}

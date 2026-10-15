@@ -1,0 +1,18 @@
+services:
+  music:
+    image: ${MUSIC_IMAGE:-ghcr.io/humanitylabs-org/wizard-music:0.1.0-test}
+    ports: ['127.0.0.1:${MUSIC_PORT:-9205}:9205']
+    environment:
+      WIZARD_MUSIC_HUB_TOKEN: ${WIZARD_MUSIC_HUB_TOKEN:-}
+      WIZARD_MUSIC_ONLINE: ${WIZARD_MUSIC_ONLINE:-0}
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+    volumes:
+      - music-data:/data
+      - ${MUSIC_LIBRARY_DIR:?Set MUSIC_LIBRARY_DIR to your own music folder}:/music:ro
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    read_only: true
+    tmpfs: [/tmp]
+volumes:
+  music-data:

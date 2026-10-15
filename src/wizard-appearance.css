@@ -1,0 +1,23 @@
+/* Wizard OS Appearance v1, hosted layer (@wizard/ui v1 — vendored, to be extracted later). WIZARD_APPEARANCE_CSS_V1
+ * Applies only inside a Wizard shell that sent a valid context (html[data-wz-hosted], set by public/wizard-appearance.js);
+ * standalone Music is untouched and paints its own #0f1014. Canvas transparent on the shell's window glass; mini player,
+ * Now Playing and toasts on the overlay material; cards/chips/inputs on ink surfaces; ink and hairlines follow the skin.
+ * Music KEEPS its own violet accent (--wiz / --wiz-deep) and its album-art treatment. */
+:root[data-wz-hosted] {
+  --bg: var(--wz-base);
+  --bg-raised: var(--wz-surface-raised);
+  --bg-input: var(--wz-surface);
+  --line: color-mix(in srgb, var(--wz-border) 70%, transparent);
+  --line-strong: var(--wz-border);
+  --text: var(--wz-text);
+  --text-2: var(--wz-text-secondary);
+  --text-dim: var(--wz-text-muted);
+  background: var(--wz-canvas);
+}
+:root[data-wz-hosted], :root[data-wz-hosted] body, :root[data-wz-hosted] #root { background: var(--wz-canvas); }
+:root[data-wz-hosted] .music-mini { background: color-mix(in srgb, var(--wz-overlay) 94%, var(--wiz) 6%); -webkit-backdrop-filter: blur(18px) saturate(1.2); backdrop-filter: blur(18px) saturate(1.2); }
+:root[data-wz-hosted] .music-now { background: linear-gradient(180deg, color-mix(in srgb, var(--wiz-deep) 22%, var(--wz-overlay)) 0%, var(--wz-overlay) 46%); -webkit-backdrop-filter: blur(22px) saturate(1.2); backdrop-filter: blur(22px) saturate(1.2); }
+:root[data-wz-hosted] .music-toast { background: var(--wz-overlay); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+/* No art: an accent glow on the glass, not a grey/black plate. */
+:root[data-wz-hosted] .music-art-fallback { background: radial-gradient(120% 90% at 30% 15%, color-mix(in srgb, var(--wiz) 30%, transparent), color-mix(in srgb, var(--wz-text) 5%, transparent) 70%); color: color-mix(in srgb, var(--wiz) 70%, var(--wz-text)); }
+:root[data-wz-hosted][data-color-scheme="light"] .music-art-hero { box-shadow: 0 24px 60px rgba(40, 30, 15, .25); }

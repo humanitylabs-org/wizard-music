@@ -1,0 +1,26 @@
+services:
+  wizard-music:
+    image: ghcr.io/humanitylabs-org/wizard-music:0.1.0-test
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    read_only: true
+    tmpfs: [/tmp]
+    environment:
+      WIZARD_MUSIC_APP_HOST: 0.0.0.0
+      WIZARD_MUSIC_APP_PORT: '9205'
+      WIZARD_MUSIC_HUB_ORIGIN: http://127.0.0.1:8793
+      WIZARD_MUSIC_HUB_TOKEN: ${WIZARD_MUSIC_HUB_TOKEN:-}
+      WIZARD_MUSIC_HUB_HOME: /data
+      WIZARD_MUSIC_LIBRARY: /music
+      WIZARD_MUSIC_ONLINE: ${WIZARD_MUSIC_ONLINE:-0}
+      WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
+      WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/music:/music:ro
+    x-runtipi:
+      is_main: true
+      internal_port: 9205
+x-runtipi:
+  schema_version: 2
+  overrides: []

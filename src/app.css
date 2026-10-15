@@ -1,0 +1,39 @@
+/* Wizard Music app shell. Tokens match Wizard (dark). */
+:root {
+  color-scheme: dark;
+  --bg: #0f1014;
+  --bg-raised: #16171d;
+  --bg-input: #1a1b22;
+  --line: #23242d;
+  --line-strong: #30323e;
+  --text: #ebecf2;
+  --text-2: #a6a9b6;
+  --text-dim: #62656f;
+  --wiz: #a48bfa;
+  --wiz-deep: #7c5cf0;
+  --ok: #58c495;
+  --font: -apple-system, "SF Pro Text", Roboto, "Segoe UI Variable Text", Inter, ui-sans-serif, system-ui, sans-serif;
+  --mono: "SF Mono", "Roboto Mono", ui-monospace, Menlo, monospace;
+  --safe-area-top: env(safe-area-inset-top, 0px);
+  --safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --ease: cubic-bezier(.32, .72, 0, 1);
+  --sheet-time: 240ms;
+  font-family: var(--font);
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+* { box-sizing: border-box; }
+html, body, #root { height: 100%; margin: 0; }
+body { background: var(--bg); overscroll-behavior: none; }
+button { font: inherit; cursor: pointer; }
+.icon-button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 50%; background: none; color: var(--text); }
+.secondary-action { min-height: 38px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--bg-raised); color: var(--text); }
+
+.music-shell { display: flex; flex-direction: column; height: 100%; }
+.music-shell-head { flex: none; padding: calc(var(--safe-area-top) + 14px) 18px 8px; }
+.music-shell-head h1 { margin: 0; font-size: 26px; font-weight: 750; letter-spacing: -.01em; }
+.music-shell-main { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px; }
+.music-shell .music-mini { margin-bottom: calc(var(--safe-area-bottom) + 10px); }
+.music-toast { position: fixed; left: 50%; bottom: calc(var(--safe-area-bottom) + 86px); z-index: 80; transform: translateX(-50%); max-width: calc(100vw - 32px); padding: 10px 16px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--bg-raised); color: var(--text); font-size: 14px; box-shadow: 0 10px 30px #0009; }
