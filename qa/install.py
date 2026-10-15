@@ -30,8 +30,14 @@ checks=['clean install process healthy and honestly unconfigured (503)']
 token=secrets.token_hex(32)
 env=ROOT/'qa.env';env.write_text('WIZARD_MUSIC_HUB_TOKEN='+token+'\nWIZARD_TRUSTED_ORIGINS=http://127.0.0.1:19325\n');env.chmod(0o600)
 run('docker','volume','create','music-test-data')
+run('docker','volume','create','music-test-library')
+# Colima daemon may not mount the host's external SSD path. Populate a dedicated
+# volume via Docker's copy API; no owner library or global daemon config changes.
+helper=run('docker','create','-v','music-test-library:/music',IMAGE)
+run('docker','cp',str(ROOT/'library/Recipient QA Melody.wav'),helper+':/music/Recipient QA Melody.wav')
+run('docker','rm',helper)
 def create():
- return run('docker','run','-d','--name','music-test-configured','--env-file',str(env),'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--tmpfs','/tmp','-p','127.0.0.1:19305:9205','-v','music-test-data:/data','-v',str(ROOT/'library')+':/music:ro',IMAGE)
+ return run('docker','run','-d','--name','music-test-configured','--env-file',str(env),'--read-only','--cap-drop','ALL','--security-opt','no-new-privileges:true','--tmpfs','/tmp','-p','127.0.0.1:19305:9205','-v','music-test-data:/data','-v','music-test-library:/music:ro',IMAGE)
 create();ready(19305)
 for _ in range(30):
  s,_,b=api('/wizard-music/api/home')
