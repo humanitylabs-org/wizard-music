@@ -22,7 +22,7 @@ def ready(port):
  raise RuntimeError('container not ready')
 for name in ['music-test-clean','music-test-configured']:
  subprocess.run(['docker','rm','-f',name],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
-run('docker','run','-d','--name','music-test-clean','-p','127.0.0.1:19306:9205',IMAGE)
+run('docker','run','-d','--name','music-test-clean','-e','WIZARD_TRUSTED_ORIGINS=http://127.0.0.1:19325','-p','127.0.0.1:19306:9205',IMAGE)
 ready(19306)
 assert json.loads(api('/health',port=19306)[2])['configured'] is False
 assert api('/wizard-music/api/home',port=19306)[0]==503
