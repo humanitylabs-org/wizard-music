@@ -99,11 +99,11 @@ export async function runMusicCommand(cmd: MusicCommand, notify: (message: strin
     case 'resume':
     case 'toggle':
       if (!current) return runMusicCommand({ op: 'play', said: 'play music' }, notify)
-      if (cmd.op === 'toggle' && engine?.snapshot().playing) { engine.pause(); return { ok: true, text: 'Paused' } }
+      if (cmd.op === 'toggle' && (engine?.snapshot().wantPlaying ?? engine?.snapshot().playing)) { engine.pause(); return { ok: true, text: 'Paused' } }
       engine?.play(); return { ok: true, text: `Playing ${current.title}` }
     case 'next': {
       if (!current || !engine) return { ok: false, text: 'Nothing is playing.' }
-      void musicControl.feedback(current.id, 'skipped').catch(() => undefined)
+      if (engine.snapshot().engine !== 'native') void musicControl.feedback(current.id, 'skipped').catch(() => undefined)
       engine.next()
       const next = nowTrack()
       return { ok: true, text: next && next.id !== current.id ? `Next: ${next.title} · ${next.artist}` : 'Skipped' }

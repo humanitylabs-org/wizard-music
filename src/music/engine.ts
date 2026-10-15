@@ -1,3 +1,4 @@
+import { hostedAudioBridge } from './backgroundAudio'
 // Wizard Music playback engine.
 //
 // One interface, two implementations:
@@ -25,6 +26,7 @@ export type MusicStation = { id: string; title: string; more: string }
 export type MusicSnapshot = {
   queue: MusicTrack[]
   index: number
+  wantPlaying?: boolean
   playing: boolean
   buffering: boolean
   positionMs: number
@@ -321,7 +323,7 @@ export class WebEngine implements MusicEngine {
 
 // --------------------------------------------------------------- Native engine
 type NativeMessage = { data: string }
-export type NativeMusicBridge = { postMessage(value: string): void; onmessage: ((event: NativeMessage) => void) | null }
+export type NativeMusicBridge = { postMessage(value: string): void | Promise<void>; onmessage: ((event: NativeMessage) => void) | null }
 type NativeSnapshot = Partial<Omit<MusicSnapshot, 'queue' | 'station' | 'engine'>> & { queue?: MusicTrack[]; queueRevision?: number; station?: MusicStation | null }
 
 declare global {
@@ -333,6 +335,8 @@ export class NativeEngine implements MusicEngine {
   private state: MusicSnapshot = { ...EMPTY_SNAPSHOT, engine: 'native' }
   private emitter = new Emitter()
   private queueRevision = -1
+  private sessionId = ""
+  private subscribers = 0
   private poll = 0
   private bridge: NativeMusicBridge
 
@@ -345,13 +349,19 @@ export class NativeEngine implements MusicEngine {
   }
 
   private send(method: string, params: Record<string, unknown> = {}) {
-    this.bridge.postMessage(JSON.stringify({ method, knownQueueRevision: this.queueRevision, ...params }))
+    return Promise.resolve(this.bridge.postMessage(JSON.stringify({ method, knownQueueRevision: this.queueRevision, ...params }))).catch((error: Error) => {
+      this.state = { ...this.state, error: error.message }; this.emitter.emit(this.state)
+      if (method === "load") throw error
+    })
   }
 
   private accept(value: NativeSnapshot) {
+    const identity = value as NativeSnapshot & { sessionId?: string; volume?: number }
+    if (identity.sessionId && identity.sessionId !== this.sessionId) { this.sessionId = identity.sessionId; this.queueRevision = -1; this.state = { ...EMPTY_SNAPSHOT, engine: "native" } }
+    if (typeof identity.volume === "number") this.gain = identity.volume
     const patch: Partial<MusicSnapshot> = {}
     if (Array.isArray(value.queue)) { patch.queue = value.queue; this.queueRevision = value.queueRevision ?? this.queueRevision }
-    for (const key of ['index', 'playing', 'buffering', 'positionMs', 'durationMs', 'error'] as const) {
+    for (const key of ['index', 'playing', 'wantPlaying', 'buffering', 'positionMs', 'durationMs', 'error'] as const) {
       if (value[key] !== undefined) (patch as Record<string, unknown>)[key] = value[key]
     }
     if (value.station !== undefined) patch.station = value.station
@@ -362,14 +372,17 @@ export class NativeEngine implements MusicEngine {
   snapshot() { return this.state }
   subscribe(listener: (snapshot: MusicSnapshot) => void) {
     const stop = this.emitter.subscribe(listener)
+    this.subscribers++
+    this.send('state')
     if (!this.poll) this.poll = window.setInterval(() => { if (document.visibilityState === 'visible') this.send('state') }, 1000)
     return () => {
       stop()
+      if (--this.subscribers === 0) { clearInterval(this.poll); this.poll = 0 }
     }
   }
 
   async load(queue: MusicTrack[], index: number, station: MusicStation | null) {
-    this.send('load', {
+    await this.send('load', {
       index,
       queue: queue.map((track) => ({ ...track, stream: absoluteMusicUrl(track.stream), art: absoluteMusicUrl(track.art) })),
       station: station ? { ...station, more: absoluteMusicUrl(station.more) } : null,
@@ -377,14 +390,14 @@ export class NativeEngine implements MusicEngine {
   }
   play() { this.send('play') }
   pause() { this.send('pause') }
-  toggle() { this.send(this.state.playing ? 'pause' : 'play') }
+  toggle() { this.send((this.state.wantPlaying ?? this.state.playing) ? 'pause' : 'play') }
   seek(ms: number) { this.send('seek', { positionMs: Math.max(0, Math.round(ms)) }); this.state = { ...this.state, positionMs: ms }; this.emitter.emit(this.state) }
   next() { this.send('next') }
   previous() { this.send('previous') }
   jump(index: number) { this.send('jump', { index }) }
   enqueueNext(track: MusicTrack) { this.send('enqueueNext', { track: { ...track, stream: absoluteMusicUrl(track.stream), art: absoluteMusicUrl(track.art) } }) }
   removeCurrent() { this.send('removeCurrent') }
-  removeUpcoming(ids: string[]) { if (ids.length) this.send('removeUpcoming', { ids }) }
+  removeUpcoming(ids: string[]) { this.send('removeUpcoming', { ids }) }
   private gain = 1
   volume() { return this.gain }
   setVolume(value: number) { this.gain = Math.min(1, Math.max(0, value)); this.send('volume', { value: this.gain }) }
@@ -393,7 +406,7 @@ export class NativeEngine implements MusicEngine {
 let engine: MusicEngine | null = null
 export function musicEngine(): MusicEngine {
   if (engine) return engine
-  const bridge = typeof window !== 'undefined' ? window.WizardNativeMusic : undefined
+  const bridge = typeof window !== 'undefined' ? (window.WizardNativeMusic ||= hostedAudioBridge()) : undefined
   engine = bridge && typeof bridge.postMessage === 'function' ? new NativeEngine(bridge) : new WebEngine(undefined, undefined, browserSessionStore())
   return engine
 }
