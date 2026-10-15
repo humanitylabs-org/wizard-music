@@ -1,8 +1,9 @@
-/* Wizard OS Appearance v1, hosted layer (@wizard/ui v1 — vendored, to be extracted later). WIZARD_APPEARANCE_CSS_V1
- * Applies only inside a Wizard shell that sent a valid context (html[data-wz-hosted], set by public/wizard-appearance.js);
+/* Wizard OS Appearance v1, app-local styles consuming the shared WizardApp client.
+ * Applies inside a Wizard host that sent valid context (html[data-wz-hosted], set by shared core);
  * standalone Music is untouched and paints its own #0f1014. Canvas transparent on the shell's window glass; mini player,
  * Now Playing and toasts on the overlay material; cards/chips/inputs on ink surfaces; ink and hairlines follow the skin.
  * Music KEEPS its own violet accent (--wiz / --wiz-deep) and its album-art treatment. */
+:root[data-wz-hosted] .music-shell-head { display: none; }
 :root[data-wz-hosted] {
   --bg: var(--wz-base);
   --bg-raised: var(--wz-surface-raised);
