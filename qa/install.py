@@ -46,7 +46,7 @@ for _ in range(30):
 home=json.loads(b);assert s==200 and len(home['library'])==1
 track=home['library'][0];assert track['title']=='Recipient QA Melody'
 assert not home['sources'][0]['ok'] and not home['vibes'];checks.append('configured own library detected; online sources disabled')
-s,h,b=api(track['stream'],headers={'Range':'bytes=0-4095'});assert s==206 and len(b)==4096 and h.get('Content-Range','').startswith('bytes 0-4095/')
+s,h,b=api(track['stream'],headers={'Range':'bytes=0-4095'});assert s==206 and len(b)==4096 and h.get('content-range','').startswith('bytes 0-4095/')
 checks.append('real audio range stream 206, 4096 bytes')
 assert token.encode() not in json.dumps(home).encode()
 assert api('/wizard-music/api/home',headers={'Host':'evil.example'})[0]==403
