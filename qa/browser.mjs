@@ -5,13 +5,14 @@ import { chromium } from 'playwright'
 import assert from 'node:assert/strict'
 import { dirname, join } from 'node:path'
 const [target, core, out] = process.argv.slice(2)
+let backendPort = 19306
 await mkdir(out,{recursive:true})
 const checks=[], errors=[]
 const server=createServer(async(req,res)=>{
  if(req.url==='/qa-host'){res.writeHead(200,{'Content-Type':'text/html'});res.end(`<!doctype html><html><head><style>html,body{margin:0;height:100%;background:var(--bg);color:var(--ink)}.win{height:90vh;background:var(--sk-win)}iframe{width:100%;height:100%;border:0}.immersive .win{height:100vh}</style></head><body><div class="device"><div class="win"><iframe src="/wizard-music/"></iframe></div></div><script>window.WizCore={apps:()=>({APPS:[{url:'/wizard-music/'}]})}</script><script src="/qa-core/skins.js"></script><script src="/qa-core/appearance-host.js"></script></body></html>`);return}
  if(['/qa-core/skins.js','/qa-core/appearance-host.js'].includes(req.url)){res.writeHead(200,{'Content-Type':'text/javascript'});res.end(await readFile(join(dirname(core),req.url.split('/').pop())));return}
  if(req.url==='/wizard-os-home/core/app-client.js'){res.writeHead(200,{'Content-Type':'text/javascript'});res.end(await readFile(core));return}
- const up=request({hostname:'127.0.0.1',port:Number(target),path:req.url,method:req.method,headers:{...req.headers,host:'127.0.0.1:9205'}},r=>{res.writeHead(r.statusCode,r.headers);r.pipe(res)});up.on('error',()=>{res.writeHead(502);res.end()});req.pipe(up)
+ const up=request({hostname:'127.0.0.1',port:backendPort,path:req.url,method:req.method,headers:{...req.headers,host:'127.0.0.1:9205'}},r=>{res.writeHead(r.statusCode,r.headers);r.pipe(res)});up.on('error',()=>{res.writeHead(502);res.end()});req.pipe(up)
 })
 await new Promise(r=>server.listen(19325,'127.0.0.1',r))
 const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||undefined,args:['--autoplay-policy=no-user-gesture-required']})
@@ -20,6 +21,11 @@ try {
  page.on('pageerror',e=>errors.push(e.message))
  await page.addInitScript(()=>{const RealAudio=window.Audio;window.Audio=class extends RealAudio {constructor(...args){super(...args);window.__qaAudio=this}}})
  await page.goto('http://127.0.0.1:19325/wizard-music/')
+ await page.getByText('Music is not connected on this Wizard yet.').waitFor()
+ await page.screenshot({path:out+'/setup-required.png',fullPage:true})
+ checks.push('fresh unconfigured UI honestly reports setup required')
+ backendPort = Number(target)
+ await page.reload()
  await page.getByRole('heading',{name:'On your Wizard'}).waitFor()
  checks.push('configured library visible')
  await page.screenshot({path:out+'/library-mobile.png',fullPage:true})

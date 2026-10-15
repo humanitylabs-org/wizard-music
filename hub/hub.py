@@ -910,6 +910,8 @@ def _cache_path(vid: str) -> Path | None:
 
 
 def fetch_audio(vid: str) -> Path:
+    if not ONLINE:
+        raise LookupError("online sources disabled")
     if not YT_ID.match(vid):
         raise LookupError("bad id")
     hit = _cache_path(vid)
@@ -923,7 +925,7 @@ def fetch_audio(vid: str) -> Path:
         if hit:
             return hit
         tmp = CACHE / f".{vid}.{uuid.uuid4().hex[:6]}"
-        cmd = [YTDLP, "-q", "--no-warnings", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio",
+        cmd = [YTDLP, "-q", "--no-cache-dir", "--no-warnings", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio",
                "-o", f"{tmp}.%(ext)s", f"https://music.youtube.com/watch?v={vid}"]
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         made = sorted(CACHE.glob(f"{tmp.name}.*"))
@@ -948,7 +950,7 @@ def _evict():
 
 
 def prefetch(tid: str):
-    if tid.startswith("yt:") and not _cache_path(tid[3:]):
+    if ONLINE and tid.startswith("yt:") and not _cache_path(tid[3:]):
         threading.Thread(target=lambda: _quiet(fetch_audio, tid[3:]), daemon=True).start()
 
 
@@ -979,6 +981,8 @@ def art_bytes(tid: str) -> tuple[bytes, str] | None:
         return cached.read_bytes(), "image/jpeg"
     data = None
     if tid.startswith("yt:"):
+        if not ONLINE:
+            return None
         rows = db("SELECT thumb FROM tracks WHERE id=?", (tid,))
         url = rows[0][0] if rows and rows[0][0] else f"https://i.ytimg.com/vi/{tid[3:]}/hqdefault.jpg"
         host = urllib.parse.urlparse(url).hostname or ""
@@ -1056,7 +1060,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def _body(self) -> dict:
         n = int(self.headers.get("Content-Length") or 0)
@@ -1098,7 +1103,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", str(len(art[0])))
                 self.send_header("Cache-Control", "private, max-age=604800")
                 self.end_headers()
-                self.wfile.write(art[0])
+                if self.command != "HEAD":
+                    self.wfile.write(art[0])
                 return
             return self._json(404, {"error": "not_found"})
         except LookupError as exc:

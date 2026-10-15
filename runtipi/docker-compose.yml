@@ -1,6 +1,9 @@
 services:
   wizard-music:
     image: ghcr.io/humanitylabs-org/wizard-music:0.1.0-test
+    pull_policy: never
+    restart: unless-stopped
+    ports: ['127.0.0.1:${APP_PORT:-9205}:9205']
     cap_drop: [ALL]
     security_opt: ['no-new-privileges:true']
     read_only: true

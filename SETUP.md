@@ -2,10 +2,14 @@
 
 This is an **embedded Music app**, not an Android APK. Install it on the recipient's Wizard. It contains no owner's music, listening history, login, tunnel or private hostname. A fresh install is intentionally empty / setup-required. Do not copy another Wizard's `.env`, SQLite, cookie jar, yt-dlp cache or library.
 
+This prerelease artifact is **linux/arm64 only** (including an ARM64 Linux guest on Apple Silicon). No amd64 image is claimed. The portable source can be built for amd64 later on the designated worker when the shared heavy-job lock is available.
+
 ## 1. Private install and gateway
 Use the private test catalog entry and immutable image/archive hash in music-RELEASE.json. The GitHub repository and prerelease assets are private: the tester's authorized installer needs read access. GHCR publication was denied by current credentials; this release distributes Docker image archives as private GitHub prerelease assets instead. Download the archive for the recipient's architecture, verify its SHA256 against the release receipt, then `docker load -i <archive.tar.gz>`. This installs the local tag `ghcr.io/humanitylabs-org/wizard-music:0.1.0-test`; that name does not imply a readable registry package. No public catalog submission is permitted. If the store cannot read private source/assets, ask the release owner to wire the test store; do not make the repository or image public.
 
 The app listens on container port **9205**. Its view path is **/wizard-music/**; preserve that prefix when proxying. `/mcp` and `/health` go to the same container. The Wizard gateway must authenticate the owner, proxy same-origin `/wizard-music/*` unchanged, and serve its approved shared `/wizard-os-home/core/app-client.js`. The app does not ship a private copy of core. The registry view is `/wizard-music/`, API `/wizard-music/api`, MCP `/mcp`. Do not expose the container's direct port to the Internet or LAN.
+
+Both supplied Compose files explicitly publish only `127.0.0.1` and set `pull_policy: never`. Load the verified archive first; do not override that policy. WAM's private preparation path accepts an already-loaded image before trying any pull. On every actual install, verify `docker port <container>` shows only `127.0.0.1`; refuse a LAN listener. This is not an assertion that the production Store card has been admitted: the release receipt distinguishes archive/Compose proof from the parent-owned private catalog seam.
 
 Set `WIZARD_TRUSTED_HOSTS` to the exact hostname(s), without scheme or port, that the gateway sends in Host. Set `WIZARD_TRUSTED_ORIGINS` to the exact browser origin(s), including scheme and non-default port. Comma-separated, no wildcards. Defaults allow localhost Host and `http://127.0.0.1:9205` Origin only. Reverse proxies may rewrite Host to localhost while retaining the browser Origin; still configure the actual browser Origin. These allowlists are not a substitute for gateway authentication.
 

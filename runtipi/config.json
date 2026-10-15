@@ -15,8 +15,7 @@
   "source": "https://github.com/humanitylabs-org/wizard-music",
   "exposable": false,
   "supported_architectures": [
-    "arm64",
-    "amd64"
+    "arm64"
   ],
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",

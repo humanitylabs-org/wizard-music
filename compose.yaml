@@ -1,6 +1,8 @@
 services:
   music:
     image: ${MUSIC_IMAGE:-ghcr.io/humanitylabs-org/wizard-music:0.1.0-test}
+    pull_policy: never
+    restart: unless-stopped
     ports: ['127.0.0.1:${MUSIC_PORT:-9205}:9205']
     environment:
       WIZARD_MUSIC_HUB_TOKEN: ${WIZARD_MUSIC_HUB_TOKEN:-}
