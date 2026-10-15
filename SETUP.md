@@ -3,7 +3,7 @@
 This is an **embedded Music app**, not an Android APK. Install it on the recipient's Wizard. It contains no owner's music, listening history, login, tunnel or private hostname. A fresh install is intentionally empty / setup-required. Do not copy another Wizard's `.env`, SQLite, cookie jar, yt-dlp cache or library.
 
 ## 1. Private install and gateway
-Use the private test catalog entry and immutable image digest in music-RELEASE.json. The GitHub repository and GHCR package are private: the tester's authorized installer needs read access to both. No public catalog submission is required or permitted by this package. If the store cannot read private repositories/images, stop at the ready artifact and ask the release owner to wire the test store; do not make this repository or image public.
+Use the private test catalog entry and immutable image/archive hash in music-RELEASE.json. The GitHub repository and prerelease assets are private: the tester's authorized installer needs read access. GHCR publication was denied by current credentials; this release distributes Docker image archives as private GitHub prerelease assets instead. Download the archive for the recipient's architecture, verify its SHA256 against the release receipt, then `docker load -i <archive.tar.gz>`. This installs the local tag `ghcr.io/humanitylabs-org/wizard-music:0.1.0-test`; that name does not imply a readable registry package. No public catalog submission is permitted. If the store cannot read private source/assets, ask the release owner to wire the test store; do not make the repository or image public.
 
 The app listens on container port **9205**. Its view path is **/wizard-music/**; preserve that prefix when proxying. `/mcp` and `/health` go to the same container. The Wizard gateway must authenticate the owner, proxy same-origin `/wizard-music/*` unchanged, and serve its approved shared `/wizard-os-home/core/app-client.js`. The app does not ship a private copy of core. The registry view is `/wizard-music/`, API `/wizard-music/api`, MCP `/mcp`. Do not expose the container's direct port to the Internet or LAN.
 
@@ -19,7 +19,7 @@ The shipped Runtipi compose mounts:
 Create these two directories before first start; set data ownership 1000:1000 and ensure uid1000 can read music. Copy/link only recipient-authorized files into the music folder (or configure a read-only bind of their chosen existing library). Mount/volume identity must stay unchanged during updates. Do not delete `/data`, run a reset, or seed over an existing install. Supported scan suffixes: mp3, m4a, flac, ogg, opus, wav, aac; browser codec support varies. The scan repeats every minute; POST `/wizard-music/api/scan` forces it.
 
 For a standalone container/API rehearsal, from this repository:
-1. Set `MUSIC_IMAGE` to the release image **digest**, `MUSIC_LIBRARY_DIR` to an absolute recipient-owned folder, and `WIZARD_MUSIC_HUB_TOKEN` in protected environment or a mode-0600 untracked `.env`.
+1. Load the verified architecture archive, then set `MUSIC_IMAGE` to its **local image ID** from music-RELEASE.json (or the loaded tag), `MUSIC_LIBRARY_DIR` to an absolute recipient-owned folder, and `WIZARD_MUSIC_HUB_TOKEN` in protected environment or a mode-0600 untracked `.env`.
 2. `docker compose -p recipient-music -f compose.yaml up -d`
 3. The included compose publishes **127.0.0.1:9205 only**, stores hub state in a named volume and mounts the library read-only. This diagnostic port alone lacks Wizard core; use the authenticated Wizard gateway for the UI.
 
@@ -48,7 +48,7 @@ Direct hub `/health` is unauthenticated; all `/api/*`, `/stream/*`, `/art/*` nee
 - 502: inspect app logs and hub health; missing files/permissions, codec/online source failures are distinct from wiring.
 - Empty library: verify read-only bind, uid1000 access, supported suffixes and scan result. No demo songs are silently installed.
 - Missing WizardApp/core: repair the gateway's shared-resource route; do not copy platform JS into Music.
-- Update by pulling the next approved digest and recreating **without changing/removing data or library mounts**. Browser localStorage belongs to the same gateway origin; changing origin changes saved session.
-- Roll back to the previous pinned image digest with the same mounts. No destructive migrations are introduced in this release. Back up the recipient database using the owner's normal backup procedure before later schema-changing upgrades.
+- Update by loading the next approved hash-verified archive and recreating **without changing/removing data or library mounts**. Browser localStorage belongs to the same gateway origin; changing origin changes saved session.
+- Roll back by loading the previous archive and using its pinned image ID with the same mounts. No destructive migrations are introduced in this release. Back up the recipient database using the owner's normal backup procedure before later schema-changing upgrades.
 
 Native Android screen-off/Bluetooth/lock-screen behavior is the separate Wizard shell background-audio work. Do not install historical APKs or replace the current shell to use this package.
