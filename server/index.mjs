@@ -6,6 +6,9 @@ import { extname, join, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BASE, createMusicProxy } from './music.mjs'
 import { handleMcp } from './mcp.mjs'
+import { createCatalogLookup } from './catalog.mjs'
+
+const handleCatalog = createCatalogLookup({ origin: process.env.WIZARD_MUSIC_CONNECTORS_URL || '', token: process.env.MUSIC_ADAPTER_TOKEN || '' })
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const DIST = join(ROOT, 'dist')
@@ -57,6 +60,7 @@ const server = createServer(async (request, response) => {
       const origin = request.headers.origin
       if (origin && !ORIGINS.has(origin)) { sendJson(response, 403, { error: 'origin' }); return }
     }
+    if (sub === '/api/catalog') { await handleCatalog(request, response, url, sendJson); return }
     if (/^\/(api|stream|art)\//.test(sub)) { await handleMusic(request, response, url, sendJson); return }
     if (request.method !== 'GET' && request.method !== 'HEAD') { sendJson(response, 405, { error: 'method' }); return }
     await serveStatic(response, sub, request.method === 'HEAD')
