@@ -16,8 +16,9 @@ const server=createServer(async(req,res)=>{
 })
 await new Promise(r=>server.listen(19325,'127.0.0.1',r))
 const browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||undefined,args:['--autoplay-policy=no-user-gesture-required']})
+let page
 try {
- const page=await browser.newPage({viewport:{width:390,height:844}})
+ page=await browser.newPage({viewport:{width:390,height:844}})
  page.on('pageerror',e=>errors.push(e.message))
  await page.addInitScript(()=>{const RealAudio=window.Audio;window.Audio=class extends RealAudio {constructor(...args){super(...args);window.__qaAudio=this}}})
  await page.goto('http://127.0.0.1:19325/wizard-music/')
@@ -86,4 +87,4 @@ try {
  checks.push('no uncaught browser errors')
  const result={ok:true,scope:'Browser fallback in loopback gateway using approved shared app-client; not full production shell or native Android',audio,checks,errors}
  await writeFile(out+'/browser.json',JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2))
-} catch(e){console.error(e);process.exitCode=1} finally {await browser.close();server.close()}
+} catch(e){console.error(e);console.error(await page?.locator('body').innerText());await page?.screenshot({path:out+'/failure.png'});process.exitCode=1} finally {await browser.close();server.close()}
