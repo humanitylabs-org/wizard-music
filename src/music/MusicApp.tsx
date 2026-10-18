@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore
 import { browserSessionStore, EMPTY_SNAPSHOT, musicEngine, playedTracks, readSession, WebEngine, type MusicEngine, type MusicSnapshot, type MusicStation, type MusicTrack } from './engine'
 import { hostedAudioBridge } from './backgroundAudio'
 if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNativeMusic = hostedAudioBridge()
+import { shareSong } from './share'
 import './music.css'
 
 const BASE = new URL('./', document.baseURI).pathname
@@ -152,6 +153,8 @@ const ThumbUpGlyph = ({ filled = false, size = 24 }: { filled?: boolean; size?: 
 const ThumbDownGlyph = ({ size = 24 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true" style={{ transform: 'rotate(180deg)' }}><path d={THUMB_PATH} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" strokeLinecap="round" /></svg>
 const SearchGlyph = () => <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.8" /><path d="m15.5 15.5 5 5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" /></svg>
 const PlayNextGlyph = () => <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h11M4 11h11M4 16h6M17 13v8m-4-4h8" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>
+// The same share glyph as Copy · Share under a chat reply.
+const ShareGlyph = () => <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
 const ChevronDown = () => <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" /></svg>
 
 function Art({ track, size }: { track?: MusicTrack; size: 'row' | 'card' | 'hero' | 'mini' }) {
@@ -331,7 +334,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
     <header className="music-now-head">
       <button type="button" className="icon-button" aria-label="Close player" onClick={onClose}><ChevronDown /></button>
       <div><small>{snapshot.station ? 'Station' : 'Playing'}</small><strong>{snapshot.station?.title ?? sourceLabel(track.source)}</strong></div>
-      <span className="music-now-spacer" />
+      <button type="button" className="icon-button music-share" aria-label={`Share ${track.title}`} title="Share" onClick={() => void shareSong(track, notify)}><ShareGlyph /></button>
     </header>
     <div className="music-now-body">
       <Art track={track} size="hero" />

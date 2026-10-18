@@ -9,6 +9,7 @@ declare global {
   interface Window { WizardApp: {
     ready(options: {name: string; version: string}): unknown
     back: { register(options: {canGoBack: () => boolean; back: () => boolean}): () => void; useHistory(options: {isRoot: () => boolean}): () => void }
+    share?: { text(data: {title?: string; text?: string; url?: string}): Promise<'shared' | 'copied' | 'cancelled' | 'unsupported'> }
   } }
 }
 
