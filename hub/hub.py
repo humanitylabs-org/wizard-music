@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -77,6 +78,8 @@ _db.executescript(
     -- genre: Apple Music primary genre ('' = looked up, none found; NULL = not looked up yet)
     -- similar: JSON list of artists YouTube Music relates to this track's artists (fetched for thumbs-down)
     CREATE TABLE IF NOT EXISTS track_info (id TEXT PRIMARY KEY, genre TEXT, similar TEXT, at REAL);
+    -- tags: JSON {style: weight 0..1} for an artist ({} = looked up, nothing known); source musicbrainz|related
+    CREATE TABLE IF NOT EXISTS artist_styles (key TEXT PRIMARY KEY, name TEXT, tags TEXT, source TEXT, at REAL);
     """
 )
 _db.commit()
@@ -502,6 +505,286 @@ def learn_dislike(tid: str, budget: float = 5.0) -> dict:
     return {"artists": artist_names(t["artist"]), "genre": genre, "similar": similar[:5]}
 
 
+# ---------------------------------------------------------------- Styles and your collections
+# "Play me some synthwave" should play the synthwave you already like, not whatever has the word in its
+# title. Each artist you like or keep playing gets style tags (MusicBrainz community tags; for artists
+# MusicBrainz doesn't tag, the tags of the artists YouTube Music relates to them). A collection is your
+# tracks whose style matches: liked, or played at least twice and not mostly skipped.
+MB_UA = {"User-Agent": "WizardMusic/1.0 ( private personal player )"}
+MB_MIN_GAP = 1.2  # MusicBrainz allows one request per second
+STYLE_AT = 0.5  # how well a track must match to join a collection
+COLLECTION_MIN = 3  # fewer of your tracks than this: seed a station from them plus the genre's own radio
+STYLE_FAMILIES = {
+    "synthwave": {"synthwave": 1, "retrowave": 1, "outrun": 1, "chillsynth": .9, "darksynth": .9, "dreamwave": .9,
+                  "chillwave": .7, "vaporwave": .6, "synth": .6, "synthpop": .4},
+    "vaporwave": {"vaporwave": 1, "mallsoft": .9, "future funk": .7, "chillwave": .6, "synthwave": .6, "simpsonwave": 1},
+    "chillwave": {"chillwave": 1, "chillsynth": .9, "synthwave": .6, "vaporwave": .6, "dream pop": .5},
+    "deep house": {"deep house": 1, "melodic house": .8, "organic house": .8, "minimal house": .8, "lo-fi house": .7,
+                   "garage house": .7, "house": .6, "tech house": .6, "progressive house": .6, "minimal": .6, "minimal techno": .5},
+    "house": {"house": 1, "deep house": .9, "tech house": .9, "melodic house": .9, "garage house": .9, "progressive house": .8,
+              "organic house": .8, "afro house": .8, "minimal": .6, "dance": .4},
+    "melodic house": {"melodic house": 1, "melodic techno": .9, "progressive house": .8, "deep house": .7, "organic house": .8},
+    "melodic techno": {"melodic techno": 1, "melodic house": .9, "progressive house": .6, "techno": .6},
+    "techno": {"techno": 1, "minimal techno": 1, "melodic techno": 1, "dub techno": .9, "minimal": .8, "tech house": .6},
+    "minimal": {"minimal": 1, "minimal techno": 1, "minimal house": 1, "tech house": .7, "deep house": .6, "microhouse": 1},
+    "downtempo": {"downtempo": 1, "chillout": .9, "trip hop": .8, "nu jazz": .6, "electronica": .5, "ambient": .5, "chillwave": .5},
+    "ambient": {"ambient": 1, "drone": .8, "new age": .7, "downtempo": .5, "idm": .4},
+    "trance": {"trance": 1, "progressive trance": 1, "uplifting trance": 1, "progressive house": .5},
+    "lofi": {"lofi": 1, "lo-fi": 1, "lo-fi hip hop": 1, "chillhop": 1, "lo-fi house": .6},
+    "drum and bass": {"drum and bass": 1, "liquid funk": .9, "jungle": .8, "dnb": 1},
+    "trip hop": {"trip hop": 1, "downtempo": .7},
+    "disco": {"disco": 1, "nu disco": 1, "italo disco": .9, "funk": .5},
+}
+STYLE_SAID = {"synth wave": "synthwave", "retro wave": "synthwave", "outrun": "synthwave", "retrowave": "synthwave",
+              "vapor wave": "vaporwave", "chill wave": "chillwave", "lo fi": "lofi", "lo-fi": "lofi", "dnb": "drum and bass",
+              "d and b": "drum and bass", "drum n bass": "drum and bass", "trip-hop": "trip hop", "triphop": "trip hop",
+              "minimal deep house": "deep house", "nu disco": "disco", "chill out": "downtempo", "chillout": "downtempo"}
+_STYLE_FILLER = re.compile(r"\b(?:i(?:'ve| have)?\s+(?:liked|like|love|loved|saved|curated)|that|which|you know|of|mine|my|own|"
+                           r"some|favou?rites?|faves?|collection|playlist|station|mix|radio|music|songs?|tracks?|stuff|tunes|"
+                           r"genre|kind|type|the|me|from|out of|all)\b", re.I)
+
+
+def style_request(q: str) -> str:
+    """'synthwave I like' / 'my deep house playlist' -> 'synthwave' / 'deep house' ('' when it names no style)."""
+    rest = re.sub(r"\s+", " ", _STYLE_FILLER.sub(" ", q or "")).strip(" ,.")
+    if not rest or len(rest.split()) > 3:
+        return ""
+    rest = STYLE_SAID.get(rest, rest)
+    vocab = set(STYLE_FAMILIES) | {g for g in GENRES if len(g) > 2} | set(STYLE_SAID.values())
+    if rest in vocab:
+        return rest
+    best = max(((heard_like(rest, v), v) for v in vocab), default=(0.0, ""))
+    return best[1] if best[0] >= 0.88 else ""
+
+
+def style_match(tags: dict[str, float], style: str) -> float:
+    family = STYLE_FAMILIES.get(style, {style: 1})
+    best = 0.0
+    for tag, weight in tags.items():
+        sim = family.get(tag, 0.0)
+        if not sim and (f" {style} " in f" {tag} " or f" {tag} " in f" {style} "):
+            sim = 0.7
+        best = max(best, weight * sim)
+    return best
+
+
+def _mb(path: str, **q) -> dict:
+    q["fmt"] = "json"
+    req = urllib.request.Request(f"https://musicbrainz.org/ws/2/{path}?" + urllib.parse.urlencode(q), headers=MB_UA)
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (429, 503):
+                raise
+            time.sleep(2 + 2 * attempt)
+        finally:
+            time.sleep(MB_MIN_GAP)
+    return {}
+
+
+def _mb_tags(items: list[dict]) -> dict[str, float]:
+    counts: dict[str, float] = {}
+    for item in items or []:
+        name = (item.get("name") or "").strip().lower()
+        if name and item.get("count", 0) > 0:
+            counts[name] = max(counts.get(name, 0), item["count"])
+    top = max(counts.values(), default=0)
+    return {k: round(v / top, 3) for k, v in counts.items()} if top else {}
+
+
+def mb_artist_tags(name: str, title: str = "") -> dict[str, float]:
+    """MusicBrainz tags for an artist; a known song of theirs picks the right artist among namesakes."""
+    want = _key(name)
+    aid = ""
+    if title:
+        clean = _clean_title(title).replace('"', "")
+        for rec in _mb("recording", query=f'recording:"{clean}" AND artist:"{name.replace(chr(34), "")}"', limit=5).get("recordings", []):
+            credit = next((c["artist"] for c in rec.get("artist-credit", []) if isinstance(c, dict) and _key(c.get("artist", {}).get("name", "")) == want), None)
+            if credit and rec.get("score", 0) >= 90:
+                aid = credit["id"]
+                break
+    if aid:
+        info = _mb(f"artist/{aid}", inc="tags+genres")
+        return _mb_tags((info.get("genres") or []) + (info.get("tags") or []))
+    hits = [a for a in _mb("artist", query=f'artist:"{name.replace(chr(34), "")}"', limit=5).get("artists", []) if _key(a.get("name", "")) == want]
+    hits.sort(key=lambda a: -sum(t.get("count", 0) for t in a.get("tags", [])))
+    return _mb_tags(hits[0].get("tags", [])) if hits else {}
+
+
+def artist_styles(key: str) -> dict[str, float] | None:
+    rows = db("SELECT tags FROM artist_styles WHERE key=?", (key,))
+    return json.loads(rows[0][0]) if rows else None
+
+
+def tag_artist(name: str, title: str = "") -> dict[str, float]:
+    """Look up and remember one artist's styles (own tags, else borrowed from related artists)."""
+    key = _key(name)
+    known = artist_styles(key)
+    if known is not None:
+        return known
+    tags, source = mb_artist_tags(name, title), "musicbrainz"
+    if not tags:
+        source, votes, voters = "related", {}, 0
+        try:
+            related = related_artists(name)[:6]
+        except Exception as exc:
+            print("related artists failed", name, repr(exc), file=sys.stderr)
+            related = []
+        for other in related:
+            okey = _key(other)
+            theirs = artist_styles(okey)
+            if theirs is None:
+                theirs = mb_artist_tags(other)
+                db("INSERT OR REPLACE INTO artist_styles(key,name,tags,source,at) VALUES(?,?,?,?,?)",
+                   (okey, other, json.dumps(theirs), "musicbrainz", time.time()))
+            if theirs:
+                voters += 1
+                for tag, w in theirs.items():
+                    votes[tag] = votes.get(tag, 0.0) + w
+        tags = {t: round(0.8 * v / voters, 3) for t, v in votes.items() if voters and v / voters >= 0.25}
+    db("INSERT OR REPLACE INTO artist_styles(key,name,tags,source,at) VALUES(?,?,?,?,?)", (key, name, json.dumps(tags), source, time.time()))
+    return tags
+
+
+def your_tracks() -> list[tuple[dict, float]]:
+    """Tracks you have curated: liked, or played at least twice and not mostly skipped. -> [(track, affinity)]."""
+    taste = taste_profile()
+    rows = db(
+        "SELECT t.id, COALESCE((SELECT value FROM likes l WHERE l.id=t.id),0), "
+        "(SELECT COUNT(*) FROM plays p WHERE p.id=t.id AND p.action='played'), "
+        "(SELECT COUNT(*) FROM plays p WHERE p.id=t.id AND p.action='skipped') FROM tracks t "
+        "WHERE t.id IN (SELECT id FROM likes UNION SELECT id FROM plays)"
+    )
+    out = []
+    for tid, liked, played, skipped in rows:
+        if liked < 0 or tid in taste.disliked:
+            continue
+        if liked > 0 or (played >= 2 and skipped * 2 < played):
+            t = track(tid)
+            if t and not blocked(t, taste):
+                out.append((t, (3.0 if liked > 0 else 0.0) + min(played - skipped, 20) / 4))
+    return out
+
+
+def track_styles(t: dict) -> dict[str, float]:
+    tags: dict[str, float] = {}
+    for name in artist_names(t.get("artist", "")):
+        for tag, w in (artist_styles(_key(name)) or {}).items():
+            tags[tag] = max(tags.get(tag, 0.0), w)
+    genre = genre_of(t["id"]).strip().lower()
+    if genre:
+        tags[genre] = max(tags.get(genre, 0.0), 0.6)
+    title = (t.get("title") or "").lower()
+    for style in set(STYLE_FAMILIES) | {m for fam in STYLE_FAMILIES.values() for m in fam}:
+        if len(style) > 4 and re.search(rf"\b{re.escape(style)}\b", title):
+            tags[style] = 1.0
+    return tags
+
+
+def collection(style: str) -> list[dict]:
+    """Your tracks in this style, best first."""
+    scored = []
+    for t, affinity in your_tracks():
+        match = style_match(track_styles(t), style)
+        if match >= STYLE_AT:
+            scored.append((match * 2 + affinity, t))
+    scored.sort(key=lambda x: -x[0])
+    return [t for _, t in scored]
+
+
+_collections_cache: dict = {"at": 0.0, "value": []}
+
+
+def collections(limit: int = 8) -> list[dict]:
+    """Styles you have at least COLLECTION_MIN tracks in, biggest first (cached for a minute)."""
+    if time.time() - _collections_cache["at"] < 60:
+        return _collections_cache["value"][:limit]
+    mine = [(t, track_styles(t)) for t, _ in your_tracks()]
+    out = []
+    for style in STYLE_FAMILIES:
+        n = sum(1 for _, tags in mine if style_match(tags, style) >= STYLE_AT)
+        if n >= COLLECTION_MIN:
+            out.append({"style": style, "label": f"Your {style}", "count": n})
+    out.sort(key=lambda c: -c["count"])
+    _collections_cache.update(at=time.time(), value=out)
+    return out[:limit]
+
+
+_style_q: deque = deque()
+_style_cv = threading.Condition()
+
+
+def queue_style(name: str, title: str = ""):
+    if not ONLINE or not name or _key(name) in NOT_ARTISTS or artist_styles(_key(name)) is not None:
+        return
+    with _style_cv:
+        if any(_key(n) == _key(name) for n, _ in _style_q) or len(_style_q) > 500:
+            return
+        _style_q.append((name, title))
+        _style_cv.notify()
+
+
+def queue_styles_for(tid: str):
+    t = track(tid)
+    for name in artist_names((t or {}).get("artist", "")):
+        queue_style(name, (t or {}).get("title", ""))
+
+
+def backfill_styles():
+    for t, _ in your_tracks():
+        queue_styles_for(t["id"])
+
+
+def _style_loop():
+    while True:
+        with _style_cv:
+            while not _style_q:
+                _style_cv.wait()
+            name, title = _style_q.popleft()
+        try:
+            tag_artist(name, title)
+        except Exception as exc:
+            print("style lookup failed", name, repr(exc), file=sys.stderr)
+            time.sleep(5)
+
+
+def style_station(style: str, said: str, q: str) -> dict | None:
+    """A station that plays your own tracks in this style, interleaved with radio grown from them."""
+    mine = collection(style)
+    label = f"Your {style}"
+    if not mine:
+        return None
+    seeds = random.sample(mine[: max(6, len(mine) // 2)], k=min(3, len(mine)))
+    radio: list[str] = []
+    for seed in seeds:
+        for cid in _radio_from(seed["id"]):
+            if cid not in radio:
+                radio.append(cid)
+    random.shuffle(radio)
+    if len(mine) < COLLECTION_MIN:  # too few of yours yet: lean on the genre's own radio as well
+        extra = genre_seed(style)
+        if extra:
+            radio = [c for c in _radio_from(extra) if c not in radio] + radio
+        label = f"{style.title()} radio"
+    picks = mine[:]
+    random.shuffle(picks)
+    first, rest = picks[0], [t["id"] for t in picks[1:]]
+    queue, mine_left = [], rest[:]
+    while mine_left or radio:  # two of yours, then one new song that follows from them
+        queue += mine_left[:2]
+        mine_left = mine_left[2:]
+        if radio:
+            queue.append(radio.pop(0))
+        if not mine_left:
+            queue += radio
+            radio = []
+    out = create_station({"trackId": first["id"], "label": label, "queue": queue, "pool": [t["id"] for t in mine]})
+    heard = f"{label} · {len(mine)} of your songs" if len(mine) >= COLLECTION_MIN else label
+    return {"kind": "collection", "said": said, "query": q, "heard": heard, "style": style, "mine": len(mine), **out}
+
+
 # ---------------------------------------------------------------- Search
 def search(q: str) -> list[dict]:
     q = q.strip()
@@ -786,6 +1069,15 @@ def play_spoken(said: str) -> dict:
             raise LookupError("You haven’t liked any songs yet.")
         random.shuffle(liked)
         return {"kind": "likes", "said": said, "query": q, "heard": "Your likes", "station": None, "tracks": liked}
+    style = style_request(q) if q else ""
+    if style:
+        out = style_station(style, said, q)
+        if out:
+            return out
+        seed = genre_seed(style)
+        if seed:
+            out = create_station({"trackId": seed, "label": f"{style.title()} radio"})
+            return {"kind": "genre", "said": said, "query": q, "heard": f"{style.title()} radio", **out}
     vibe = spoken_vibe(q) if q else None
     if not q:  # "play music": pick up from what the listener likes or played last
         last = db("SELECT id FROM likes WHERE value>0 ORDER BY at DESC LIMIT 1") or db("SELECT id FROM plays WHERE action='played' ORDER BY at DESC LIMIT 1")
@@ -856,6 +1148,16 @@ def create_station(seed: dict) -> dict:
     tid = seed.get("trackId") or ""
     title = ""
     if not tid and seed.get("query"):
+        said = str(seed["query"]).strip()
+        mine = re.fullmatch(r"your (.+)", said.lower())
+        if mine and mine.group(1) in STYLE_FAMILIES:  # a "Your synthwave" chip
+            out = style_station(mine.group(1), said, said)
+            if out:
+                return {"station": out["station"], "tracks": out["tracks"]}
+        vibe = next((v for v in VIBES if v["label"].lower() == said.lower()), None)
+        if vibe:  # a vibe chip seeds from its well-loved track, not a text search for its label
+            seed = {**seed, "query": vibe["query"], "label": vibe["label"]}
+    if not tid and seed.get("query"):
         results = search(seed["query"])
         if not results:
             raise LookupError("nothing matched that")
@@ -865,8 +1167,10 @@ def create_station(seed: dict) -> dict:
     if not first:
         raise LookupError("unknown track")
     title = title or seed.get("label") or f"{first['title']} radio"
-    candidates = [c for c in _radio_from(tid) if c != tid]
+    candidates = [c for c in (seed.get("queue") or _radio_from(tid)) if c != tid]
     state = {"seed": tid, "queue": candidates, "played": [tid], "lastSeed": tid}
+    if seed.get("pool"):
+        state["pool"] = list(seed["pool"])[:300]  # your own tracks this station keeps coming back to
     sid = uuid.uuid4().hex[:16]
     db("INSERT INTO stations(id,title,seed,state,at) VALUES(?,?,?,?,?)", (sid, title, tid, json.dumps(state), time.time()))
     tracks = [first] + _take(sid, state, 14)
@@ -908,9 +1212,10 @@ def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
     while len(out) < n and attempts < 4:
         attempts += 1
         allowed = station_scripts(state)
+        pool = set(state.get("pool") or [])
         while state["queue"] and len(out) < n:
             tid = state["queue"].pop(0)
-            if tid in state["played"]:
+            if tid in state["played"] and not (tid in pool and tid not in state["played"][-40:] and tid not in [t["id"] for t in out]):
                 continue
             t = track(tid)
             if t and not blocked(t, taste) and not off_station(t, allowed, taste):
@@ -920,8 +1225,23 @@ def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
             # Endless: reseed from the most recent liked track in this station, else a recent track
             # that is not the kind of music you turned down.
             liked = [r[0] for r in db("SELECT id FROM likes WHERE value>0 ORDER BY at DESC LIMIT 20")]
-            pool = [p for p in state["played"][-30:] if p in liked] or [p for p in state["played"][-8:] if fits(p, taste)]
-            reseed = random.choice(pool) if pool else state["seed"]
+            if pool:  # a collection station grows from your own tracks and brings a few of them back
+                seeds = [p for p in pool if fits(p, taste)]
+                reseed = random.choice(seeds) if seeds else state["seed"]
+                again = [p for p in seeds if p not in state["played"][-40:]]
+                random.shuffle(again)
+                fresh = [c for c in _radio_from(reseed) if c not in state["played"]]
+                mixed = []
+                while again or fresh:
+                    mixed += again[:1] + fresh[:3]
+                    again, fresh = again[1:], fresh[3:]
+                state["lastSeed"] = reseed
+                state["queue"] = mixed
+                if not state["queue"]:
+                    break
+                continue
+            pool_ = [p for p in state["played"][-30:] if p in liked] or [p for p in state["played"][-8:] if fits(p, taste)]
+            reseed = random.choice(pool_) if pool_ else state["seed"]
             state["lastSeed"] = reseed
             state["queue"] = [c for c in _radio_from(reseed) if c not in state["played"]]
             if not state["queue"]:
@@ -1113,7 +1433,8 @@ def home() -> dict:
              "detail": "Catalog access enabled; availability varies" if ONLINE else "Setup required · disabled by default", "ok": yt_ok},
             {"id": "library", "name": "Wizard Library", "status": "connected", "detail": f"{count} track{'s' if count != 1 else ''} on your Wizard", "ok": True},
         ],
-        "vibes": [{"id": v["id"], "label": v["label"]} for v in VIBES] if ONLINE else [],
+        "vibes": ([{"id": f"mine-{c['style'].replace(' ', '-')}", "label": c["label"], "count": c["count"]} for c in collections(6)]
+                  + [{"id": v["id"], "label": v["label"]} for v in VIBES]) if ONLINE else [],
         "liked": [t for t in liked if t],
         "recent": [t for t in recent if t],
         "library": [t for t in library if t],
@@ -1223,10 +1544,12 @@ class Handler(BaseHTTPRequestHandler):
                         learned = learn_dislike(tid)
                     elif action == "like":
                         queue_info(tid)
+                        queue_styles_for(tid)
                 else:
                     fresh = record_play(tid, action, str(body.get("eventId", "")))
                     if action == "played" and fresh:
                         prefetch(tid)
+                        queue_styles_for(tid)
                 # The player sends what is queued after this track; answer with what no longer fits.
                 upcoming = body.get("upcoming") if isinstance(body.get("upcoming"), list) else []
                 taste = taste_profile()
@@ -1304,6 +1627,8 @@ def main():
     scan_library()
     threading.Thread(target=_library_loop, daemon=True).start()
     threading.Thread(target=_info_loop, daemon=True).start()
+    threading.Thread(target=_style_loop, daemon=True).start()
+    threading.Thread(target=lambda: _quiet(backfill_styles), daemon=True).start()
     for tid, value in db("SELECT id, value FROM likes WHERE value != 0"):
         queue_info(tid, similar=value < 0)  # learn genre/similar artists for thumbs given before this existed
     server = ThreadingHTTPServer((HOST, PORT), Handler)
