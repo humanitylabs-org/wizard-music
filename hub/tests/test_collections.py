@@ -128,3 +128,17 @@ def test_related_artists_lend_styles_when_musicbrainz_has_none(hub, monkeypatch)
     tags = hub.tag_artist('ELEZO', 'We are one')
     assert hub.style_match(tags, 'deep house') >= hub.STYLE_AT
     assert hub.artist_styles(hub._key('ELEZO')) == tags
+
+
+def test_untagged_neighbour_probe_still_gets_its_own_lookup(hub, monkeypatch):
+    monkeypatch.setattr(hub, 'mb_artist_tags', lambda name, title='': {'Lane 8': {'deep house': 1}}.get(name, {}))
+    monkeypatch.setattr(hub, 'related_artists', lambda name: {'Lynnic': ['ELEZO', 'Lane 8'], 'ELEZO': ['Lane 8']}.get(name, []))
+    hub.tag_artist('Lynnic')  # probes ELEZO as a neighbour: MusicBrainz knows nothing about it
+    assert hub.style_match(hub.tag_artist('ELEZO'), 'deep house') >= hub.STYLE_AT
+
+
+def test_near_twin_styles_share_one_chip(hub):
+    for i, artist in enumerate(['A', 'B', 'C', 'D']):
+        styles(hub, artist, {'synthwave': 1, 'chillwave': 1, 'vaporwave': 1})
+        add(hub, 300 + i, f'S{i}', artist, liked=1)
+    assert [c['label'] for c in hub.collections()] == ['Your synthwave']

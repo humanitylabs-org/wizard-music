@@ -621,9 +621,9 @@ def artist_styles(key: str) -> dict[str, float] | None:
 def tag_artist(name: str, title: str = "") -> dict[str, float]:
     """Look up and remember one artist's styles (own tags, else borrowed from related artists)."""
     key = _key(name)
-    known = artist_styles(key)
-    if known is not None:
-        return known
+    rows = db("SELECT tags, source FROM artist_styles WHERE key=?", (key,))
+    if rows and (rows[0][1] != "probe" or json.loads(rows[0][0])):
+        return json.loads(rows[0][0])  # looked up already (a bare probe for someone else's neighbours doesn't count)
     tags, source = mb_artist_tags(name, title), "musicbrainz"
     if not tags:
         source, votes, voters = "related", {}, 0
@@ -638,7 +638,7 @@ def tag_artist(name: str, title: str = "") -> dict[str, float]:
             if theirs is None:
                 theirs = mb_artist_tags(other)
                 db("INSERT OR REPLACE INTO artist_styles(key,name,tags,source,at) VALUES(?,?,?,?,?)",
-                   (okey, other, json.dumps(theirs), "musicbrainz", time.time()))
+                   (okey, other, json.dumps(theirs), "probe", time.time()))
             if theirs:
                 voters += 1
                 for tag, w in theirs.items():
@@ -691,7 +691,13 @@ def collection(style: str) -> list[dict]:
         if match >= STYLE_AT:
             scored.append((match * 2 + affinity, t))
     scored.sort(key=lambda x: -x[0])
-    return [t for _, t in scored]
+    out, seen = [], set()
+    for _, t in scored:  # one copy of a song even when YouTube has it twice
+        same = (_key(artist_names(t["artist"])[0] if artist_names(t["artist"]) else t["artist"]), _key(_clean_title(t["title"])))
+        if same not in seen:
+            seen.add(same)
+            out.append(t)
+    return out
 
 
 _collections_cache: dict = {"at": 0.0, "value": []}
@@ -702,11 +708,13 @@ def collections(limit: int = 8) -> list[dict]:
     if time.time() - _collections_cache["at"] < 60:
         return _collections_cache["value"][:limit]
     mine = [(t, track_styles(t)) for t, _ in your_tracks()]
-    out = []
-    for style in STYLE_FAMILIES:
-        n = sum(1 for _, tags in mine if style_match(tags, style) >= STYLE_AT)
-        if n >= COLLECTION_MIN:
-            out.append({"style": style, "label": f"Your {style}", "count": n})
+    out, kept = [], []
+    for style in STYLE_FAMILIES:  # listed in order of preference: synthwave before its near-twins
+        ids = {t["id"] for t, tags in mine if style_match(tags, style) >= STYLE_AT}
+        if len(ids) < COLLECTION_MIN or any(len(ids & k) / len(ids | k) > 0.6 for k in kept):
+            continue
+        kept.append(ids)
+        out.append({"style": style, "label": f"Your {style}", "count": len(ids)})
     out.sort(key=lambda c: -c["count"])
     _collections_cache.update(at=time.time(), value=out)
     return out[:limit]
@@ -717,7 +725,10 @@ _style_cv = threading.Condition()
 
 
 def queue_style(name: str, title: str = ""):
-    if not ONLINE or not name or _key(name) in NOT_ARTISTS or artist_styles(_key(name)) is not None:
+    if not ONLINE or not name or _key(name) in NOT_ARTISTS:
+        return
+    rows = db("SELECT tags, source FROM artist_styles WHERE key=?", (_key(name),))
+    if rows and (rows[0][1] != "probe" or json.loads(rows[0][0])):
         return
     with _style_cv:
         if any(_key(n) == _key(name) for n, _ in _style_q) or len(_style_q) > 500:
