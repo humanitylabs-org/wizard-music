@@ -79,6 +79,8 @@ _db.executescript(
     -- similar: JSON list of artists YouTube Music relates to this track's artists (fetched for thumbs-down)
     CREATE TABLE IF NOT EXISTS track_info (id TEXT PRIMARY KEY, genre TEXT, similar TEXT, at REAL);
     -- tags: JSON {style: weight 0..1} for an artist ({} = looked up, nothing known); source musicbrainz|related
+    -- kept: songs you heard all the way through in a session you said was on point (a softer like)
+    CREATE TABLE IF NOT EXISTS kept (id TEXT, at REAL, reason TEXT, PRIMARY KEY (id, reason));
     CREATE TABLE IF NOT EXISTS artist_styles (key TEXT PRIMARY KEY, name TEXT, tags TEXT, source TEXT, at REAL);
     """
 )
@@ -649,23 +651,57 @@ def tag_artist(name: str, title: str = "") -> dict[str, float]:
 
 
 def your_tracks() -> list[tuple[dict, float]]:
-    """Tracks you have curated: liked, or played at least twice and not mostly skipped. -> [(track, affinity)]."""
+    """Tracks you have curated: liked, kept from a session you approved, or played at least twice and
+    not mostly skipped. -> [(track, affinity)]."""
     taste = taste_profile()
     rows = db(
         "SELECT t.id, COALESCE((SELECT value FROM likes l WHERE l.id=t.id),0), "
         "(SELECT COUNT(*) FROM plays p WHERE p.id=t.id AND p.action='played'), "
-        "(SELECT COUNT(*) FROM plays p WHERE p.id=t.id AND p.action='skipped') FROM tracks t "
-        "WHERE t.id IN (SELECT id FROM likes UNION SELECT id FROM plays)"
+        "(SELECT COUNT(*) FROM plays p WHERE p.id=t.id AND p.action='skipped'), "
+        "(SELECT COUNT(*) FROM kept k WHERE k.id=t.id) FROM tracks t "
+        "WHERE t.id IN (SELECT id FROM likes UNION SELECT id FROM plays UNION SELECT id FROM kept)"
     )
     out = []
-    for tid, liked, played, skipped in rows:
+    for tid, liked, played, skipped, kept in rows:
         if liked < 0 or tid in taste.disliked:
             continue
-        if liked > 0 or (played >= 2 and skipped * 2 < played):
+        if liked > 0 or kept > 0 or (played >= 2 and skipped * 2 < played):
             t = track(tid)
             if t and not blocked(t, taste):
-                out.append((t, (3.0 if liked > 0 else 0.0) + min(played - skipped, 20) / 4))
+                out.append((t, (3.0 if liked > 0 else 1.5 if kept > 0 else 0.0) + min(played - skipped, 20) / 4))
     return out
+
+
+def heard_through(since: float, until: float) -> list[str]:
+    """Songs that played to (nearly) the end between since and until: not skipped, not turned down, and the
+    next song started no sooner than 60% of the way through. The song still playing at `until` is left out."""
+    events = db("SELECT id, at, action FROM plays WHERE at>=? AND at<=? ORDER BY at", (since, until))
+    disliked = {r[0] for r in db("SELECT id FROM likes WHERE value<0")}
+    out: list[str] = []
+    for i, (tid, at, action) in enumerate(events):
+        if action != "played" or tid in disliked:
+            continue
+        later = events[i + 1:]
+        if not later:
+            continue
+        if any(e[0] == tid and e[2] == "skipped" for e in later[:2]):
+            continue
+        t = track(tid) or {}
+        need = max(60.0, 0.6 * (t.get("durationMs") or 0) / 1000)
+        if later[0][1] - at >= need and tid not in out:
+            out.append(tid)
+    return out
+
+
+def keep_session(since: float, until: float, reason: str) -> list[str]:
+    """You said this stretch of listening was on point: every song heard through counts as yours."""
+    ids = heard_through(since, until)
+    now = time.time()
+    for tid in ids:
+        db("INSERT OR IGNORE INTO kept(id,at,reason) VALUES(?,?,?)", (tid, now, reason[:80]))
+        queue_styles_for(tid)
+    _collections_cache["at"] = 0.0
+    return ids
 
 
 def track_styles(t: dict) -> dict[str, float]:
@@ -1541,6 +1577,12 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/play":
                 said = str(body.get("said", ""))[:300]
                 return self._json(200, play_spoken(said))
+            if url.path == "/api/keep":  # "that session was on point"
+                since, until = float(body.get("since", 0)), float(body.get("until") or time.time())
+                if not 0 < since < until or until - since > 86400:
+                    return self._json(400, {"error": "since/until must span at most a day"})
+                ids = keep_session(since, until, str(body.get("reason") or "session on point"))
+                return self._json(200, {"kept": [track(t) for t in ids]})
             if url.path == "/api/feedback":
                 tid = str(body.get("id", ""))[:40]
                 action = body.get("action")

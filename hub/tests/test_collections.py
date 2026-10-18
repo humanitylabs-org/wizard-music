@@ -137,6 +137,21 @@ def test_untagged_neighbour_probe_still_gets_its_own_lookup(hub, monkeypatch):
     assert hub.style_match(hub.tag_artist('ELEZO'), 'deep house') >= hub.STYLE_AT
 
 
+def test_approved_session_keeps_songs_heard_through(hub):
+    styles(hub, 'Hotel Pools', {'chillsynth': 1, 'synthwave': .4})
+    styles(hub, 'MACROSS 82-99', {'synthwave': 1})
+    once = add(hub, 400, 'Horizon', 'Hotel Pools')
+    bad = add(hub, 401, 'Sunset', 'MACROSS 82-99', liked=-1)
+    skipped = add(hub, 402, 'Eclipse', 'Hotel Pools')
+    playing = add(hub, 403, 'Glow', 'Hotel Pools')
+    for tid, at, action in [(once, 1000, 'played'), (bad, 1200, 'played'), (bad, 1210, 'skipped'),
+                            (skipped, 1210, 'played'), (skipped, 1230, 'skipped'), (playing, 1230, 'played')]:
+        hub.db('INSERT INTO plays VALUES(?,?,?)', (tid, at, action))
+    assert {t['id'] for t in hub.collection('synthwave')} == set()
+    assert hub.keep_session(900, 1300, 'test') == [once]
+    assert {t['id'] for t in hub.collection('synthwave')} == {once}
+
+
 def test_near_twin_styles_share_one_chip(hub):
     for i, artist in enumerate(['A', 'B', 'C', 'D']):
         styles(hub, artist, {'synthwave': 1, 'chillwave': 1, 'vaporwave': 1})
