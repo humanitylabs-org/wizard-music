@@ -25,7 +25,6 @@
 .music-chip { min-height: 38px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 19px; background: var(--bg-raised); color: var(--text); font: 550 14px/1 var(--font); }
 .music-chip:active { background: var(--line-strong); }
 .music-chip:disabled { opacity: .5; }
-.music-catalog { margin: 0 4px 6px; overflow-wrap: anywhere; }
 
 .music-shelf { display: grid; grid-auto-flow: column; grid-auto-columns: 132px; gap: 12px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; scroll-snap-type: x proximity; }
 .music-shelf::-webkit-scrollbar { display: none; }

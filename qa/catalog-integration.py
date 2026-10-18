@@ -93,7 +93,7 @@ def music(name, connector_url, token, with_hub=True):
 def browser(base, scenario, expected):
     subprocess.run(['node', 'qa/catalog-browser.mjs', base.rsplit(':', 1)[1], str(args.core_dir),
                     str(args.evidence), scenario, expected], cwd=root, check=True)
-    checks.append(f'browser {scenario}: visible outcome, no playback requests or browser bearer')
+    checks.append(f'browser {scenario}: no per-track catalog button, same-origin API outcome, no playback requests or browser bearer')
 
 
 fixture.setUp()
@@ -141,7 +141,7 @@ try:
     assert request(connected + path, {'video_id': ' W8VdVY8diqs'})[0] == 400
     assert request(connected + path, payload, {'Origin': 'https://evil.invalid'})[0] == 403
     checks.append('account/URL/operation selectors, malformed ID and hostile Origin rejected')
-    browser(connected, 'linked', 'Connected catalog result: FAKE catalog fixture. Source: YouTube Data API.')
+    browser(connected, 'linked', 'FAKE catalog fixture')
 
     for name, token in [('wrong-token', 'wrong' * 8), ('owner-token', 'o' * 40), ('mcp-token', 'm' * 40), ('broker-token', 'b' * 40)]:
         wrong = music(name, fixture.base, token)
@@ -150,7 +150,7 @@ try:
         assert len(provider_calls) == before
         checks.append(f'{name}: denied at Connectors, no provider call')
         if name == 'wrong-token':
-            browser(wrong, name, 'Catalog connection authorization failed. Ask your administrator to check the Music adapter token.')
+            browser(wrong, name, 'catalog_auth_failed')
 
     assert fixture.req('/api/music/unlink', {})[0] == 200
     assert fixture.req('/api/state')[1]['google']['bindings'] == []
@@ -158,14 +158,14 @@ try:
     assert request(connected + path, payload) == (409, {'error': 'capability_denied'})
     assert len(provider_calls) == before
     checks.append('owner unlink immediately denies next lookup; no cached success or provider call')
-    browser(connected, 'unlinked', 'No Music catalog account is bound. Link Google and bind Music in Connectors, then retry.')
+    browser(connected, 'unlinked', 'capability_denied')
 
     missing = music('unconfigured', '', '')
     assert request(missing + path, payload) == (503, {'error': 'catalog_not_configured'})
-    browser(missing, 'unconfigured', 'Connected catalog lookup is not configured on this Wizard.')
+    browser(missing, 'unconfigured', 'catalog_not_configured')
     unreachable = music('unavailable', 'http://127.0.0.1:1', 's' * 40)
     assert request(unreachable + path, payload) == (502, {'error': 'catalog_unavailable'})
-    browser(unreachable, 'unavailable', 'Connected catalog lookup is unavailable. Try again later.')
+    browser(unreachable, 'unavailable', 'catalog_unavailable')
     checks.append('configured lookup never depends on hub token for broker authorization; existing hub path still reads home')
     assert request(connected + '/wizard-music/api/home')[0] == 200
     result = {'ok': True, 'scope': 'Real Music/Connectors HTTP/RPC/store with FAKE Google and hub metadata; no real consent or playback proof',

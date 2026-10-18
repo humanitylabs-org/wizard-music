@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { browserSessionStore, EMPTY_SNAPSHOT, musicEngine, playedTracks, readSession, WebEngine, type MusicEngine, type MusicSnapshot, type MusicStation, type MusicTrack } from './engine'
 import { hostedAudioBridge } from './backgroundAudio'
-import { CatalogLookup } from './CatalogLookup'
 if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNativeMusic = hostedAudioBridge()
 import './music.css'
 
@@ -162,14 +161,14 @@ function Art({ track, size }: { track?: MusicTrack; size: 'row' | 'card' | 'hero
 }
 
 function TrackRow({ track, active, played, onPlay, onPlayNext }: { track: MusicTrack; active?: boolean; played?: boolean; onPlay: () => void; onPlayNext?: () => void }) {
-  return <div><div className={`music-row${active ? ' active' : ''}${played ? ' played' : ''}`} aria-current={active ? 'true' : undefined}>
+  return <div className={`music-row${active ? ' active' : ''}${played ? ' played' : ''}`} aria-current={active ? 'true' : undefined}>
     <button type="button" className="music-row-main" onClick={onPlay}>
       <Art track={track} size="row" />
       <span className="music-row-text"><strong>{track.title}</strong><small>{track.artist}{track.source === 'library' ? <em className="music-source-badge">Library</em> : null}</small></span>
       {track.durationMs > 0 && <span className="music-row-time">{time(track.durationMs)}</span>}
     </button>
     {onPlayNext && <button type="button" className="music-icon-button" aria-label={`Play ${track.title} next`} onClick={onPlayNext}><PlayNextGlyph /></button>}
-  </div><CatalogLookup key={track.id} track={track} /></div>
+  </div>
 }
 
 export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () => void; notify: (message: string) => void }) {
@@ -354,7 +353,6 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
         <button type="button" className={`music-icon-button music-thumb music-like${liked ? ' on' : ''}`} aria-pressed={liked} aria-label={liked ? 'Thumbs up (on)' : 'Thumbs up'} onClick={like}><ThumbUpGlyph filled={liked} /></button>
       </div>
       {snapshot.error && <p className="music-status" role="status">{snapshot.error}</p>}
-      <CatalogLookup key={track.id} track={track} />
       <section className="music-upnext" aria-label="Queue">
         {played.length > 0 && <button type="button" className={`music-played-toggle${showPlayed ? ' open' : ''}`} aria-expanded={showPlayed} onClick={() => setShowPlayed(!showPlayed)}>
           <span>{showPlayed ? 'Hide played' : `Played · ${played.length}`}</span><ChevronDown />

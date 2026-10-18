@@ -25,9 +25,16 @@ try {
   page.on('pageerror', e => errors.push(e.message))
   page.on('request', r => requests.push({ url: r.url(), body: r.postData(), headers: r.headers() }))
   await page.goto(`http://127.0.0.1:${server.address().port}/wizard-music/`)
-  await page.getByRole('button', { name: 'Check connected catalog: FAKE selected track' }).click()
-  await page.getByText(expected, { exact: true }).waitFor()
-  await page.getByText(/Metadata only — audio is not verified/).waitFor()
+  await page.locator('.music-row').first().waitFor()
+  // Catalog lookup is an agent/API capability; the song list carries no per-track catalog control.
+  assert.equal(await page.getByRole('button', { name: /connected catalog/i }).count(), 0)
+  const outcome = await page.evaluate(async () => {
+    const r = await fetch(new URL('api/catalog', document.baseURI), { method: 'POST', credentials: 'same-origin',
+      headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ video_id: 'W8VdVY8diqs' }) })
+    const body = await r.json()
+    return r.ok ? (body.items?.[0]?.title || 'empty') : body.error
+  })
+  assert.equal(outcome, expected)
   assert.equal(await page.getByRole('dialog', { name: 'Now playing' }).count(), 0)
   assert.equal(requests.filter(r => /\/api\/station|\/stream\//.test(r.url)).length, 0)
   const catalog = requests.filter(r => r.url.endsWith('/api/catalog'))
