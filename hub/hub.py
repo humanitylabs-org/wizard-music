@@ -81,6 +81,10 @@ _db.executescript(
     -- tags: JSON {style: weight 0..1} for an artist ({} = looked up, nothing known); source musicbrainz|related
     -- kept: songs you heard all the way through in a session you said was on point (a softer like)
     CREATE TABLE IF NOT EXISTS kept (id TEXT, at REAL, reason TEXT, PRIMARY KEY (id, reason));
+    -- requests: you asked for this exact song (tapped it, or named it out loud); how = tap|spoken|backfill
+    CREATE TABLE IF NOT EXISTS requests (id TEXT, at REAL, how TEXT);
+    -- feedback_log: every like/unlike/dislike ever given (likes keeps only the latest), for reweighting later
+    CREATE TABLE IF NOT EXISTS feedback_log (id TEXT, at REAL, action TEXT);
     CREATE TABLE IF NOT EXISTS artist_styles (key TEXT PRIMARY KEY, name TEXT, tags TEXT, source TEXT, at REAL);
     """
 )
@@ -650,25 +654,137 @@ def tag_artist(name: str, title: str = "") -> dict[str, float]:
     return tags
 
 
-def your_tracks() -> list[tuple[dict, float]]:
-    """Tracks you have curated: liked, kept from a session you approved, or played at least twice and
-    not mostly skipped. -> [(track, affinity)]."""
-    taste = taste_profile()
-    rows = db(
-        "SELECT t.id, COALESCE((SELECT value FROM likes l WHERE l.id=t.id),0), "
-        "(SELECT COUNT(*) FROM plays p WHERE p.id=t.id AND p.action='played'), "
-        "(SELECT COUNT(*) FROM plays p WHERE p.id=t.id AND p.action='skipped'), "
-        "(SELECT COUNT(*) FROM kept k WHERE k.id=t.id) FROM tracks t "
-        "WHERE t.id IN (SELECT id FROM likes UNION SELECT id FROM plays UNION SELECT id FROM kept)"
-    )
-    out = []
-    for tid, liked, played, skipped, kept in rows:
-        if liked < 0 or tid in taste.disliked:
+# ---------------------------------------------------------------- Points
+# Every song earns points from what you did with it. The raw counts are kept (plays, requests, feedback_log,
+# kept), so the weights below can change later and every score is recomputed from the same history.
+# Override any of them in HOME/score_weights.json, e.g. {"heard_through": 1.5}.
+DEFAULT_WEIGHTS = {
+    "like": 5.0,           # thumbs up (current state)
+    "dislike": -10.0,      # thumbs down (current state); also keeps the song out of every collection
+    "request": 3.0,        # each time you asked for this exact song: tapped it, or named it
+    "heard_through": 1.0,  # each time it played to (nearly) the end with no skip or thumbs down
+    "partial": 0.25,       # each time it played at least 30 seconds, then something else came on (tracked; small for now)
+    "skip": -1.0,          # each time you skipped it
+    "approved": 1.0,       # it was heard through in a session you said was on point
+}
+CAPS = {"request": 6, "heard_through": 12, "skip": 8, "partial": 8}  # repeats count, with diminishing room to dominate
+YOURS_AT = 2.0  # points a song needs to join your collections
+
+
+def score_weights() -> dict[str, float]:
+    weights = dict(DEFAULT_WEIGHTS)
+    try:
+        custom = json.loads((HOME / "score_weights.json").read_text())
+        weights.update({k: float(v) for k, v in custom.items() if k in DEFAULT_WEIGHTS})
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        print("score_weights.json ignored", repr(exc), file=sys.stderr)
+    return weights
+
+
+def _heard(events: list[tuple], disliked: set[str], partial: dict | None = None) -> dict[str, int]:
+    """Per song, how many times it played to (nearly) the end: not skipped, not turned down, and the next song
+    started no sooner than 60% of the way through. A song still playing at the end of `events` is left out.
+    Starts that ran 30 seconds or more but not that far are counted into `partial`."""
+    out: dict[str, int] = {}
+    durations = {r[0]: (r[1] or 0) / 1000 for r in db("SELECT id, duration_ms FROM tracks WHERE id IN (SELECT id FROM plays)")}
+    for i, (tid, at, action) in enumerate(events):
+        if action != "played" or tid in disliked or i + 1 >= len(events):
             continue
-        if liked > 0 or kept > 0 or (played >= 2 and skipped * 2 < played):
+        later = events[i + 1:i + 3]
+        if any(e[0] == tid and e[2] == "skipped" for e in later):
+            continue
+        ran = later[0][1] - at
+        if ran >= max(60.0, 0.6 * durations.get(tid, 0)):
+            out[tid] = out.get(tid, 0) + 1
+        elif ran >= 30 and partial is not None:
+            partial[tid] = partial.get(tid, 0) + 1
+    return out
+
+
+def song_metrics() -> dict[str, dict]:
+    """Raw per-song counts behind the points."""
+    disliked = {r[0] for r in db("SELECT id FROM likes WHERE value<0")}
+    m: dict[str, dict] = {}
+
+    def row(tid):
+        return m.setdefault(tid, {"like": 0, "dislike": 0, "request": 0, "heard_through": 0, "partial": 0, "skip": 0, "approved": 0, "starts": 0})
+
+    for tid, value in db("SELECT id, value FROM likes WHERE value!=0"):
+        row(tid)["like" if value > 0 else "dislike"] = 1
+    events = db("SELECT id, at, action FROM plays ORDER BY at")
+    # A start you left within 30 seconds (a double tap, a test, changing your mind) is no evidence either way.
+    kept_starts: dict[str, list[float]] = {}
+    for i, (tid, at, action) in enumerate(events):
+        if action == "played" and (i + 1 >= len(events) or events[i + 1][1] - at >= 30):
+            kept_starts.setdefault(tid, []).append(at)
+    last: dict[str, float] = {}
+    for tid, at in db("SELECT id, at FROM requests ORDER BY at"):
+        # One request per minute per song, and only when the song then actually played.
+        if at - last.get(tid, -1e12) >= 60 and any(-5 <= s - at <= 90 for s in kept_starts.get(tid, [])):
+            row(tid)["request"] += 1
+            last[tid] = at
+    for tid, action, n in db("SELECT id, action, COUNT(*) FROM plays GROUP BY id, action"):
+        row(tid)["starts" if action == "played" else "skip"] = n
+    partial: dict[str, int] = {}
+    for tid, n in _heard(events, disliked, partial).items():
+        row(tid)["heard_through"] = n
+    for tid, n in partial.items():
+        row(tid)["partial"] = n
+    for (tid,) in db("SELECT DISTINCT id FROM kept"):
+        if tid not in disliked:
+            row(tid)["approved"] = 1
+    return m
+
+
+def song_points(metrics: dict, weights: dict | None = None) -> float:
+    w = weights or score_weights()
+    return round(sum(w[k] * min(metrics.get(k, 0), CAPS.get(k, 1)) for k in DEFAULT_WEIGHTS), 2)
+
+
+def scores(limit: int = 0) -> dict:
+    weights = score_weights()
+    rows = []
+    for tid, metrics in song_metrics().items():
+        t = track(tid)
+        if t:
+            rows.append({"id": tid, "title": t["title"], "artist": t["artist"], "points": song_points(metrics, weights), **metrics})
+    rows.sort(key=lambda r: -r["points"])
+    return {"weights": weights, "caps": CAPS, "yoursAt": YOURS_AT, "songs": rows[:limit] if limit else rows}
+
+
+def record_request(tid: str, how: str):
+    db("INSERT INTO requests(id,at,how) VALUES(?,?,?)", (tid, time.time(), how))
+    _collections_cache["at"] = 0.0
+
+
+def backfill_requests():
+    """Before requests were recorded: a station named '<song> radio' was started from that exact song."""
+    if db("SELECT 1 FROM requests LIMIT 1"):
+        return
+    for sid, seed, title, at in db("SELECT id, seed, title, at FROM stations"):
+        t = track(seed)
+        if t and title == f"{t['title']} radio":
+            db("INSERT INTO requests(id,at,how) VALUES(?,?,?)", (seed, at, "backfill"))
+    if not db("SELECT 1 FROM feedback_log LIMIT 1"):
+        for tid, value, at in db("SELECT id, value, at FROM likes WHERE value!=0"):
+            db("INSERT INTO feedback_log(id,at,action) VALUES(?,?,?)", (tid, at, "like" if value > 0 else "dislike"))
+
+
+def your_tracks() -> list[tuple[dict, float]]:
+    """Songs with at least YOURS_AT points and no thumbs down. -> [(track, points)]."""
+    taste = taste_profile()
+    weights = score_weights()
+    out = []
+    for tid, metrics in song_metrics().items():
+        if metrics["dislike"] or tid in taste.disliked:
+            continue
+        points = song_points(metrics, weights)
+        if points >= YOURS_AT:
             t = track(tid)
             if t and not blocked(t, taste):
-                out.append((t, (3.0 if liked > 0 else 1.5 if kept > 0 else 0.0) + min(played - skipped, 20) / 4))
+                out.append((t, points))
     return out
 
 
@@ -1153,6 +1269,8 @@ def play_spoken(said: str) -> dict:
     fix = {**fix, "kind": kind}
     label = f"{fix['artist']} radio" if fix["kind"] == "artist" else f"{q.title()} radio" if fix["kind"] == "genre" else ""
     out = create_station({"trackId": first["id"], "label": label})
+    if fix["kind"] in {"song", "artist+words", "search"} and not style:
+        record_request(first["id"], "spoken")  # you named this song (a style word like "synthwave" names none)
     heard = fix["artist"] if fix["kind"] == "artist" else f"{q.title()} radio" if fix["kind"] == "genre" else f"{first['title']} · {first['artist']}"
     return {"kind": fix["kind"], "said": said, "query": q, "heard": heard, "corrected": fix["query"] if fix["artist"] else "", "source": fix["source"], **out}
 
@@ -1533,6 +1651,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if path == "/api/home":
                 return self._json(200, home())
+            if path == "/api/scores":  # points per song, with the raw counts behind them
+                return self._json(200, scores(int(qs.get("limit", ["0"])[0] or 0)))
             if path == "/api/search":
                 q = (qs.get("q") or [""])[0][:200]
                 return self._json(200, {"tracks": search(q) if q.strip() else []})
@@ -1573,7 +1693,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self._body()
             if url.path == "/api/station":
-                return self._json(200, create_station(body))
+                out = create_station(body)
+                if body.get("trackId") and not body.get("label") and out.get("tracks"):
+                    record_request(out["tracks"][0]["id"], "tap")  # you tapped this song
+                return self._json(200, out)
             if url.path == "/api/play":
                 said = str(body.get("said", ""))[:300]
                 return self._json(200, play_spoken(said))
@@ -1592,6 +1715,8 @@ class Handler(BaseHTTPRequestHandler):
                 if action in {"like", "unlike", "dislike"}:
                     value = {"like": 1, "unlike": 0, "dislike": -1}[action]
                     db("INSERT OR REPLACE INTO likes(id,value,at) VALUES(?,?,?)", (tid, value, time.time()))
+                    db("INSERT INTO feedback_log(id,at,action) VALUES(?,?,?)", (tid, time.time(), action))
+                    _collections_cache["at"] = 0.0
                     taste_changed()
                     if action == "dislike":
                         learned = learn_dislike(tid)
@@ -1681,6 +1806,7 @@ def main():
     threading.Thread(target=_library_loop, daemon=True).start()
     threading.Thread(target=_info_loop, daemon=True).start()
     threading.Thread(target=_style_loop, daemon=True).start()
+    _quiet(backfill_requests)
     threading.Thread(target=lambda: _quiet(backfill_styles), daemon=True).start()
     for tid, value in db("SELECT id, value FROM likes WHERE value != 0"):
         queue_info(tid, similar=value < 0)  # learn genre/similar artists for thumbs given before this existed

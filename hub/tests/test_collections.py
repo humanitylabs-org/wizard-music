@@ -28,10 +28,11 @@ def add(hub, n, title, artist, liked=0, plays=0, skips=0):
     hub.db('INSERT INTO tracks VALUES(?,?,?,?,?,?,?,?,?)', (tid, title, artist, '', 300000, '', 'youtube', '', 0))
     if liked:
         hub.db('INSERT INTO likes VALUES(?,?,?)', (tid, liked, 0))
-    for _ in range(plays):
-        hub.db('INSERT INTO plays VALUES(?,?,?)', (tid, 0, 'played'))
-    for _ in range(skips):
-        hub.db('INSERT INTO plays VALUES(?,?,?)', (tid, 0, 'skipped'))
+    base = n * 100000  # each song's listens sit in their own stretch of time, 5 minutes apart
+    for i in range(plays):
+        hub.db('INSERT INTO plays VALUES(?,?,?)', (tid, base + i * 300, 'played'))
+    for j in range(skips):  # a skip lands right after one of the plays
+        hub.db('INSERT INTO plays VALUES(?,?,?)', (tid, base + j * 300 + 10, 'skipped'))
     return tid
 
 
