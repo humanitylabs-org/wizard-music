@@ -34,6 +34,10 @@ HOST = os.environ.get("WIZARD_MUSIC_HUB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("WIZARD_MUSIC_HUB_PORT", "8793"))
 TOKEN = os.environ.get("WIZARD_MUSIC_HUB_TOKEN", "")
 ONLINE = os.environ.get("WIZARD_MUSIC_ONLINE", "0") == "1"
+# Anonymous YouTube Music radio from a Thai IP front-loads ~30 Thai/K-pop chart hits before the
+# songs that actually follow the seed (a Gui Boratto radio opened with Thai pop). Radio asks as
+# this region instead; a Thai seed still gets Thai radio. Search keeps the default region.
+RADIO_LOCATION = os.environ.get("WIZARD_MUSIC_RADIO_LOCATION", "US").strip()
 HOME = Path(os.environ.get("WIZARD_MUSIC_HUB_HOME", str(Path.home() / ".wizard-home/music-hub")))
 LIBRARY = Path(os.environ.get("WIZARD_MUSIC_LIBRARY", str(Path.home() / "Music/WizardMusic/Library")))
 CACHE = Path(os.environ.get("WIZARD_MUSIC_CACHE", str(HOME / "cache")))
@@ -102,6 +106,24 @@ def ytm():
             auth = HOME / "ytmusic-browser.json"
             _ytm = YTMusic(str(auth)) if auth.exists() else YTMusic()
         return _ytm
+
+
+_ytm_radio = None
+
+
+def ytm_radio():
+    """YouTube Music client used for radio, pinned to RADIO_LOCATION."""
+    if not RADIO_LOCATION:
+        return ytm()
+    ytm()  # same ONLINE gate
+    global _ytm_radio
+    with _ytm_lock:
+        if _ytm_radio is None:
+            from ytmusicapi import YTMusic
+
+            auth = HOME / "ytmusic-browser.json"
+            _ytm_radio = YTMusic(str(auth), location=RADIO_LOCATION) if auth.exists() else YTMusic(location=RADIO_LOCATION)
+        return _ytm_radio
 
 
 def _secs(text) -> int:
@@ -817,7 +839,7 @@ def _radio_from(tid: str) -> list[str]:
     ids: list[str] = []
     if seed_vid:
         try:
-            watch = ytm().get_watch_playlist(seed_vid, radio=True, limit=60)
+            watch = ytm_radio().get_watch_playlist(seed_vid, radio=True, limit=60)
             for item in watch.get("tracks", []):
                 t = remember_yt(item)
                 if t:
@@ -853,18 +875,45 @@ def create_station(seed: dict) -> dict:
     return {"station": {"id": sid, "title": title, "more": f"{PUBLIC_PREFIX}/api/station/{sid}/more"}, "tracks": tracks}
 
 
+# Scripts that mark a regional chart insert rather than a song that follows the seed.
+_SCRIPTS = {"thai": re.compile(r"[\u0e00-\u0e7f]"), "hangul": re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")}
+
+
+def _scripts(text: str) -> set[str]:
+    return {name for name, rx in _SCRIPTS.items() if rx.search(text or "")}
+
+
+def station_scripts(state: dict) -> set[str]:
+    out: set[str] = set()
+    for tid in {state.get("seed"), state.get("lastSeed")}:
+        t = track(tid) if tid else None
+        if t:
+            out |= _scripts(f"{t.get('title', '')} {t.get('artist', '')}")
+    return out
+
+
+def off_station(t: dict, allowed: set[str], taste: Taste) -> bool:
+    """True when a candidate is in a language the station's seed is not (Thai/Korean filler)."""
+    if t.get("liked"):
+        return False
+    if any(taste.artist.get(_key(name), 0.0) > 0 for name in artist_names(t.get("artist", ""))):
+        return False
+    return bool(_scripts(t.get("title", "")) - allowed)
+
+
 def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
     taste = taste_profile()
     out: list[dict] = []
     attempts = 0
     while len(out) < n and attempts < 4:
         attempts += 1
+        allowed = station_scripts(state)
         while state["queue"] and len(out) < n:
             tid = state["queue"].pop(0)
             if tid in state["played"]:
                 continue
             t = track(tid)
-            if t and not blocked(t, taste):
+            if t and not blocked(t, taste) and not off_station(t, allowed, taste):
                 out.append(t)
                 state["played"].append(tid)
         if len(out) < n:
