@@ -926,6 +926,19 @@ def collection(style: str) -> list[dict]:
 _collections_cache: dict = {"at": 0.0, "value": []}
 
 
+def style_label(style: str) -> str:
+    """'deep house' -> 'Deep house' (chips read as the style itself; 'your' was redundant)."""
+    return style[:1].upper() + style[1:]
+
+
+def hidden_chips() -> set[str]:
+    """Styles and vibe chips this listener never wants offered: HOME/hidden_chips.json, e.g. ["trip hop", "neo soul"]."""
+    try:
+        return {str(x).strip().lower() for x in json.loads((HOME / "hidden_chips.json").read_text())}
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
 def collections(limit: int = 8) -> list[dict]:
     """Styles you have at least COLLECTION_MIN tracks in, biggest first (cached for a minute)."""
     if time.time() - _collections_cache["at"] < 60:
@@ -934,10 +947,10 @@ def collections(limit: int = 8) -> list[dict]:
     out, kept = [], []
     for style in STYLE_FAMILIES:  # listed in order of preference: synthwave before its near-twins
         ids = {t["id"] for t, tags in mine if style_match(tags, style) >= STYLE_AT}
-        if len(ids) < COLLECTION_MIN or any(len(ids & k) / len(ids | k) > 0.6 for k in kept):
+        if style in hidden_chips() or len(ids) < COLLECTION_MIN or any(len(ids & k) / len(ids | k) > 0.6 for k in kept):
             continue
         kept.append(ids)
-        out.append({"style": style, "label": f"Your {style}", "count": len(ids)})
+        out.append({"style": style, "label": style_label(style), "count": len(ids)})
     out.sort(key=lambda c: -c["count"])
     _collections_cache.update(at=time.time(), value=out)
     return out[:limit]
@@ -987,7 +1000,7 @@ def _style_loop():
 def style_station(style: str, said: str, q: str) -> dict | None:
     """A station that plays your own tracks in this style, interleaved with radio grown from them."""
     mine = collection(style)
-    label = f"Your {style}"
+    label = style_label(style)
     if not mine:
         return None
     seeds = random.sample(mine[: max(6, len(mine) // 2)], k=min(3, len(mine)))
@@ -1389,8 +1402,8 @@ def create_station(seed: dict) -> dict:
     title = ""
     if not tid and seed.get("query"):
         said = str(seed["query"]).strip()
-        mine = re.fullmatch(r"your (.+)", said.lower())
-        if mine and mine.group(1) in STYLE_FAMILIES:  # a "Your synthwave" chip
+        mine = re.fullmatch(r"(?:your )?(.+)", said.lower())
+        if mine and mine.group(1) in STYLE_FAMILIES:  # a "Synthwave" chip (older clients send "Your synthwave")
             out = style_station(mine.group(1), said, said)
             if out:
                 return {"station": out["station"], "tracks": out["tracks"]}
@@ -1678,7 +1691,8 @@ def home() -> dict:
         ],
         "vibes": ([{"id": f"mix-{m['key'].replace(' ', '-')}", "label": m["name"], "count": len(m["ids"])} for m in mixes()]
                   + [{"id": f"mine-{c['style'].replace(' ', '-')}", "label": c["label"], "count": c["count"]} for c in collections(6)]
-                  + [{"id": v["id"], "label": v["label"]} for v in VIBES]) if ONLINE else [],
+                  + [{"id": v["id"], "label": v["label"]} for v in VIBES
+                     if v["id"] not in hidden_chips() and v["label"].lower() not in hidden_chips()]) if ONLINE else [],
         "liked": [t for t in liked if t],
         "recent": [t for t in recent if t],
         "library": [t for t in library if t],

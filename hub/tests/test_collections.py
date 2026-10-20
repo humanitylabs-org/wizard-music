@@ -77,7 +77,7 @@ def test_collection_is_your_tracks_in_that_style(hub):
     deep = {t['id'] for t in hub.collection('deep house')}
     assert deep == {ids['trap'], ids['rain']}
     labels = {c['label']: c['count'] for c in hub.collections()}
-    assert labels['Your synthwave'] == 4
+    assert labels['Synthwave'] == 4
 
 
 def test_spoken_synthwave_plays_your_synthwave(hub, monkeypatch):
@@ -86,7 +86,7 @@ def test_spoken_synthwave_plays_your_synthwave(hub, monkeypatch):
     monkeypatch.setattr(hub, '_radio_from', lambda tid: list(radio))
     monkeypatch.setattr(hub, 'search', lambda q: pytest.fail('a collection request must not search'))
     out = hub.play_spoken('Play me some synthwave')
-    assert out['kind'] == 'collection' and out['station']['title'] == 'Your synthwave'
+    assert out['kind'] == 'collection' and out['station']['title'] == 'Synthwave'
     played = [t['id'] for t in out['tracks']]
     mine = {ids['tides'], ids['coast'], ids['snooker'], ids['xxx']}
     assert set(played[:1]) <= mine and mine <= set(played)
@@ -98,9 +98,9 @@ def test_home_chips_and_chip_start_collection(hub, monkeypatch):
     seed_library(hub)
     monkeypatch.setattr(hub, '_radio_from', lambda tid: [])
     chips = hub.home()['vibes']
-    assert chips[0]['label'] == 'Your synthwave'
-    out = hub.create_station({'query': 'Your synthwave', 'label': 'Your synthwave'})
-    assert out['station']['title'] == 'Your synthwave' and len(out['tracks']) == 4
+    assert chips[0]['label'] == 'Synthwave'
+    out = hub.create_station({'query': 'Synthwave', 'label': 'Synthwave'})
+    assert out['station']['title'] == 'Synthwave' and len(out['tracks']) == 4
 
 
 def test_vibe_chip_seeds_from_its_track_not_its_label(hub, monkeypatch):
@@ -157,4 +157,4 @@ def test_near_twin_styles_share_one_chip(hub):
     for i, artist in enumerate(['A', 'B', 'C', 'D']):
         styles(hub, artist, {'synthwave': 1, 'chillwave': 1, 'vaporwave': 1})
         add(hub, 300 + i, f'S{i}', artist, liked=1)
-    assert [c['label'] for c in hub.collections()] == ['Your synthwave']
+    assert [c['label'] for c in hub.collections()] == ['Synthwave']

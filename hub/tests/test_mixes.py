@@ -52,3 +52,13 @@ def test_unrelated_request_does_not_hit_mix(hub):
     hub.save_mix('Tea music', [add(hub, 1)])
     assert hub.find_mix('deep house') is None
     assert hub.find_mix('music') is None
+
+
+def test_chip_labels_drop_your_and_hidden_chips_are_left_out(hub, monkeypatch):
+    (hub.HOME / 'hidden_chips.json').write_text('["trip hop", "neo soul", "Dub techno"]')
+    monkeypatch.setattr(hub, 'collections', lambda limit=8: [{'style': 'synthwave', 'label': hub.style_label('synthwave'), 'count': 5}])
+    labels = [v['label'] for v in hub.home()['vibes']]
+    assert 'Synthwave' in labels
+    assert not any(l.lower().startswith('your ') for l in labels)
+    assert 'Neo soul' not in labels and 'Dub techno' not in labels and 'Deep focus' in labels
+    assert 'trip hop' in hub.hidden_chips()
