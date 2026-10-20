@@ -86,6 +86,8 @@ _db.executescript(
     -- feedback_log: every like/unlike/dislike ever given (likes keeps only the latest), for reweighting later
     CREATE TABLE IF NOT EXISTS feedback_log (id TEXT, at REAL, action TEXT);
     CREATE TABLE IF NOT EXISTS artist_styles (key TEXT PRIMARY KEY, name TEXT, tags TEXT, source TEXT, at REAL);
+    -- mixes: a named set of songs you saved ("tea music"); ids JSON list, aliases JSON list of other spoken names
+    CREATE TABLE IF NOT EXISTS mixes (key TEXT PRIMARY KEY, name TEXT, ids TEXT, aliases TEXT, at REAL);
     """
 )
 _db.commit()
@@ -809,6 +811,75 @@ def heard_through(since: float, until: float) -> list[str]:
     return out
 
 
+# ---------------------------------------------------------------- Saved mixes
+def _mix_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).strip()
+
+
+def _mix_core(name: str) -> str:
+    """'my tea music playlist' -> 'tea' (what a spoken request and a mix name must share)."""
+    words = [w for w in _mix_key(name).split() if w not in GENERIC and w not in {"my", "mix", "playlist", "list"}]
+    return " ".join(words)
+
+
+def save_mix(name: str, ids: list[str], aliases: list[str] | None = None) -> dict:
+    """Save (or replace) a named mix of songs you picked; it shows as a chip and plays on request."""
+    name = (name or "").strip()[:60]
+    seen: list[str] = []
+    for tid in ids:
+        if track(tid) and tid not in seen:
+            seen.append(tid)
+    if not name or not seen:
+        raise ValueError("a mix needs a name and at least one known song")
+    db("INSERT OR REPLACE INTO mixes(key,name,ids,aliases,at) VALUES(?,?,?,?,?)",
+       (_mix_key(name), name, json.dumps(seen[:300]), json.dumps([a[:60] for a in (aliases or [])][:10]), time.time()))
+    return {"name": name, "tracks": [track(t) for t in seen]}
+
+
+def session_songs(since: float, until: float) -> list[str]:
+    """Songs that started between since and until, minus ones skipped early (before 60% or a minute in).
+    Unlike heard_through, the song still playing at the end counts."""
+    events = db("SELECT id, at, action FROM plays WHERE at>=? AND at<=? + 3600 ORDER BY at", (since, until))
+    disliked = {r[0] for r in db("SELECT id FROM likes WHERE value<0")}
+    out: list[str] = []
+    for i, (tid, at, action) in enumerate(events):
+        if action != "played" or at > until or tid in disliked or tid in out:
+            continue
+        nxt = next((e for e in events[i + 1:] if e[2] == "played" or e[0] == tid), None)
+        t = track(tid) or {}
+        if nxt and nxt[0] == tid and nxt[2] == "skipped" and nxt[1] - at < max(60.0, 0.6 * (t.get("durationMs") or 0) / 1000):
+            continue
+        out.append(tid)
+    return out
+
+
+def mixes() -> list[dict]:
+    out = []
+    for key, name, ids, aliases, at in db("SELECT key,name,ids,aliases,at FROM mixes ORDER BY at DESC"):
+        out.append({"key": key, "name": name, "ids": json.loads(ids or "[]"), "aliases": json.loads(aliases or "[]")})
+    return out
+
+
+def find_mix(said: str) -> dict | None:
+    core = _mix_core(said)
+    if not core:
+        return None
+    for m in mixes():
+        if any(core == _mix_core(n) or _mix_key(said) == _mix_key(n) for n in [m["name"], *m["aliases"]]):
+            return m
+    return None
+
+
+def mix_station(m: dict) -> dict:
+    """Your saved songs in a fresh order first, then radio grown from them that keeps bringing them back."""
+    ids = [t for t in m["ids"] if track(t)]
+    if not ids:
+        raise LookupError("that mix is empty")
+    order = ids[:]
+    random.shuffle(order)
+    return create_station({"trackId": order[0], "label": m["name"], "queue": order[1:], "pool": ids})
+
+
 def keep_session(since: float, until: float, reason: str) -> list[str]:
     """You said this stretch of listening was on point: every song heard through counts as yours."""
     ids = heard_through(since, until)
@@ -1225,6 +1296,10 @@ def genre_seed(genre: str) -> str | None:
 def play_spoken(said: str) -> dict:
     """One spoken request -> what to play. Vibes and likes resolve locally; names are fixed first."""
     q = spoken_query(said)
+    mix = find_mix(q) if q else None
+    if mix:
+        out = mix_station(mix)
+        return {"kind": "mix", "said": said, "query": q, "heard": mix["name"], **out}
     if LIKES.match(q):
         liked = [track(r[0]) for r in db("SELECT id FROM likes WHERE value>0 ORDER BY at DESC LIMIT 60")]
         liked = [t for t in liked if t]
@@ -1319,6 +1394,9 @@ def create_station(seed: dict) -> dict:
             out = style_station(mine.group(1), said, said)
             if out:
                 return {"station": out["station"], "tracks": out["tracks"]}
+        mix = find_mix(said)
+        if mix:  # a saved mix chip, or its name typed/said
+            return mix_station(mix)
         vibe = next((v for v in VIBES if v["label"].lower() == said.lower()), None)
         if vibe:  # a vibe chip seeds from its well-loved track, not a text search for its label
             seed = {**seed, "query": vibe["query"], "label": vibe["label"]}
@@ -1598,7 +1676,8 @@ def home() -> dict:
              "detail": "Catalog access enabled; availability varies" if ONLINE else "Setup required · disabled by default", "ok": yt_ok},
             {"id": "library", "name": "Wizard Library", "status": "connected", "detail": f"{count} track{'s' if count != 1 else ''} on your Wizard", "ok": True},
         ],
-        "vibes": ([{"id": f"mine-{c['style'].replace(' ', '-')}", "label": c["label"], "count": c["count"]} for c in collections(6)]
+        "vibes": ([{"id": f"mix-{m['key'].replace(' ', '-')}", "label": m["name"], "count": len(m["ids"])} for m in mixes()]
+                  + [{"id": f"mine-{c['style'].replace(' ', '-')}", "label": c["label"], "count": c["count"]} for c in collections(6)]
                   + [{"id": v["id"], "label": v["label"]} for v in VIBES]) if ONLINE else [],
         "liked": [t for t in liked if t],
         "recent": [t for t in recent if t],
@@ -1706,6 +1785,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(400, {"error": "since/until must span at most a day"})
                 ids = keep_session(since, until, str(body.get("reason") or "session on point"))
                 return self._json(200, {"kept": [track(t) for t in ids]})
+            if url.path == "/api/mixes":  # save a named mix: explicit ids, or the songs played between since/until
+                ids = [str(t)[:40] for t in (body.get("ids") or [])]
+                if not ids and body.get("since"):
+                    since, until = float(body["since"]), float(body.get("until") or time.time())
+                    if not 0 < since < until or until - since > 86400:
+                        return self._json(400, {"error": "since/until must span at most a day"})
+                    ids = session_songs(since, until)
+                try:
+                    return self._json(200, save_mix(str(body.get("name", "")), ids, [str(a) for a in body.get("aliases") or []]))
+                except ValueError as e:
+                    return self._json(400, {"error": str(e)})
             if url.path == "/api/feedback":
                 tid = str(body.get("id", ""))[:40]
                 action = body.get("action")
