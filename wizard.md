@@ -6,7 +6,7 @@ version: 0.1.0
 type: service
 category: app
 summary: Your own music library, with an embedded player and optional online sources.
-license: GPL-3.0-only
+license: MIT
 source: https://github.com/humanitylabs-org/wizard-music
 icon: icon.png
 runtime:

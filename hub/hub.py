@@ -150,9 +150,9 @@ def scan_library() -> int:
     if not LIBRARY.exists():
         return 0
     try:
-        import mutagen
+        from tinytag import TinyTag
     except Exception:  # pragma: no cover
-        mutagen = None
+        TinyTag = None
     seen = set()
     for path in LIBRARY.rglob("*"):
         if path.suffix.lower() not in AUDIO_EXT or not path.is_file():
@@ -160,14 +160,13 @@ def scan_library() -> int:
         tid = f"lib:{_lib_id(path)}"
         seen.add(tid)
         title, artist, album, dur = path.stem, "", path.parent.name if path.parent != LIBRARY else "", 0
-        if mutagen:
+        if TinyTag:
             try:
-                meta = mutagen.File(path, easy=True)
-                if meta is not None:
-                    title = (meta.get("title") or [title])[0]
-                    artist = (meta.get("artist") or [""])[0]
-                    album = (meta.get("album") or [album])[0]
-                    dur = int((meta.info.length or 0) * 1000)
+                meta = TinyTag.get(path)
+                title = meta.title or title
+                artist = meta.artist or ""
+                album = meta.album or album
+                dur = int((meta.duration or 0) * 1000)
             except Exception:
                 pass
         db(
@@ -1025,17 +1024,11 @@ def art_bytes(tid: str) -> tuple[bytes, str] | None:
             data = r.read(2_000_000)
     elif tid.startswith("lib:"):
         try:
-            import mutagen
+            from tinytag import TinyTag
 
-            meta = mutagen.File(audio_path(tid))
-            for key_name in (meta.tags or {}).keys() if meta and meta.tags else []:
-                if str(key_name).startswith("APIC"):
-                    data = meta.tags[key_name].data
-                    break
-            if data is None and meta is not None and hasattr(meta, "pictures") and meta.pictures:
-                data = meta.pictures[0].data
-            if data is None and meta is not None and meta.tags and "covr" in meta.tags:
-                data = bytes(meta.tags["covr"][0])
+            meta = TinyTag.get(audio_path(tid), image=True)
+            image = meta.images.any if meta is not None else None
+            data = image.data if image is not None else None
         except Exception:
             data = None
     if not data:
