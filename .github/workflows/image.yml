@@ -1,0 +1,30 @@
+name: app-image
+on:
+  push:
+    branches: [main, feature/run-from-source]
+    paths-ignore: [wizard.md, runtipi/docker-compose.yml]
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  packages: write
+jobs:
+  image:
+    uses: humanitylabs-org/wizard-app-index/.github/workflows/app-image.yml@feature/packaging-rule-14
+    with:
+      context: .
+      dockerfile: Dockerfile
+      image: ghcr.io/humanitylabs-org/wizard-music
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci && npm test -- --maxWorkers=1 && npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r hub/requirements.txt pytest
+      - run: python -m pytest -q hub/tests && python qa/test_offline.py
