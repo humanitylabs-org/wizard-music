@@ -1,6 +1,6 @@
 import { StrictMode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { MiniPlayer, MusicApp, musicControl, NowPlaying, restoreMusicSession } from './music/MusicApp'
+import { lastViewWasNowPlaying, MiniPlayer, MusicApp, musicControl, NowPlaying, rememberView, restoreMusicSession, whenTrackLoaded } from './music/MusicApp'
 import { installMusicVoice } from './music/voice'
 import './app.css'
 import './wizard-appearance.css'
@@ -9,6 +9,7 @@ declare global {
   interface Window { WizardApp: {
     ready(options: {name: string; version: string}): unknown
     back: { register(options: {canGoBack: () => boolean; back: () => boolean}): () => void; useHistory(options: {isRoot: () => boolean}): () => void }
+    share?: { text(data: {title?: string; text?: string; url?: string}): Promise<'shared' | 'copied' | 'cancelled' | 'unsupported'> }
   } }
 }
 
@@ -29,18 +30,23 @@ function App() {
     if (!nowPlayingRef.current) history.pushState({ wizardMusic: 'now' }, '')
     nowPlayingRef.current = true
     setNowPlayingOpen(true)
+    rememberView('now')
   }, [])
   const closeNowPlaying = useCallback(() => {
     if (!nowPlayingRef.current) return
     nowPlayingRef.current = false
     setNowPlayingOpen(false)
+    rememberView('home')
     if (history.state?.wizardMusic === 'now') history.back()
   }, [])
   useEffect(() => {
-    const onPop = () => { nowPlayingRef.current = history.state?.wizardMusic === 'now'; setNowPlayingOpen(nowPlayingRef.current) }
+    const onPop = () => { nowPlayingRef.current = history.state?.wizardMusic === 'now'; setNowPlayingOpen(nowPlayingRef.current); rememberView(nowPlayingRef.current ? 'now' : 'home') }
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
+  // Reopen where you were: if Now Playing was up when Music closed (or the app updated), bring it back
+  // with the same song once it has loaded. It gets its own history entry, so Back still lands on the library.
+  useEffect(() => lastViewWasNowPlaying() ? whenTrackLoaded(openNowPlaying) : undefined, [openNowPlaying])
   // The Wizard OS orb drives playback: "play …", pause, next, louder (src/music/voice.ts).
   useEffect(() => installMusicVoice(notify), [notify])
   // A voice search shows its results list, so Now Playing steps aside.
@@ -66,6 +72,6 @@ function App() {
   </div>
 }
 
-// Wizard restarted: carry on with the song, queue and station from last time.
+// Wizard restarted or the app updated: carry on with the song, spot, queue and station from last time.
 restoreMusicSession()
 createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)

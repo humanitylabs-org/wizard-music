@@ -22,3 +22,5 @@
 /* No art: an accent glow on the glass, not a grey/black plate. */
 :root[data-wz-hosted] .music-art-fallback { background: radial-gradient(120% 90% at 30% 15%, color-mix(in srgb, var(--wiz) 30%, transparent), color-mix(in srgb, var(--wz-text) 5%, transparent) 70%); color: color-mix(in srgb, var(--wiz) 70%, var(--wz-text)); }
 :root[data-wz-hosted][data-color-scheme="light"] .music-art-hero { box-shadow: 0 24px 60px rgba(40, 30, 15, .25); }
+/* Sticky search floats over the scrolling shelf: opaque skin base tinted with the overlay material so titles never show through the field. */
+:root[data-wz-hosted] .music-search { background: linear-gradient(var(--wz-overlay), var(--wz-overlay)), var(--wz-base); -webkit-backdrop-filter: blur(18px) saturate(1.2); backdrop-filter: blur(18px) saturate(1.2); }
