@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import { browserSessionStore, EMPTY_SNAPSHOT, musicEngine, playedTracks, readSession, WebEngine, type MusicEngine, type MusicSnapshot, type MusicStation, type MusicTrack } from './engine'
+import { browserSessionStore, EMPTY_SNAPSHOT, musicEngine, NativeEngine, playedTracks, readSession, WebEngine, type MusicEngine, type MusicSnapshot, type MusicStation, type MusicTrack } from './engine'
 import { hostedAudioBridge } from './backgroundAudio'
 if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNativeMusic = hostedAudioBridge()
 import { shareSong } from './share'
@@ -84,16 +84,37 @@ function startEngine(): MusicEngine {
 const startListeners = new Set<() => void>()
 function noteEngineStarted() { for (const listener of [...startListeners]) listener() }
 
-/** After a Wizard restart, pick up the last song, spot, queue and station. The native player keeps its own session. */
+/** After a Wizard restart or an app update, pick up the last song, spot, queue and station. */
 export function restoreMusicSession(): boolean {
-  if (typeof window === 'undefined' || window.WizardNativeMusic || createdEngine) return false
+  if (typeof window === 'undefined' || createdEngine) return false
   const session = readSession(browserSessionStore())
-  if (!session) return false
   const engine = startEngine()
-  if (!(engine instanceof WebEngine)) return false
+  if (engine instanceof NativeEngine) {
+    // The phone's player outlives this page but not an app update; refill it only if it came back empty.
+    if (session) void engine.restoreIfEmpty(session)
+    noteEngineStarted()
+    return Boolean(session)
+  }
+  if (!session || !(engine instanceof WebEngine)) return false
   engine.resume(session)
   noteEngineStarted()
   return true
+}
+
+/** Which screen you were on (Now Playing or the library), so Music reopens there. */
+const VIEW_KEY = 'wizard-music.view.v1'
+export function rememberView(view: 'now' | 'home') { try { browserSessionStore()?.setItem(VIEW_KEY, view) } catch { /* storage blocked */ } }
+export function lastViewWasNowPlaying() { try { return browserSessionStore()?.getItem(VIEW_KEY) === 'now' } catch { return false } }
+/** Calls back once a song is loaded (restored or already playing), or never if none arrives in time. */
+export function whenTrackLoaded(callback: () => void, waitMs = 10000): () => void {
+  const engine = engineIfStarted()
+  if (!engine) return () => undefined
+  const has = () => { const snap = engine.snapshot(); return Boolean(snap.queue[snap.index]) }
+  if (has()) { callback(); return () => undefined }
+  let done = false
+  const stop = engine.subscribe(() => { if (!done && has()) { done = true; stop(); clearTimeout(timer); callback() } })
+  const timer = window.setTimeout(() => { done = true; stop() }, waitMs)
+  return () => { done = true; stop(); clearTimeout(timer) }
 }
 
 // "Search for Home Tides" by voice shows the results list (it never picks one and plays it).

@@ -82,6 +82,27 @@ export function readSession(store: SessionStore | null): SavedSession | null {
     return { ...value, index, positionMs: Math.max(0, Number(value.positionMs) || 0), savedAt: Number(value.savedAt) || 0 }
   } catch { return null }
 }
+/** Remembers the listening session in storage: track, queue and station changes at once, the spot every few seconds. */
+export class SessionSaver {
+  private key = ''
+  private at = 0
+  constructor(readonly store: SessionStore | null) {}
+  save(state: Pick<MusicSnapshot, 'queue' | 'index' | 'station' | 'positionMs'>, playing: boolean, force = false) {
+    if (!this.store) return
+    const { queue, index, station, positionMs } = state
+    const track = queue[index]
+    if (!track) return
+    const key = `${queue.length}|${index}|${track.id}|${station?.id ?? ''}|${playing}`
+    const now = Date.now()
+    if (!force && key === this.key && now - this.at < SESSION_SAVE_MS) return
+    const from = Math.max(0, index - SESSION_KEEP_BEHIND)
+    const session: SavedSession = { v: 1, queue: queue.slice(from, index + 1 + SESSION_KEEP_AHEAD), index: index - from, station, positionMs, playing, savedAt: now }
+    try { this.store.setItem(SESSION_KEY, JSON.stringify(session)); this.key = key; this.at = now } catch { /* storage full or blocked */ }
+  }
+}
+/** Whether a saved session should start playing again by itself (it was playing and you're back soon). */
+export function resumeAutoplay(session: SavedSession, now = Date.now()) { return session.playing && now - session.savedAt < RESUME_AUTOPLAY_MS }
+
 /** The songs played before the current one, oldest first, with their queue positions (for jump). */
 export function playedTracks(snapshot: Pick<MusicSnapshot, 'queue' | 'index'>, max = HISTORY_KEEP): { item: MusicTrack; position: number }[] {
   const end = Math.min(snapshot.index, snapshot.queue.length)
@@ -127,8 +148,7 @@ export class WebEngine implements MusicEngine {
   private refillAttempts = 0
   private fetchImpl: FetchLike
   private store: SessionStore | null
-  private savedKey = ''
-  private savedAt = 0
+  private saver: SessionSaver
   /** A restored spot waiting for the track's metadata; the clock shows it until the seek lands. */
   private pendingSeekMs: number | null = null
   /** Whether you want music on. Survives pauses the system causes (Wizard closing, the WebView stopping). */
@@ -138,6 +158,7 @@ export class WebEngine implements MusicEngine {
     this.audio = audio
     this.fetchImpl = fetchImpl
     this.store = store
+    this.saver = new SessionSaver(store)
     audio.preload = 'auto'
     const sync = () => this.set({
       playing: this.markPlaying(!audio.paused && !audio.ended),
@@ -176,23 +197,11 @@ export class WebEngine implements MusicEngine {
   }
 
   /** Track changes, queue changes and play/pause save at once; the playing position at most every few seconds. */
-  saveSession(force = false) {
-    if (!this.store) return
-    const { queue, index, station, positionMs } = this.state
-    const playing = this.wantPlaying
-    const track = queue[index]
-    if (!track) return
-    const key = `${queue.length}|${index}|${track.id}|${station?.id ?? ''}|${playing}`
-    const now = Date.now()
-    if (!force && key === this.savedKey && now - this.savedAt < SESSION_SAVE_MS) return
-    const from = Math.max(0, index - SESSION_KEEP_BEHIND)
-    const session: SavedSession = { v: 1, queue: queue.slice(from, index + 1 + SESSION_KEEP_AHEAD), index: index - from, station, positionMs, playing, savedAt: now }
-    try { this.store.setItem(SESSION_KEY, JSON.stringify(session)); this.savedKey = key; this.savedAt = now } catch { /* storage full or blocked */ }
-  }
+  saveSession(force = false) { this.saver.save(this.state, this.wantPlaying, force) }
 
   /** Pick up where the last session left off: same queue, song, spot and station. Returns whether it is playing. */
   resume(session: SavedSession, now = Date.now()): boolean {
-    const autoplay = session.playing && now - session.savedAt < RESUME_AUTOPLAY_MS
+    const autoplay = resumeAutoplay(session, now)
     this.state = { ...this.state, queue: [...session.queue], index: -1, station: session.station, error: '' }
     this.start(session.index, autoplay, session.positionMs)
     return autoplay
@@ -339,13 +348,47 @@ export class NativeEngine implements MusicEngine {
   private subscribers = 0
   private poll = 0
   private bridge: NativeMusicBridge
+  private saver: SessionSaver
+  /** Set once the player has answered, so a restore knows whether it came back empty. */
+  private answered: Promise<void>
+  private markAnswered!: () => void
+  /** Anything you start yourself wins over an in-flight restore. */
+  private userLoaded = false
 
-  constructor(bridge: NativeMusicBridge) {
+  constructor(bridge: NativeMusicBridge, store: SessionStore | null = null) {
     this.bridge = bridge
+    this.saver = new SessionSaver(store)
+    this.answered = new Promise((resolve) => { this.markAnswered = resolve })
     bridge.onmessage = (event) => {
       try { this.accept(JSON.parse(String(event.data)) as NativeSnapshot) } catch { /* ignore malformed */ }
     }
+    if (store && typeof window !== 'undefined') {
+      // An app update or a killed phone app drops the native player's memory; keep our own copy.
+      const flush = () => this.saveSession(true)
+      window.addEventListener('pagehide', flush)
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush() })
+    }
     this.send('state')
+  }
+
+  private saveSession(force = false) { this.saver.save(this.state, this.state.wantPlaying ?? this.state.playing, force) }
+
+  /**
+   * After an app update the native player starts empty. Put the saved song back at the saved spot,
+   * playing only if it was playing a moment ago. Leaves a live native session alone.
+   */
+  async restoreIfEmpty(session: SavedSession, now = Date.now(), waitMs = 6000): Promise<boolean> {
+    const answered = await Promise.race([this.answered.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), waitMs))])
+    if (!answered || this.userLoaded || (this.state.queue.length > 0 && this.state.index >= 0)) return false
+    // The player takes at most 100 songs: keep the ones just played and what comes next.
+    const from = Math.max(0, session.index - 40)
+    const queue = session.queue.slice(from, from + 100)
+    const autoplay = resumeAutoplay(session, now)
+    try { await this.sendLoad(queue, session.index - from, session.station) } catch { return false }
+    if (this.userLoaded) return true
+    if (!autoplay) this.pause()
+    if (session.positionMs > 0) this.seek(session.positionMs)
+    return true
   }
 
   private send(method: string, params: Record<string, unknown> = {}) {
@@ -366,7 +409,9 @@ export class NativeEngine implements MusicEngine {
     }
     if (value.station !== undefined) patch.station = value.station
     this.state = { ...this.state, ...patch }
+    if (identity.sessionId || Array.isArray(value.queue)) this.markAnswered()
     this.emitter.emit(this.state)
+    this.saveSession()
   }
 
   snapshot() { return this.state }
@@ -382,6 +427,10 @@ export class NativeEngine implements MusicEngine {
   }
 
   async load(queue: MusicTrack[], index: number, station: MusicStation | null) {
+    this.userLoaded = true
+    await this.sendLoad(queue, index, station)
+  }
+  private async sendLoad(queue: MusicTrack[], index: number, station: MusicStation | null) {
     await this.send('load', {
       index,
       queue: queue.map((track) => ({ ...track, stream: absoluteMusicUrl(track.stream), art: absoluteMusicUrl(track.art) })),
@@ -407,7 +456,7 @@ let engine: MusicEngine | null = null
 export function musicEngine(): MusicEngine {
   if (engine) return engine
   const bridge = typeof window !== 'undefined' ? (window.WizardNativeMusic ||= hostedAudioBridge()) : undefined
-  engine = bridge && typeof bridge.postMessage === 'function' ? new NativeEngine(bridge) : new WebEngine(undefined, undefined, browserSessionStore())
+  engine = bridge && typeof bridge.postMessage === 'function' ? new NativeEngine(bridge, browserSessionStore()) : new WebEngine(undefined, undefined, browserSessionStore())
   return engine
 }
 export function browserSessionStore(): SessionStore | null {
