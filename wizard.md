@@ -5,6 +5,7 @@ name: Music
 version: 0.1.0
 type: service
 category: app
+voice_names: [music, songs, music player, wizard music]
 summary: Your own music library, with an embedded player and optional online sources.
 license: MIT
 source: https://github.com/humanitylabs-org/wizard-music
