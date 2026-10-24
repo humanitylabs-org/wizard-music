@@ -22,13 +22,12 @@ jobs:
         with:
           node-version: '22'
           cache: npm
-      - run: npm ci && npm test -- --maxWorkers=1 && npm run build
+      - run: npm ci && npm test && npm run build
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: python -m pip install -r hub/requirements.txt pytest
       - run: python -m pytest -q hub/tests && python qa/test_offline.py
-      - run: node --test tests/request-policy.test.mjs
       - run: python qa/check-portability.py
   smoke-package:
     needs: [image, tests]

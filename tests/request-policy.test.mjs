@@ -1,4 +1,4 @@
-import test from 'node:test'
+import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import { requestAllowed } from '../server/request-policy.mjs'
 const request = (headers, peer = '172.18.0.1') => ({ headers, socket: { remoteAddress: peer } })
