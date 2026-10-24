@@ -1706,7 +1706,7 @@ def fetch_audio(vid: str) -> Path:
         if hit:
             return hit
         tmp = CACHE / f".{vid}.{uuid.uuid4().hex[:6]}"
-        cmd = [YTDLP, "-q", "--no-cache-dir", "--no-warnings", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio",
+        cmd = [YTDLP, "-q", "--js-runtimes", "node", "--no-cache-dir", "--no-warnings", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio",
                "-o", f"{tmp}.%(ext)s", f"https://music.youtube.com/watch?v={vid}"]
         with _consent_lock:
             require_online()
