@@ -98,3 +98,20 @@
 .music-played { display: grid; gap: 2px; margin-bottom: 10px; }
 .music-row.played { opacity: .62; }
 .music-row.played:active { opacity: 1; }
+
+/* Swipe carousel: the song follows your finger with its neighbours beside it (YouTube Music style). */
+.music-deck { position: relative; overflow: hidden; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.music-deck-rail { position: relative; will-change: transform; }
+.music-deck-slide.side { position: absolute; top: 0; width: 100%; }
+.music-deck img { -webkit-user-drag: none; pointer-events: none; }
+.music-now-deck { margin: -8px -22px -44px; padding: 8px 22px 44px; }
+.music-mini-deck { flex: 1; min-width: 0; align-self: stretch; }
+.music-mini-deck .music-deck-slide { display: flex; align-items: center; gap: 11px; height: 58px; }
+
+/* Pull-down to minimise: a small grab handle hints at it. */
+.music-now-head { position: relative; }
+.music-now-head::before { content: ''; position: absolute; top: calc(var(--safe-area-top) + 3px); left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: var(--line-strong, #fff3); }
+
+/* Back in view before the phone player answers: show no song rather than the old one, then fade the right one in. */
+.music-now-body, .music-mini > * { transition: opacity 140ms ease-out; }
+.music-now.music-stale .music-now-body, .music-mini.music-stale > * { opacity: 0; transition: none; }

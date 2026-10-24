@@ -10,3 +10,7 @@ Source lineage: embedded UI from existing Music ae5c008 plus its existing shared
 Build: `npm ci && npm test && npm run build`, then `docker build -t wizard-music-test .` on the designated build host. Use the image digest in the release receipt for installation.
 
 License: GPL-3.0-only for this package. React is MIT; Vite/Vitest/Playwright are MIT/Apache-2.0; Python is PSF; mutagen is GPL-2.0-or-later, ytmusicapi MIT, yt-dlp Unlicense, FFmpeg LGPL/GPL as distributed by Debian. No third-party recordings are distributed.
+
+Gestures: swipe left/right on the mini player or the Now Playing art/title for next/previous (src/music/swipe.ts). Touch QA: `node qa/swipe-check.mjs` (mocked station/feedback, live :9205 view).
+Player: returning to Music while a song plays opens Now Playing full screen; pull it down (from the top of its scroll) to minimise to the mini player.
+Returning to Music: the song hides until the phone player answers (never flashes the old one). QA: `node qa/stale-check.mjs`.

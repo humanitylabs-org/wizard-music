@@ -34,6 +34,8 @@ export type MusicSnapshot = {
   station: MusicStation | null
   error: string
   engine: 'native' | 'web'
+  /** The phone player may have moved on while Music was out of sight; hide the song until it answers. */
+  stale?: boolean
 }
 
 export interface MusicEngine {
@@ -368,7 +370,40 @@ export class NativeEngine implements MusicEngine {
       window.addEventListener('pagehide', flush)
       document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flush() })
     }
+    if (typeof document !== 'undefined') {
+      // Out of sight the player keeps going but nobody asks it; coming back must never flash the old song.
+      document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') this.markStale(); else if (this.state.stale) this.refresh() })
+      window.addEventListener('pageshow', () => this.refresh())
+      window.addEventListener('focus', () => { if (this.state.stale) this.refresh() })
+    }
     this.send('state')
+  }
+
+  private acceptCount = 0
+  private freshTicket = 0
+  private clearOnNextAccept = 0
+  markStale() {
+    if (this.state.stale || !this.state.queue[this.state.index]) return
+    this.freshTicket++ // an earlier return's timers must not reveal this one early
+    this.clearOnNextAccept = 0
+    this.state = { ...this.state, stale: true }
+    this.emitter.emit(this.state)
+  }
+  private unstale(ticket: number) {
+    if (ticket !== this.freshTicket || !this.state.stale) return
+    this.clearOnNextAccept = 0
+    this.state = { ...this.state, stale: false }
+    this.emitter.emit(this.state)
+  }
+  /** Ask the player right now (not at the next poll) and show the song once its answer is in. */
+  refresh() {
+    if (!this.state.stale) { this.send('state'); return }
+    const ticket = ++this.freshTicket, before = this.acceptCount
+    void this.send('state', { fresh: true }).then(() => {
+      if (this.acceptCount > before) this.unstale(ticket)
+      else this.clearOnNextAccept = ticket // bridges that answer later via onmessage
+    })
+    window.setTimeout(() => this.unstale(ticket), 1500) // never leave the player blank
   }
 
   private saveSession(force = false) { this.saver.save(this.state, this.state.wantPlaying ?? this.state.playing, force) }
@@ -408,6 +443,8 @@ export class NativeEngine implements MusicEngine {
       if (value[key] !== undefined) (patch as Record<string, unknown>)[key] = value[key]
     }
     if (value.station !== undefined) patch.station = value.station
+    if (this.clearOnNextAccept && this.clearOnNextAccept === this.freshTicket) { this.clearOnNextAccept = 0; patch.stale = false }
+    this.acceptCount++
     this.state = { ...this.state, ...patch }
     if (identity.sessionId || Array.isArray(value.queue)) this.markAnswered()
     this.emitter.emit(this.state)

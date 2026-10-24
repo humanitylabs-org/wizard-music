@@ -2,6 +2,11 @@ import { StrictMode, useCallback, useEffect, useLayoutEffect, useRef, useState }
 import { createRoot } from 'react-dom/client'
 import { lastViewWasNowPlaying, MiniPlayer, MusicApp, musicControl, NowPlaying, rememberView, restoreMusicSession, whenTrackLoaded } from './music/MusicApp'
 import { installMusicVoice } from './music/voice'
+
+function musicIsPlaying() {
+  const snap = musicControl.engine()?.snapshot()
+  return Boolean(snap?.queue[snap.index] && (snap.wantPlaying ?? snap.playing))
+}
 import './app.css'
 import './wizard-appearance.css'
 
@@ -9,6 +14,7 @@ declare global {
   interface Window { WizardApp: {
     ready(options: {name: string; version: string}): unknown
     back: { register(options: {canGoBack: () => boolean; back: () => boolean}): () => void; useHistory(options: {isRoot: () => boolean}): () => void }
+    view?: { isVisible(): boolean }
     share?: { text(data: {title?: string; text?: string; url?: string}): Promise<'shared' | 'copied' | 'cancelled' | 'unsupported'> }
   } }
 }
@@ -46,7 +52,39 @@ function App() {
   }, [])
   // Reopen where you were: if Now Playing was up when Music closed (or the app updated), bring it back
   // with the same song once it has loaded. It gets its own history entry, so Back still lands on the library.
-  useEffect(() => lastViewWasNowPlaying() ? whenTrackLoaded(openNowPlaying) : undefined, [openNowPlaying])
+  // Coming back to Music while a song is playing always lands on the full-screen player; the library with the
+  // mini player is only for when you swiped it down and stayed. Cold opens wait for the restored song.
+  useEffect(() => {
+    let stopWatch = () => undefined as void
+    const stopLoad = whenTrackLoaded(() => {
+      if (lastViewWasNowPlaying() || musicIsPlaying()) { openNowPlaying(); return }
+      // A restored song can take a moment to actually start; open the player when it does (first few seconds only).
+      const engine = musicControl.engine()
+      if (!engine) return
+      const unsubscribe = engine.subscribe(() => { if (musicIsPlaying()) { stopWatch(); if (!nowPlayingRef.current) openNowPlaying() } })
+      const timer = window.setTimeout(() => stopWatch(), 6000)
+      stopWatch = () => { unsubscribe(); window.clearTimeout(timer) }
+    })
+    return () => { stopLoad(); stopWatch() }
+  }, [openNowPlaying])
+  useEffect(() => {
+    const visible = () => { try { return window.WizardApp?.view?.isVisible?.() ?? !document.hidden } catch { return !document.hidden } }
+    let was = visible()
+    const check = () => {
+      const now = visible()
+      // Switching Wizard windows/desks too: hide the song while away, ask the player straight away on return.
+      const engine = musicControl.engine() as { markStale?: () => void; refresh?: () => void } | null
+      if (!now && was) engine?.markStale?.()
+      if (now && !was) engine?.refresh?.()
+      if (now && !was && !nowPlayingRef.current && musicIsPlaying()) openNowPlaying()
+      was = now
+    }
+    // The page's own visibility covers the phone app; the shell's view state covers switching Wizard windows.
+    document.addEventListener('visibilitychange', check)
+    window.addEventListener('focus', check)
+    const timer = window.setInterval(check, 800)
+    return () => { document.removeEventListener('visibilitychange', check); window.removeEventListener('focus', check); window.clearInterval(timer) }
+  }, [openNowPlaying])
   // The Wizard OS orb drives playback: "play …", pause, next, louder (src/music/voice.ts).
   useEffect(() => installMusicVoice(notify), [notify])
   // A voice search shows its results list, so Now Playing steps aside.
