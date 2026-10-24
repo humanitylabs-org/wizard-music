@@ -143,19 +143,6 @@ def online_urlopen(*args, **kwargs):
         return urllib.request.urlopen(*args, **kwargs)
 
 
-def online_session():
-    import requests
-
-    class ConsentSession(requests.Session):
-        def send(self, *args, **kwargs):
-            # Each HTTP send (including retries/redirects) rechecks consent.
-            with _consent_lock:
-                require_online()
-                return super().send(*args, **kwargs)
-
-    return ConsentSession()
-
-
 def db(sql: str, args: tuple = (), many: bool = False):
     with _db_lock:
         cur = _db.execute(sql, args)
