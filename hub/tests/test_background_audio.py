@@ -51,7 +51,7 @@ def test_station_receipt_and_advancement_rollback_together(hub, monkeypatch):
     sid = 'c'*16
     ids = ['yt:aaaaaaaaaaa', 'yt:bbbbbbbbbbb']
     for tid in ids:
-        hub.db('INSERT INTO tracks VALUES(?,?,?,?,?,?,?,?,?)', (tid,'Song','Artist','',12000,'','youtube','',0))
+        hub.db('INSERT INTO tracks VALUES(?,?,?,?,?,?,?,?,?)', (tid, 'Alpha' if tid == ids[0] else 'Different composition', 'Artist', '', 12000, '', 'youtube', '', 0))
     state = {'seed':ids[0], 'queue':[ids[1]], 'played':[ids[0]], 'lastSeed':ids[0]}
     hub.db('INSERT INTO stations VALUES(?,?,?,?,?)', (sid,'test',ids[0],json.dumps(state),0))
     monkeypatch.setattr(hub,'prefetch',lambda *_: None)

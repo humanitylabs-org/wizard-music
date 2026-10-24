@@ -1,4 +1,9 @@
 /* Wizard Music — dark, quiet, thumb-first. Uses Wizard tokens from index.css. */
+.music-consent { margin-block: 12px; padding: 16px; }
+.music-consent label { display: flex; align-items: center; gap: 10px; font-weight: 600; }
+.music-consent input { accent-color: var(--wz-accent); width: 22px; height: 22px; }
+.music-consent p { margin: 10px 0 0; color: var(--wz-text-secondary); font-size: 0.85rem; line-height: 1.5; }
+
 .music-workspace { display: grid; gap: 18px; padding-bottom: 28px; }
 .music-search { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--bg-input); color: var(--text-2, #a9abb6); }
 .music-search input { flex: 1; min-width: 0; height: 44px; border: 0; outline: 0; background: transparent; color: var(--text); font: 500 16px/1 var(--font); }

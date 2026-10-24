@@ -3,7 +3,8 @@
 import { readFile } from 'node:fs/promises'
 import { chromium } from 'playwright'
 const [port = '9205', out = '/tmp/music-share.png'] = process.argv.slice(2)
-const core = '/home/telos/apps/wizard-os-home/web/core/'
+const core = (process.env.WIZARD_CORE_DIR || '').replace(/\/?$/, '/')
+if (core === '/') throw new Error('Set WIZARD_CORE_DIR to the installed Wizard web/core directory')
 const browser = await chromium.launch({ headless: true })
 try {
   const page = await browser.newPage({ viewport: { width: 412, height: 860 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true })

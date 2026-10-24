@@ -92,6 +92,70 @@ _db.executescript(
 )
 _db.commit()
 
+# Per-install, default-off consent. Environment opt-in is retained only for legacy host installs.
+SETTINGS = HOME / "settings.json"
+try:
+    ONLINE = json.loads(SETTINGS.read_text()).get("online") is True
+except FileNotFoundError:
+    pass
+except (ValueError, OSError):
+    ONLINE = False
+_consent_lock = threading.RLock()
+_downloads = set()
+
+
+def online_settings():
+    return {"online": ONLINE}
+
+
+def require_online():
+    if not ONLINE:
+        raise LookupError("online sources disabled")
+
+
+def set_online(value):
+    global ONLINE, _ytm, _ytm_radio
+    if not isinstance(value, bool):
+        raise ValueError("online must be a boolean")
+    with _consent_lock:
+        tmp = SETTINGS.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as out:
+            json.dump({"online": value}, out)
+            out.flush()
+            os.fsync(out.fileno())
+        tmp.replace(SETTINGS)
+        ONLINE = value
+        if not value:
+            for proc in list(_downloads):
+                if proc.poll() is None:
+                    proc.terminate()
+            _ytm = _ytm_radio = None
+            # Queued work is discarded; transport guards also cover already-running workers.
+            with _info_cv:
+                _info_q.clear()
+                _info_pending.clear()
+    return online_settings()
+
+
+def online_urlopen(*args, **kwargs):
+    with _consent_lock:
+        require_online()
+        return urllib.request.urlopen(*args, **kwargs)
+
+
+def online_session():
+    import requests
+
+    class ConsentSession(requests.Session):
+        def send(self, *args, **kwargs):
+            # Each HTTP send (including retries/redirects) rechecks consent.
+            with _consent_lock:
+                require_online()
+                return super().send(*args, **kwargs)
+
+    return ConsentSession()
+
 
 def db(sql: str, args: tuple = (), many: bool = False):
     with _db_lock:
@@ -115,7 +179,7 @@ def ytm():
             from ytmusicapi import YTMusic
 
             auth = HOME / "ytmusic-browser.json"
-            _ytm = YTMusic(str(auth)) if auth.exists() else YTMusic()
+            _ytm = YTMusic(str(auth), requests_session=online_session()) if auth.exists() else YTMusic(requests_session=online_session())
         return _ytm
 
 
@@ -133,7 +197,7 @@ def ytm_radio():
             from ytmusicapi import YTMusic
 
             auth = HOME / "ytmusic-browser.json"
-            _ytm_radio = YTMusic(str(auth), location=RADIO_LOCATION) if auth.exists() else YTMusic(location=RADIO_LOCATION)
+            _ytm_radio = YTMusic(str(auth), location=RADIO_LOCATION, requests_session=online_session()) if auth.exists() else YTMusic(location=RADIO_LOCATION, requests_session=online_session())
         return _ytm_radio
 
 
@@ -399,7 +463,7 @@ def itunes_genre(title: str, artist: str) -> str:
         return ""
     term = f"{names[0] if names else ''} {clean}".strip()
     query = urllib.parse.urlencode({"term": term, "entity": "song", "limit": 8, "country": ITUNES_COUNTRY})
-    with urllib.request.urlopen(urllib.request.Request("https://itunes.apple.com/search?" + query, headers=UA), timeout=8) as r:
+    with online_urlopen(urllib.request.Request("https://itunes.apple.com/search?" + query, headers=UA), timeout=8) as r:
         results = json.load(r).get("results", [])
     want_title, want_artists = _key(clean), [_key(n) for n in names]
     for item in results:
@@ -440,6 +504,8 @@ def save_info(tid: str, genre: str | None = None, similar: list[str] | None = No
 
 def enrich(tid: str, want_similar: bool = False) -> bool:
     """Look up genre (and similar artists) for a track. Returns True when it hit the network."""
+    if not ONLINE:
+        return False
     t = track(tid)
     if not t:
         return False
@@ -576,11 +642,12 @@ def style_match(tags: dict[str, float], style: str) -> float:
 
 
 def _mb(path: str, **q) -> dict:
+    require_online()
     q["fmt"] = "json"
     req = urllib.request.Request(f"https://musicbrainz.org/ws/2/{path}?" + urllib.parse.urlencode(q), headers=MB_UA)
     for attempt in range(3):
         try:
-            with urllib.request.urlopen(req, timeout=10) as r:
+            with online_urlopen(req, timeout=10) as r:
                 return json.load(r)
         except urllib.error.HTTPError as exc:
             if exc.code not in (429, 503):
@@ -1168,7 +1235,7 @@ def _deezer(path: str, q: str, limit: int) -> list[dict]:
         return []
     query = urllib.parse.urlencode({"q": q, "limit": limit})
     req = urllib.request.Request(f"https://api.deezer.com/{path}?{query}", headers=UA)
-    with urllib.request.urlopen(req, timeout=4) as r:
+    with online_urlopen(req, timeout=4) as r:
         return json.load(r).get("data", []) or []
 
 
@@ -1641,12 +1708,24 @@ def fetch_audio(vid: str) -> Path:
         tmp = CACHE / f".{vid}.{uuid.uuid4().hex[:6]}"
         cmd = [YTDLP, "-q", "--no-cache-dir", "--no-warnings", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio",
                "-o", f"{tmp}.%(ext)s", f"https://music.youtube.com/watch?v={vid}"]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        with _consent_lock:
+            require_online()
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            _downloads.add(proc)
+        try:
+            _, stderr = proc.communicate(timeout=120)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise RuntimeError("download timed out")
+        finally:
+            with _consent_lock:
+                _downloads.discard(proc)
         made = sorted(CACHE.glob(f"{tmp.name}.*"))
-        if proc.returncode != 0 or not made:
+        if not ONLINE or proc.returncode != 0 or not made:
             for m in made:
                 m.unlink(missing_ok=True)
-            raise RuntimeError((proc.stderr or "download failed").strip()[-300:])
+            raise RuntimeError((stderr or "download failed").strip()[-300:])
         final = CACHE / f"{vid}{made[0].suffix}"
         made[0].replace(final)
         _evict()
@@ -1702,7 +1781,7 @@ def art_bytes(tid: str) -> tuple[bytes, str] | None:
         host = urllib.parse.urlparse(url).hostname or ""
         if not url.startswith("https://") or not ART_HOSTS.match(host):
             return None
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "WizardMusic/1"}), timeout=10) as r:
+        with online_urlopen(urllib.request.Request(url, headers={"User-Agent": "WizardMusic/1"}), timeout=10) as r:
             data = r.read(2_000_000)
     elif tid.startswith("lib:"):
         try:
@@ -1734,9 +1813,10 @@ def home() -> dict:
     count = db("SELECT COUNT(*) FROM tracks WHERE source='library'")[0][0]
     yt_ok = ONLINE
     return {
+        "settings": online_settings(),
         "sources": [
             {"id": "youtube", "name": "Online sources", "status": "enabled" if ONLINE else "disabled",
-             "detail": "Catalog access enabled; availability varies" if ONLINE else "Setup required · disabled by default", "ok": yt_ok},
+             "detail": "Catalog access enabled; availability varies" if ONLINE else "Off · enable below when you choose", "ok": yt_ok},
             {"id": "library", "name": "Wizard Library", "status": "connected", "detail": f"{count} track{'s' if count != 1 else ''} on your Wizard", "ok": True},
         ],
         "vibes": ([{"id": f"mix-{m['key'].replace(' ', '-')}", "label": m["name"], "count": len(m["ids"])} for m in mixes()]
@@ -1792,6 +1872,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth():
             return
         try:
+            if path == "/api/settings":
+                return self._json(200, online_settings())
             if path == "/api/home":
                 return self._json(200, home())
             if path == "/api/scores":  # points per song, with the raw counts behind them
@@ -1835,6 +1917,8 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             body = self._body()
+            if url.path == "/api/settings":
+                return self._json(200, set_online(body.get("online")))
             if url.path == "/api/station":
                 out = create_station(body)
                 if body.get("trackId") and not body.get("label") and out.get("tracks"):

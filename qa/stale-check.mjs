@@ -2,8 +2,9 @@
 import { readFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
 import { chromium } from 'playwright'
-const [port = '9205', shots = '/home/telos/.hermes/cache/screenshots'] = process.argv.slice(2)
-const core = '/home/telos/apps/wizard-os-home/web/core/'
+const [port = '9205', shots = process.env.TMPDIR || '.'] = process.argv.slice(2)
+const core = (process.env.WIZARD_CORE_DIR || '').replace(/\/?$/, '/')
+if (core === '/') throw new Error('Set WIZARD_CORE_DIR to the installed Wizard web/core directory')
 const fakeNative = () => {
   const s = { queue: [], index: -1, playing: false, wantPlaying: false, positionMs: 0, rev: 0, station: null }
   window.__phone = s

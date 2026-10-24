@@ -9,7 +9,7 @@ import './music.css'
 const BASE = new URL('./', document.baseURI).pathname
 
 type MusicSource = { id: string; name: string; status: string; detail: string; ok: boolean }
-type MusicHome = { sources: MusicSource[]; vibes: { id: string; label: string }[]; liked: MusicTrack[]; recent: MusicTrack[]; library: MusicTrack[]; taste?: { avoid: string[] } }
+type MusicHome = { settings?: { online: boolean }; sources: MusicSource[]; vibes: { id: string; label: string }[]; liked: MusicTrack[]; recent: MusicTrack[]; library: MusicTrack[]; taste?: { avoid: string[] } }
 type FeedbackAction = 'like' | 'unlike' | 'dislike' | 'played' | 'skipped'
 type FeedbackResult = { track: MusicTrack; drop?: string[]; learned?: { artists: string[]; genre: string; similar: string[] } | null }
 
@@ -20,6 +20,7 @@ async function musicJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 export const musicApi = {
   home: () => musicJson<MusicHome>(BASE + 'api/home'),
+  settings: (online: boolean) => musicJson<{online: boolean}>(BASE + 'api/settings', { method: 'POST', body: JSON.stringify({online}) }),
   search: (q: string) => musicJson<{ tracks: MusicTrack[] }>(`${BASE}api/search?q=${encodeURIComponent(q)}`),
   station: (seed: { trackId?: string; query?: string; label?: string }) => musicJson<{ station: MusicStation; tracks: MusicTrack[] }>(BASE + 'api/station', { method: 'POST', body: JSON.stringify(seed) }),
   feedback: (id: string, action: FeedbackAction, upcoming: string[] = []) => musicJson<FeedbackResult>(BASE + 'api/feedback', { method: 'POST', body: JSON.stringify({ id, action, upcoming }) }),
@@ -206,6 +207,7 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
   const snapshot = useMusicSnapshot()
   useFeedbackReporter(snapshot)
   const [home, setHome] = useState<MusicHome | null>(null)
+  const [savingConsent, setSavingConsent] = useState(false)
   const [homeError, setHomeError] = useState('')
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<MusicTrack[] | null>(null)
@@ -271,6 +273,20 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
       {query && <button type="button" className="music-clear" aria-label="Clear search" onClick={() => { setQuery(''); setResults(null) }}>×</button>}
     </form>
 
+    {home && <section className="music-card music-consent" aria-label="Online sources">
+      <label><input type="checkbox" role="switch" aria-label="Online sources" checked={Boolean(home.settings?.online)} disabled={savingConsent} onChange={async (event) => {
+        const enabled = event.target.checked
+        setSavingConsent(true)
+        try {
+          await musicApi.settings(enabled)
+          if (!enabled) { ++searchSeq.current; setResults(null); setQuery(''); endListening() }
+          setHome(await musicApi.home())
+        } catch (error) { notify((error as Error).message) }
+        finally { setSavingConsent(false) }
+      }} /> Online sources</label>
+      <p>When on, searches and track details go to YouTube Music, Deezer, Apple and MusicBrainz to find songs, audio and artwork.</p>
+    </section>}
+
     {starting && <p className="music-status" role="status">Starting your station…</p>}
 
     {results !== null ? <div className="music-results">
@@ -310,7 +326,7 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
         {home.library.slice(0, 12).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}
       </section>}
 
-      {home && home.library.length === 0 && home.liked.length === 0 && <p className="music-empty">Your library is empty. Ask your agent to follow SETUP.md and connect your own music folder. No music or account is bundled.</p>}
+      {home && home.library.length === 0 && home.liked.length === 0 && <p className="music-empty">Your music starts here. Turn on Online sources above, search for a song and tap it to play. Or ask your Wizard to add your own MP3, M4A, FLAC, OGG or WAV files to Music’s library folder; they appear automatically. No music or account is bundled.</p>}
       {!home && !homeError && <p className="music-status">Loading your music…</p>}
     </>}
   </section>

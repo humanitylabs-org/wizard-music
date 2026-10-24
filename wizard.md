@@ -2,7 +2,7 @@
 wizard: 0.2
 id: wizard-music
 name: Music
-version: 0.1.0
+version: 0.2.0-test.1
 type: service
 category: app
 voice_names: [music, songs, music player, wizard music]
@@ -14,7 +14,6 @@ runtime:
   kind: runtipi
   config: runtipi/config.json
   compose: runtipi/docker-compose.yml
-  package: image
 api:
   path: /wizard-music/api
   port: 9205
@@ -38,8 +37,8 @@ uses: []
 ---
 ## Registry packaging
 
-The Runtipi runtime uses `package: image` and the multi-architecture GHCR index pinned in `runtipi/docker-compose.yml`. `.github/workflows/image.yml` builds native linux/amd64 and linux/arm64 images with the shared app-image workflow and runs the existing tests. The compose's `pull_policy: missing` allows an authenticated installer to fetch that exact digest. Package visibility is unchanged; access to a private GHCR package is still required. Historical archive installs in SETUP.md and `compose.yaml` remain separate, unchanged installation paths. Prepare `/data` ownership as documented in SETUP.md before enabling the built-in hub.
+The Alpha Store installs architecture-specific, checksum-verified Docker archives from the public prerelease, like Android Apps. The shared Actions builder also produces a multi-architecture GHCR index. Image-only packaging is not required on older Wizard releases.
 
-Private test release. Empty library; configure the recipient's backend using SETUP.md.
+Test release. Open Music after Store Get; online sources are off until you choose to enable them. Your data directory and server-only token are initialized automatically.
 Requires the host's shared WizardApp client and authenticated same-origin gateway.
 Native background playback is not certified by this embedded web package.

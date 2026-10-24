@@ -1,17 +1,20 @@
-// Touch QA for swipe next/previous. Mocks station/feedback so James's taste is untouched.
-import { chromium } from '/home/telos/apps/wizard-mobile/node_modules/playwright/index.mjs'
+// Touch QA for swipe next/previous. Mocked station/feedback keep live taste untouched.
+import { chromium } from 'playwright'
+const core = process.env.WIZARD_CORE_DIR
+const audio = process.env.WIZARD_QA_AUDIO
+if (!core || !audio) throw new Error('Set WIZARD_CORE_DIR and WIZARD_QA_AUDIO for this fixture QA')
 import assert from 'node:assert/strict'
-const out = process.argv[2] || '/home/telos/.hermes/cache/screenshots'
+const out = process.argv[2] || process.env.TMPDIR || '.'
 const tracks = Array.from({ length: 6 }, (_, i) => ({ id: `qa${i}`, title: `QA Song ${i}`, artist: `Artist ${i}`, album: '', art: '', durationMs: 180000, source: 'youtube', stream: `/qa-stream/${i}.wav` }))
 const browser = await chromium.launch({ headless: true, args: ['--autoplay-policy=no-user-gesture-required'] })
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true, deviceScaleFactor: 2 })
 const page = await ctx.newPage()
 const errors = []; page.on('pageerror', (e) => errors.push(e.message))
 const feedback = []
-await page.route('**/wizard-os-home/core/app-client.js', (r) => r.fulfill({ path: '/home/telos/workspace/wizard-ux/web/core/app-client.js', contentType: 'text/javascript' }))
+await page.route('**/wizard-os-home/core/app-client.js', (r) => r.fulfill({ path: core + '/app-client.js', contentType: 'text/javascript' }))
 await page.route('**/api/station', (r) => r.fulfill({ json: { station: { id: 'qa', title: 'QA station' }, tracks } }))
 await page.route('**/api/feedback', (r) => { feedback.push(JSON.parse(r.request().postData())); r.fulfill({ json: { track: tracks[0] } }) })
-await page.route('**/qa-stream/**', (r) => r.fulfill({ path: '/home/telos/.hermes/cache/scratch/silent.wav', contentType: 'audio/wav' }))
+await page.route('**/qa-stream/**', (r) => r.fulfill({ path: audio, contentType: 'audio/wav' }))
 await page.addInitScript(() => { if (!sessionStorage.getItem('qa-init')) { localStorage.clear(); sessionStorage.setItem('qa-init', '1') } })
 await page.goto('http://127.0.0.1:9205/wizard-music/')
 try { await page.getByRole('button', { name: 'Deep focus' }).click({ timeout: 15000 }) } catch (e) { await page.screenshot({ path: out + '/music-swipe-fail.png' }); console.log('errors', errors, await page.content().then((h) => h.slice(0, 1500))); throw e }

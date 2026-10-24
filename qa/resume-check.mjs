@@ -3,7 +3,8 @@
 import { readFile } from 'node:fs/promises'
 import { chromium } from 'playwright'
 const [port = '9205', shots = '/tmp'] = process.argv.slice(2)
-const core = '/home/telos/apps/wizard-os-home/web/core/'
+const core = (process.env.WIZARD_CORE_DIR || '').replace(/\/?$/, '/')
+if (core === '/') throw new Error('Set WIZARD_CORE_DIR to the installed Wizard web/core directory')
 const base = `http://127.0.0.1:${port}/wizard-music/`
 
 // A stand-in for the phone's background player: it remembers nothing across page loads, like after an update.

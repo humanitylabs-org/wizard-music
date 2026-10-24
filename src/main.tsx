@@ -47,7 +47,7 @@ function ownEntryBehind(): boolean {
 function App() {
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false)
   const nowPlayingRef = useRef(false)
-  // James swiped the player down (or tapped the chevron): no automatic reopen until Music has really been
+  // The listener swiped the player down (or tapped the chevron): no automatic reopen until Music has really been
   // out of view for a moment. A stuck/loading song or a shell visibility blip must never pop it back up.
   const dismissedRef = useRef(false)
   const [toast, setToast] = useState('')
