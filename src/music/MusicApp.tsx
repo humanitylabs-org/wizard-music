@@ -404,7 +404,12 @@ function useSwipeDownToClose(ref: { current: HTMLDivElement | null }, onClose: (
         window.setTimeout(() => close.current(), 200)
       } else place(0, true)
     }
-    const cancel = () => { if (start?.mode === 'down') place(0, true); start = null }
+    // Android may cancel a long drag (the system or WebView claims it). Past the threshold it still closes.
+    const cancel = () => {
+      const s = start; start = null
+      if (s?.mode !== 'down') return
+      if (dy > 110) { place(el.clientHeight || window.innerHeight, true); window.setTimeout(() => close.current(), 200) } else place(0, true)
+    }
     el.addEventListener('touchstart', down, { passive: true })
     el.addEventListener('touchmove', move, { passive: false })
     el.addEventListener('touchend', up)
