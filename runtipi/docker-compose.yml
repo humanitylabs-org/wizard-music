@@ -1,25 +1,10 @@
 services:
-  wizard-music-init:
-    image: ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.2
-    pull_policy: never
-    user: '0:0'
-    network_mode: none
-    restart: 'no'
-    cap_drop: [ALL]
-    cap_add: [CHOWN, FOWNER]
-    security_opt: ['no-new-privileges:true']
-    read_only: true
-    command: ['python3', '-c', 'import os; [(os.makedirs(p, exist_ok=True), os.chown(p, 1000, 1000), os.chmod(p, 448)) for p in ("/data", "/music")]']
-    volumes:
-      - ${APP_DATA_DIR}/data:/data
-      - ${APP_DATA_DIR}/music:/music
   wizard-music:
-    depends_on:
-      wizard-music-init:
-        condition: service_completed_successfully
     image: ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.2
     pull_policy: never
     restart: unless-stopped
+    # start.py prepares /data as root, then drops to 1000:1000. No separate init container:
+    # Runtipi reports an app with an exited container as stopped, which hid Music's icon link.
     ports: ['127.0.0.1:${APP_PORT:-9205}:9205']
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER, SETUID, SETGID]
