@@ -19,6 +19,21 @@ declare global {
   } }
 }
 
+/** This page's build (the hashed bundle name), so an open Music can pick up a new release by itself. */
+const BUILD_SCRIPT = typeof document !== 'undefined' ? document.querySelector<HTMLScriptElement>('script[type="module"][src*="/assets/index-"]')?.src ?? '' : ''
+const BUILD = BUILD_SCRIPT.match(/\/assets\/index-([\w-]+)\.js/)?.[1] ?? ''
+let newerSeen = false
+async function newerBuildLive(): Promise<boolean> {
+  if (!BUILD) return false
+  if (newerSeen) return true
+  try {
+    const page = await fetch(new URL('../', BUILD_SCRIPT), { cache: 'no-store', credentials: 'include' })
+    const live = (await page.text()).match(/\/assets\/index-([\w-]+)\.js/)?.[1]
+    newerSeen = Boolean(live && live !== BUILD)
+  } catch { /* offline: try next time */ }
+  return newerSeen
+}
+
 /** True when the history entry just behind this one is Music's own (same document), so Back stays in Music. */
 function ownEntryBehind(): boolean {
   try {
@@ -89,18 +104,30 @@ function App() {
   }, [autoOpenNowPlaying])
   useEffect(() => {
     const visible = () => { try { return window.WizardApp?.view?.isVisible?.() ?? !document.hidden } catch { return !document.hidden } }
-    let was = visible(), awaySince = 0
+    let was = visible(), awaySince = 0, phoneAwaySince = 0, phoneWas = !document.hidden
     const check = () => {
       const now = visible()
       if (!now && was) awaySince = Date.now()
-      // Only a real trip away (not a blip while dragging) lifts the swipe-down and may bring the player back.
-      const realReturn = now && !was && Date.now() - awaySince >= 1500
-      if (realReturn) dismissedRef.current = false
+      // Only really leaving the Wizard app (the phone page hidden, not a shell sheet or desk switch, not a
+      // blip while dragging) lifts a swipe-down and may bring the player back full screen.
+      const phoneNow = !document.hidden
+      if (!phoneNow && phoneWas) phoneAwaySince = Date.now()
+      const phoneReturn = phoneNow && !phoneWas && Date.now() - phoneAwaySince >= 1500
+      phoneWas = phoneNow
+      if (phoneReturn) dismissedRef.current = false
+      const realReturn = now && (phoneReturn || (!was && Date.now() - awaySince >= 1500))
       // Switching Wizard windows/desks too: hide the song while away, ask the player straight away on return.
       const engine = musicControl.engine() as { markStale?: () => void; refresh?: () => void } | null
       if (!now && was) engine?.markStale?.()
       if (now && !was) engine?.refresh?.()
       if (realReturn && !nowPlayingRef.current && musicIsPlaying()) autoOpenNowPlaying()
+      // A new Music release: reload while you're away (playback lives in the phone's player and carries on,
+      // and Music reopens where you were), so a Music window left open never keeps running old code.
+      if (!now && was) {
+        const leftAt = awaySince
+        void newerBuildLive().then((newer) => { if (newer && !visible() && awaySince === leftAt) window.setTimeout(() => { if (!visible() && awaySince === leftAt) window.location.reload() }, 1000) })
+      }
+      if (realReturn && !nowPlayingRef.current) void newerBuildLive().then((newer) => { if (newer && visible()) window.location.reload() })
       was = now
     }
     // The page's own visibility covers the phone app; the shell's view state covers switching Wizard windows.

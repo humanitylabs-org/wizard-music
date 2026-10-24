@@ -63,7 +63,8 @@
 /* Mini player sits in flow directly above the bottom dock. */
 .music-mini { position: relative; z-index: 6; flex: 0 0 auto; margin: 0 10px 8px; display: flex; align-items: center; gap: 2px; min-height: 60px; padding: 0 6px 0 8px; overflow: hidden; border: 1px solid var(--line-strong); border-radius: 16px; background: color-mix(in srgb, var(--bg-raised) 94%, var(--wiz) 6%); box-shadow: 0 10px 30px #0008; }
 .music-mini-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 11px; height: 58px; padding: 0; border: 0; background: none; color: inherit; text-align: left; }
-.music-mini-down, .music-mini-toggle, .music-mini-next { display: grid; place-items: center; width: 46px; height: 46px; border: 0; border-radius: 50%; background: none; color: var(--text); }
+.music-mini-down, .music-mini-toggle, .music-mini-next, .music-mini-close { display: grid; place-items: center; width: 42px; height: 46px; border: 0; border-radius: 50%; background: none; color: var(--text); }
+.music-mini-close { width: 38px; color: var(--text-dim); }
 .music-mini-progress { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--wiz); transform-origin: left; }
 .root-workspace:has(.music-mini) .new-thread-fab { bottom: calc(154px + var(--safe-area-bottom)); }
 

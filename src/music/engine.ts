@@ -52,6 +52,8 @@ export interface MusicEngine {
   jump(index: number): void
   enqueueNext(track: MusicTrack): void
   removeCurrent(): void
+  /** End the listening session (the X): silence, empty queue, nothing saved to resume. */
+  stop(): void
   /** Drop upcoming tracks (never the one playing). */
   removeUpcoming(ids: string[]): void
   /** Player gain 0..1 on top of the phone's media volume. */
@@ -271,6 +273,16 @@ export class WebEngine implements MusicEngine {
 
   play() { if (!this.current()) return; this.wantPlaying = true; void this.audio.play().catch(() => undefined); this.saveSession(true) }
   pause() { this.wantPlaying = false; this.audio.pause(); this.saveSession(true) }
+  stop() {
+    this.wantPlaying = false
+    this.pendingSeekMs = null
+    this.audio.pause()
+    this.audio.removeAttribute('src')
+    try { this.audio.load() } catch { /* jsdom */ }
+    this.state = { ...EMPTY_SNAPSHOT, engine: this.state.engine }
+    try { this.store?.removeItem(SESSION_KEY) } catch { /* storage blocked */ }
+    this.emitter.emit(this.state)
+  }
   toggle() { if (this.audio.paused) this.play(); else this.pause() }
   seek(ms: number) { this.pendingSeekMs = null; this.audio.currentTime = Math.max(0, ms / 1000); this.set({ positionMs: ms }) }
   next() { this.advance(1, true) }
@@ -483,6 +495,13 @@ export class NativeEngine implements MusicEngine {
   jump(index: number) { this.send('jump', { index }) }
   enqueueNext(track: MusicTrack) { this.send('enqueueNext', { track: { ...track, stream: absoluteMusicUrl(track.stream), art: absoluteMusicUrl(track.art) } }) }
   removeCurrent() { this.send('removeCurrent') }
+  stop() {
+    this.userLoaded = true // a pending restore must not refill what you just closed
+    void this.send('stop')
+    this.state = { ...EMPTY_SNAPSHOT, engine: 'native' }
+    try { this.saver.store?.removeItem(SESSION_KEY) } catch { /* storage blocked */ }
+    this.emitter.emit(this.state)
+  }
   removeUpcoming(ids: string[]) { this.send('removeUpcoming', { ids }) }
   private gain = 1
   volume() { return this.gain }

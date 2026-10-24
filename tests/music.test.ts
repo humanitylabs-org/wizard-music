@@ -120,6 +120,21 @@ describe('Wizard Music web engine', () => {
     expect(audio.src).toContain('yt:t3')
   })
 
+  it('the X ends the session: silent, empty, nothing left to resume', async () => {
+    const audio = new FakeAudio()
+    const store = new Map<string, string>()
+    const storage = { getItem: (k: string) => store.get(k) ?? null, setItem: (k: string, v: string) => { store.set(k, v) }, removeItem: (k: string) => { store.delete(k) } }
+    const engine = new WebEngine(audio as unknown as HTMLAudioElement, vi.fn() as unknown as typeof fetch, storage)
+    await engine.load([track(1), track(2)], 0, null)
+    engine.saveSession(true)
+    expect(readSession(storage)).not.toBeNull()
+    engine.stop()
+    expect(audio.paused).toBe(true)
+    expect(engine.snapshot().queue).toEqual([])
+    expect(engine.snapshot().index).toBe(-1)
+    expect(readSession(storage)).toBeNull()
+  })
+
   it('thumbs down silences the song before the next one loads', async () => {
     const audio = new FakeAudio()
     const engine = new WebEngine(audio as unknown as HTMLAudioElement, vi.fn() as unknown as typeof fetch)

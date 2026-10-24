@@ -177,6 +177,12 @@ const SearchGlyph = () => <svg width="18" height="18" viewBox="0 0 24 24" aria-h
 const PlayNextGlyph = () => <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h11M4 11h11M4 16h6M17 13v8m-4-4h8" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>
 // The same share glyph as Copy · Share under a chat reply.
 const ShareGlyph = () => <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+const CloseGlyph = ({ size = 22 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" /></svg>
+/** The X: end this song and session (YouTube Music style). Minimising keeps it; this does not. */
+export function endListening() {
+  engineIfStarted()?.stop()
+  rememberView('home')
+}
 const ChevronDown = () => <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" /></svg>
 
 function Art({ track, size }: { track?: MusicTrack; size: 'row' | 'card' | 'hero' | 'mini' }) {
@@ -323,6 +329,7 @@ export function MiniPlayer({ onOpen, notify }: { onOpen: () => void; notify: (me
     <button type="button" className="music-mini-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph size={22} /></button>
     <button type="button" className="music-mini-toggle" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engineIfStarted()?.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph /> : <PlayGlyph />}</button>
     <button type="button" className="music-mini-next" aria-label="Next song" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
+    <button type="button" className="music-mini-close" aria-label="Close: stop this song and end the session" onClick={endListening}><CloseGlyph size={20} /></button>
     <span className="music-mini-progress" style={{ transform: `scaleX(${progress})` }} />
   </div>
 }
@@ -450,6 +457,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
       <button type="button" className="icon-button" aria-label="Close player" onClick={onClose}><ChevronDown /></button>
       <div><small>{snapshot.station ? 'Station' : 'Playing'}</small><strong>{snapshot.station?.title ?? sourceLabel(track.source)}</strong></div>
       <button type="button" className="icon-button music-share" aria-label={`Share ${track.title}`} title="Share" onClick={() => void shareSong(track, notify)}><ShareGlyph /></button>
+      <button type="button" className="icon-button music-end" aria-label="Close: stop this song and end the session" title="Stop and close" onClick={() => { onClose(); endListening() }}><CloseGlyph /></button>
     </header>
     <div className="music-now-body">
       <SwipeDeck className="music-now-deck" label="Swipe left for next song, right for previous" {...neighbours(snapshot)} onCommit={(direction, to) => swipeTo(direction, to, track, snapshot)}
