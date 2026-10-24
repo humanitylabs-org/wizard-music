@@ -26,6 +26,19 @@
   "form_fields": [
     {
       "type": "text",
+      "label": "Connectors service origin and optional path prefix (catalog only)",
+      "env_variable": "WIZARD_MUSIC_CONNECTORS_URL",
+      "required": false,
+      "default": ""
+    },
+    {
+      "type": "password",
+      "label": "Scoped Music adapter token (not owner, MCP or broker token)",
+      "env_variable": "MUSIC_ADAPTER_TOKEN",
+      "required": false
+    },
+    {
+      "type": "text",
       "label": "Trusted Wizard gateway hostname (no port)",
       "env_variable": "WIZARD_TRUSTED_HOSTS",
       "required": false,
