@@ -1705,8 +1705,10 @@ def _cache_path(vid: str) -> Path | None:
 def fetch_audio(vid: str) -> Path:
     if not ONLINE:
         raise LookupError("online sources disabled")
-    if not YT_ID.match(vid):
+    m = YT_ID.fullmatch(vid or "")
+    if not m:
         raise LookupError("bad id")
+    vid = m.group(0)  # only [A-Za-z0-9_-]{11} from here on; never a path
     hit = _cache_path(vid)
     if hit:
         os.utime(hit)
