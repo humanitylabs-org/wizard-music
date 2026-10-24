@@ -3,6 +3,7 @@ import { browserSessionStore, EMPTY_SNAPSHOT, musicEngine, NativeEngine, playedT
 import { hostedAudioBridge } from './backgroundAudio'
 if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNativeMusic = hostedAudioBridge()
 import { shareSong } from './share'
+import { SwipeDeck, type SwipeDirection } from './swipe'
 import './music.css'
 
 const BASE = new URL('./', document.baseURI).pathname
@@ -176,6 +177,12 @@ const SearchGlyph = () => <svg width="18" height="18" viewBox="0 0 24 24" aria-h
 const PlayNextGlyph = () => <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h11M4 11h11M4 16h6M17 13v8m-4-4h8" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>
 // The same share glyph as Copy · Share under a chat reply.
 const ShareGlyph = () => <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+const CloseGlyph = ({ size = 22 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" /></svg>
+/** The X: end this song and session (YouTube Music style). Minimising keeps it; this does not. */
+export function endListening() {
+  engineIfStarted()?.stop()
+  rememberView('home')
+}
 const ChevronDown = () => <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" /></svg>
 
 function Art({ track, size }: { track?: MusicTrack; size: 'row' | 'card' | 'hero' | 'mini' }) {
@@ -314,16 +321,108 @@ export function MiniPlayer({ onOpen, notify }: { onOpen: () => void; notify: (me
   const track = snapshot.queue[snapshot.index]
   if (!track) return null
   const progress = snapshot.durationMs ? Math.min(1, snapshot.positionMs / snapshot.durationMs) : 0
-  return <div className="music-mini" role="region" aria-label="Now playing">
+  return <div className={`music-mini${snapshot.stale ? ' music-stale' : ''}`} role="region" aria-label="Now playing">
     <button type="button" className="music-mini-open" onClick={onOpen} aria-label={`Open player: ${track.title} by ${track.artist}`}>
-      <Art track={track} size="mini" />
-      <span className="music-row-text"><strong>{track.title}</strong><small>{track.artist}</small></span>
+      <SwipeDeck className="music-mini-deck" gap={24} {...neighbours(snapshot)} onCommit={(direction, to) => swipeTo(direction, to, track, snapshot)}
+        render={(item) => <><Art track={item} size="mini" /><span className="music-row-text"><strong>{item.title}</strong><small>{item.artist}</small></span></>} />
     </button>
     <button type="button" className="music-mini-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph size={22} /></button>
     <button type="button" className="music-mini-toggle" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engineIfStarted()?.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph /> : <PlayGlyph />}</button>
-    <button type="button" className="music-mini-next" aria-label="Next song" onClick={() => { if (snapshot.engine !== 'native') void sendFeedback(track.id, 'skipped').catch(() => undefined); engineIfStarted()?.next() }}><NextGlyph /></button>
+    <button type="button" className="music-mini-next" aria-label="Next song" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
+    <button type="button" className="music-mini-close" aria-label="Close: stop this song and end the session" onClick={endListening}><CloseGlyph size={20} /></button>
     <span className="music-mini-progress" style={{ transform: `scaleX(${progress})` }} />
   </div>
+}
+
+/** Next / previous buttons: next also tells the hub the song was skipped. */
+function changeTrack(direction: SwipeDirection, track: MusicTrack, snapshot: MusicSnapshot) {
+  const engine = engineIfStarted()
+  if (!engine) return
+  if (direction === 'previous') { engine.previous(); return }
+  if (snapshot.engine !== 'native') void sendFeedback(track.id, 'skipped').catch(() => undefined)
+  engine.next()
+}
+
+/** A swipe lands on exactly the song it slid in (previous never just restarts the current one). */
+function swipeTo(direction: SwipeDirection, to: number, track: MusicTrack, snapshot: MusicSnapshot) {
+  const engine = engineIfStarted()
+  if (!engine) return
+  if (direction === 'previous') { engine.jump(to); return }
+  if (snapshot.engine !== 'native') void sendFeedback(track.id, 'skipped').catch(() => undefined)
+  engine.next()
+}
+
+function neighbours(snapshot: MusicSnapshot) {
+  const at = snapshot.index, q = snapshot.queue
+  return {
+    prev: at > 0 && q[at - 1] ? { track: q[at - 1], at: at - 1 } : undefined,
+    current: { track: q[at], at },
+    next: q[at + 1] ? { track: q[at + 1], at: at + 1 } : undefined,
+  }
+}
+
+/**
+ * Pull the player down to minimise it (YouTube Music style): drag down from anywhere while the page is
+ * scrolled to the top; past ~110px or a quick flick it slides away, otherwise it springs back.
+ * Touch events (not pointer) so we can stop the page from scrolling while you pull.
+ */
+function useSwipeDownToClose(ref: { current: HTMLDivElement | null }, onClose: () => void) {
+  const close = useRef(onClose)
+  close.current = onClose
+  useEffect(() => {
+    const el = ref.current
+    if (!el) return
+    let start: { x: number; y: number; t: number; mode: 'pending' | 'down' | 'off' } | null = null
+    let dy = 0
+    const body = () => el.querySelector<HTMLElement>('.music-now-body')
+    const place = (y: number, animate: boolean) => {
+      el.style.transition = animate ? 'transform 220ms cubic-bezier(.2,.7,.3,1)' : 'none'
+      el.style.transform = y ? `translate3d(0,${Math.round(y)}px,0)` : ''
+    }
+    const down = (event: TouchEvent) => {
+      if (event.touches.length !== 1 || (event.target as HTMLElement).closest('input,textarea,[data-no-swipe]')) { start = null; return }
+      const touch = event.touches[0]
+      start = { x: touch.clientX, y: touch.clientY, t: event.timeStamp, mode: 'pending' }
+      dy = 0
+    }
+    const move = (event: TouchEvent) => {
+      if (!start || start.mode === 'off') return
+      const touch = event.touches[0]
+      const x = touch.clientX - start.x, y = touch.clientY - start.y
+      if (start.mode === 'pending') {
+        if (Math.abs(x) < 10 && Math.abs(y) < 10) return
+        const atTop = (body()?.scrollTop ?? 0) <= 0
+        start.mode = y > 0 && y > Math.abs(x) * 1.2 && atTop && event.cancelable ? 'down' : 'off'
+        if (start.mode === 'off') return
+      }
+      event.preventDefault()
+      dy = Math.max(0, y)
+      place(dy, false)
+    }
+    const up = (event: TouchEvent) => {
+      if (!start) return
+      const s = start
+      start = null
+      if (s.mode !== 'down') return
+      const speed = dy / Math.max(1, event.timeStamp - s.t)
+      if (dy > 110 || (dy > 40 && speed > 0.5)) {
+        navigator.vibrate?.(8)
+        place(el.clientHeight || window.innerHeight, true)
+        window.setTimeout(() => close.current(), 200)
+      } else place(0, true)
+    }
+    // Android may cancel a long drag (the system or WebView claims it). Past the threshold it still closes.
+    const cancel = () => {
+      const s = start; start = null
+      if (s?.mode !== 'down') return
+      if (dy > 110) { place(el.clientHeight || window.innerHeight, true); window.setTimeout(() => close.current(), 200) } else place(0, true)
+    }
+    el.addEventListener('touchstart', down, { passive: true })
+    el.addEventListener('touchmove', move, { passive: false })
+    el.addEventListener('touchend', up)
+    el.addEventListener('touchcancel', cancel)
+    return () => { el.removeEventListener('touchstart', down); el.removeEventListener('touchmove', move); el.removeEventListener('touchend', up); el.removeEventListener('touchcancel', cancel) }
+  }, [ref])
 }
 
 const SHOW_PLAYED_KEY = 'wizard-music.show-played'
@@ -338,6 +437,8 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
   const upNext = useMemo(() => snapshot.queue.slice(snapshot.index + 1, snapshot.index + 40).map((item, offset) => ({ item, position: snapshot.index + 1 + offset })), [snapshot.queue, snapshot.index])
   const played = useMemo(() => playedTracks(snapshot), [snapshot.queue, snapshot.index]) // eslint-disable-line react-hooks/exhaustive-deps
   const [showPlayed, setShowPlayedState] = useState(() => { try { return localStorage.getItem(SHOW_PLAYED_KEY) === '1' } catch { return false } })
+  const sheet = useRef<HTMLDivElement>(null)
+  useSwipeDownToClose(sheet, onClose)
   const setShowPlayed = (open: boolean) => { setShowPlayedState(open); try { localStorage.setItem(SHOW_PLAYED_KEY, open ? '1' : '0') } catch { /* storage blocked */ } }
   if (!track || !engine) return null
   const liked = likes[track.id] ?? Boolean(track.liked)
@@ -351,17 +452,21 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
     void sendFeedback(track.id, next ? 'like' : 'unlike').catch(() => notify('Could not save that like.'))
   }
 
-  return <div className="music-now" role="dialog" aria-modal="true" aria-label="Now playing">
+  return <div ref={sheet} className={`music-now${snapshot.stale ? ' music-stale' : ''}`} role="dialog" aria-modal="true" aria-label="Now playing">
     <header className="music-now-head">
       <button type="button" className="icon-button" aria-label="Close player" onClick={onClose}><ChevronDown /></button>
       <div><small>{snapshot.station ? 'Station' : 'Playing'}</small><strong>{snapshot.station?.title ?? sourceLabel(track.source)}</strong></div>
       <button type="button" className="icon-button music-share" aria-label={`Share ${track.title}`} title="Share" onClick={() => void shareSong(track, notify)}><ShareGlyph /></button>
+      <button type="button" className="icon-button music-end" aria-label="Close: stop this song and end the session" title="Stop and close" onClick={() => { onClose(); endListening() }}><CloseGlyph /></button>
     </header>
     <div className="music-now-body">
-      <Art track={track} size="hero" />
-      <div className="music-now-meta">
-        <div><h2>{track.title}</h2><p>{track.artist}{track.album ? ` · ${track.album}` : ''}</p></div>
-      </div>
+      <SwipeDeck className="music-now-deck" label="Swipe left for next song, right for previous" {...neighbours(snapshot)} onCommit={(direction, to) => swipeTo(direction, to, track, snapshot)}
+        render={(item) => <>
+          <Art track={item} size="hero" />
+          <div className="music-now-meta">
+            <div><h2>{item.title}</h2><p>{item.artist}{item.album ? ` · ${item.album}` : ''}</p></div>
+          </div>
+        </>} />
       <div className="music-seek">
         <input type="range" min={0} max={Math.max(1, duration)} step={1000} value={Math.min(position, duration || position)} aria-label="Seek"
           onChange={(event) => setScrub(Number(event.target.value))}
@@ -373,7 +478,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
         <button type="button" className="music-icon-button music-thumb music-thumb-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph /></button>
         <button type="button" className="music-icon-button big" aria-label="Previous" onClick={() => engine.previous()}><PrevGlyph /></button>
         <button type="button" className="music-play" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engine.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph size={30} /> : <PlayGlyph size={30} />}</button>
-        <button type="button" className="music-icon-button big" aria-label="Next" onClick={() => { if (snapshot.engine !== 'native') void sendFeedback(track.id, 'skipped').catch(() => undefined); engine.next() }}><NextGlyph /></button>
+        <button type="button" className="music-icon-button big" aria-label="Next" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
         <button type="button" className={`music-icon-button music-thumb music-like${liked ? ' on' : ''}`} aria-pressed={liked} aria-label={liked ? 'Thumbs up (on)' : 'Thumbs up'} onClick={like}><ThumbUpGlyph filled={liked} /></button>
       </div>
       {snapshot.error && <p className="music-status" role="status">{snapshot.error}</p>}

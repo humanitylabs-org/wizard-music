@@ -54,7 +54,8 @@ export function hostedAudioBridge(): NativeMusicBridge | undefined {
       try { command = JSON.parse(raw) } catch { return }
       if (disposed) return Promise.reject(new Error('Music view detached.'))
       if (command.method === 'state') {
-        if (active?.command.method === 'state') return active.promise
+        // A fresh read must not ride on a poll that left before Music came back into view.
+        if (active?.command.method === 'state' && !command.fresh) return active.promise
         if (poll) { poll.command = command; return poll.promise }
       }
       if (command.method !== 'state' && writes.length >= 16) return Promise.reject(new Error('Music is busy. Try again.'))
