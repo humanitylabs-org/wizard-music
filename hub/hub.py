@@ -1816,7 +1816,7 @@ def home() -> dict:
         "settings": online_settings(),
         "sources": [
             {"id": "youtube", "name": "Online sources", "status": "enabled" if ONLINE else "disabled",
-             "detail": "Catalog access enabled; availability varies" if ONLINE else "Off · enable below when you choose", "ok": yt_ok},
+             "detail": "Catalog access enabled; availability varies" if ONLINE else "Off · enable above when you choose", "ok": yt_ok},
             {"id": "library", "name": "Wizard Library", "status": "connected", "detail": f"{count} track{'s' if count != 1 else ''} on your Wizard", "ok": True},
         ],
         "vibes": ([{"id": f"mix-{m['key'].replace(' ', '-')}", "label": m["name"], "count": len(m["ids"])} for m in mixes()]
