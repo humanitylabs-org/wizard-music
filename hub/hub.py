@@ -1461,8 +1461,61 @@ def off_station(t: dict, allowed: set[str], taste: Taste) -> bool:
     return bool(_scripts(t.get("title", "")) - allowed)
 
 
+# Variety: a station never serves another version of a song it just served, or that you played moments ago.
+# "Somebody (2024) (feat. Kimbra)" by Gotye, FISHER is the same song as "Somebody That I Used To Know
+# (modish. Remix)" by Gotye; "Show Me Love X Cola" is Show Me Love again.
+VARIETY_STATION = 40  # songs this station served recently
+VARIETY_PLAYED = 12   # songs you played most recently, on any station
+_TITLE_TAIL = re.compile(r"\s+(?:feat\.?|ft\.?|featuring)\s.*$", re.I)
+_TITLE_PARTS = re.compile(r"\s+(?:[-–—|/]|x|×|vs\.?)\s+", re.I)
+
+
+def song_names(title: str) -> list[list[str]]:
+    """Every song a title names, as words: "Beyoncé, Robin S - Break My Soul x Show Me Love (Mashup)"
+    names Break My Soul and Show Me Love. Version tags and featured artists are dropped."""
+    text = _BRACKETS.sub("", unicodedata.normalize("NFKC", title or "").casefold())
+    names = []
+    for part in _TITLE_PARTS.split(text.strip()):
+        words = re.findall(r"[^\W_]+", _TITLE_TAIL.sub("", part.strip()))
+        if words and words not in names:
+            names.append(words)
+    return names
+
+
+def song_sig(t: dict) -> tuple[list[list[str]], set[str]]:
+    return song_names(t.get("title", "")), {_key(a) for a in artist_names(t.get("artist", ""))}
+
+
+def _same_name(wa: list[str], wb: list[str], shared: bool) -> bool:
+    if wa == wb:  # a one-word title ("Rise") by someone else is a different song
+        return shared or len(wa) >= 2
+    short, long_ = (wa, wb) if len(wa) < len(wb) else (wb, wa)
+    if shared and long_[:len(short)] == short:  # "Somebody" (2024) vs "Somebody That I Used To Know"
+        return True
+    # A flip that keeps a 3+ word hook of the title ("USED TO KNOW" by SCXLETTE) is that song again.
+    k = len(short)
+    return k >= 3 and any(long_[i:i + k] == short for i in range(len(long_) - k + 1))
+
+
+def same_song(a: tuple[list[list[str]], set[str]], b: tuple[list[list[str]], set[str]]) -> bool:
+    shared = bool(a[1] & b[1])
+    return any(_same_name(wa, wb, shared) for wa in a[0] for wb in b[0])
+
+
+def recent_songs(state: dict) -> list[tuple[str, tuple[list[list[str]], set[str]]]]:
+    ids = state["played"][-VARIETY_STATION:]
+    ids += [r[0] for r in db("SELECT id FROM plays WHERE action='played' ORDER BY at DESC LIMIT ?", (VARIETY_PLAYED,))]
+    out = []
+    for tid in dict.fromkeys(ids):
+        t = track(tid)
+        if t:
+            out.append((tid, song_sig(t)))
+    return out
+
+
 def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
     taste = taste_profile()
+    recent = recent_songs(state)
     out: list[dict] = []
     attempts = 0
     while len(out) < n and attempts < 4:
@@ -1475,8 +1528,12 @@ def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
                 continue
             t = track(tid)
             if t and not blocked(t, taste) and not off_station(t, allowed, taste):
+                sig = song_sig(t)
+                if any(rid != tid and same_song(sig, rsig) for rid, rsig in recent):
+                    continue  # another version of a song you just heard
                 out.append(t)
                 state["played"].append(tid)
+                recent.append((tid, sig))
         if len(out) < n:
             # Endless: reseed from the most recent liked track in this station, else a recent track
             # that is not the kind of music you turned down.
