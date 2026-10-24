@@ -39,7 +39,7 @@ def get(path):
 def ready():
     for _ in range(100):
         try:
-            if get('/wizard-music/api/home')['settings'] == {'online': False}: return
+            if get('/wizard-music/api/home')['settings'].get('online') is False: return
         except Exception: pass
         time.sleep(.2)
     raise RuntimeError(run('logs', name))

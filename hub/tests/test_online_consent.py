@@ -25,8 +25,6 @@ def test_default_off_persist_and_revoke(hub, monkeypatch):
     assert hub.set_online(True) == {'online': True}
     assert json.loads(hub.SETTINGS.read_text()) == {'online': True}
     assert hub.SETTINGS.stat().st_mode & 0o777 == 0o600
-    # A previously-created HTTP session must not retain permission after revocation.
-    session = hub.online_session()
     client = Mock()
     monkeypatch.setattr(hub, '_ytm', client)
     downloader = Mock()
@@ -37,7 +35,7 @@ def test_default_off_persist_and_revoke(hub, monkeypatch):
     downloader.terminate.assert_called_once()
     assert not hub._info_q
     assert hub._ytm is None
-    with pytest.raises(LookupError): session.get('https://music.youtube.com/')
+    with pytest.raises(LookupError): hub.online_urlopen('https://music.youtube.com/')
     assert json.loads(hub.SETTINGS.read_text()) == {'online': False}
     with pytest.raises(ValueError): hub.set_online('yes')
 

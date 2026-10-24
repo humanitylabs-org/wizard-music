@@ -2,7 +2,7 @@
 """Wizard Music hub: one library across sources, served to Wizard.
 
 Runs on Wizard Home (Mac mini). Sources:
-  - youtube: YouTube Music catalog search + endless radio (ytmusicapi), audio via yt-dlp
+  - online: music-source connector apps (YouTube Music first), found automatically like Money finds bank connectors
   - library: owner MP3/M4A/FLAC files under WIZARD_MUSIC_LIBRARY
 
 Wizard's server proxies /wizard/music/* here over a loopback SSH tunnel and adds
@@ -43,7 +43,6 @@ HOME = Path(os.environ.get("WIZARD_MUSIC_HUB_HOME", str(Path.home() / ".wizard-h
 LIBRARY = Path(os.environ.get("WIZARD_MUSIC_LIBRARY", str(Path.home() / "Music/WizardMusic/Library")))
 CACHE = Path(os.environ.get("WIZARD_MUSIC_CACHE", str(HOME / "cache")))
 CACHE_MAX_BYTES = int(os.environ.get("WIZARD_MUSIC_CACHE_MAX_BYTES", str(3 * 1024**3)))
-YTDLP = os.environ.get("WIZARD_MUSIC_YTDLP", str(Path(sys.executable).with_name("yt-dlp")))
 PUBLIC_PREFIX = "/wizard/music"
 AUDIO_EXT = {".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac"}
 ART_HOSTS = re.compile(r"^(?:[a-z0-9-]+\.)*(?:googleusercontent\.com|ytimg\.com|ggpht\.com)$")
@@ -144,19 +143,6 @@ def online_urlopen(*args, **kwargs):
         return urllib.request.urlopen(*args, **kwargs)
 
 
-def online_session():
-    import requests
-
-    class ConsentSession(requests.Session):
-        def send(self, *args, **kwargs):
-            # Each HTTP send (including retries/redirects) rechecks consent.
-            with _consent_lock:
-                require_online()
-                return super().send(*args, **kwargs)
-
-    return ConsentSession()
-
-
 def db(sql: str, args: tuple = (), many: bool = False):
     with _db_lock:
         cur = _db.execute(sql, args)
@@ -167,38 +153,70 @@ def db(sql: str, args: tuple = (), many: bool = False):
 
 # ---------------------------------------------------------------- YouTube Music
 _ytm = None
-_ytm_lock = threading.Lock()
+# Music never talks to YouTube itself. Installed music-source connector apps (contract
+# wizard.music-source/1) do, the same way Money reads bank-connection apps. Each entry is
+# "<app-id>=<loopback or container URL>"; unreachable ones are simply skipped.
+SOURCES = [tuple(x.split("=", 1)) for x in os.environ.get(
+    "WIZARD_MUSIC_SOURCES", "wizard-youtube-music=http://wizard-youtube-music:9206").split(",") if "=" in x]
+_source_status: dict[str, dict] = {}
+
+
+def _source_get(base: str, path: str, timeout: float = 20):
+    with online_urlopen(urllib.request.Request(base.rstrip("/") + path, headers={"Accept": "application/json"}), timeout=timeout) as r:
+        return json.loads(r.read(4_000_000))
+
+
+def sources_status(refresh: bool = False) -> list[dict]:
+    """Each connector's own status; a missing connector is reported as not installed."""
+    out = []
+    for app_id, base in SOURCES:
+        cached = _source_status.get(app_id)
+        if refresh or not cached or time.time() - cached["at"] > 30:
+            try:
+                if not ONLINE:
+                    raise LookupError("off")
+                st = _source_get(base, "/api/status", timeout=4)
+                cached = {"at": time.time(), "installed": True, **st}
+            except LookupError:
+                cached = {"at": time.time(), "installed": None}
+            except Exception:
+                cached = {"at": time.time(), "installed": False}
+            _source_status[app_id] = cached
+        out.append({"id": app_id, "base": base, **cached})
+    return out
+
+
+def source_for(tid: str = "") -> str:
+    """Base URL of the connector to use (the YouTube connector owns yt: ids)."""
+    for s in sources_status():
+        if s.get("installed"):
+            return s["base"]
+    raise RuntimeError("no music source connected")
+
+
+class _Connector:
+    """Small client with the method names the radio/search code already uses."""
+
+    def search(self, q, filter="songs", limit=20):
+        qs = urllib.parse.urlencode({"q": q, "kind": filter, "limit": limit})
+        return _source_get(source_for(), f"/api/music/search?{qs}").get("tracks", [])
+
+    def get_watch_playlist(self, vid, radio=True, limit=60):
+        qs = urllib.parse.urlencode({"seed": vid, "limit": limit})
+        return {"tracks": _source_get(source_for(), f"/api/music/radio?{qs}").get("tracks", [])}
+
+
+_connector = _Connector()
 
 
 def ytm():
     if not ONLINE:
-        raise RuntimeError("Online sources disabled; set WIZARD_MUSIC_ONLINE=1 to opt in")
-    global _ytm
-    with _ytm_lock:
-        if _ytm is None:
-            from ytmusicapi import YTMusic
-
-            auth = HOME / "ytmusic-browser.json"
-            _ytm = YTMusic(str(auth), requests_session=online_session()) if auth.exists() else YTMusic(requests_session=online_session())
-        return _ytm
-
-
-_ytm_radio = None
+        raise RuntimeError("Online sources disabled")
+    return _connector
 
 
 def ytm_radio():
-    """YouTube Music client used for radio, pinned to RADIO_LOCATION."""
-    if not RADIO_LOCATION:
-        return ytm()
-    ytm()  # same ONLINE gate
-    global _ytm_radio
-    with _ytm_lock:
-        if _ytm_radio is None:
-            from ytmusicapi import YTMusic
-
-            auth = HOME / "ytmusic-browser.json"
-            _ytm_radio = YTMusic(str(auth), location=RADIO_LOCATION, requests_session=online_session()) if auth.exists() else YTMusic(location=RADIO_LOCATION, requests_session=online_session())
-        return _ytm_radio
+    return ytm()
 
 
 def _secs(text) -> int:
@@ -479,14 +497,11 @@ def itunes_genre(title: str, artist: str) -> str:
 def related_artists(artist: str) -> list[str]:
     out, seen = [], set()
     for name in artist_names(artist)[:2]:
-        want = _key(name)
-        hits = ytm().search(name, filter="artists", limit=5)
-        hit = next((h for h in hits if h.get("browseId") and _key(h.get("artist") or h.get("title") or "") == want), None)
-        if not hit:
-            continue
-        info = ytm().get_artist(hit["browseId"])
-        for item in ((info.get("related") or {}).get("results") or [])[:10]:
-            label = item.get("title") or ""
+        try:
+            names = _source_get(source_for(), "/api/music/related-artists?" + urllib.parse.urlencode({"name": name})).get("artists", [])
+        except Exception:
+            names = []
+        for label in names[:10]:
             if _key(label) and _key(label) not in seen:
                 seen.add(_key(label))
                 out.append(label)
@@ -1357,11 +1372,8 @@ def _first_by(results: list[dict], artist: str, title: str = "") -> dict | None:
 def genre_seed(genre: str) -> str | None:
     """A well-known song for a genre: the first track of YouTube Music's own playlist for it."""
     try:
-        lists = ytm().search(genre, filter="featured_playlists", limit=3)
-        pid = next((p["browseId"] for p in lists if p.get("browseId")), "")
-        if not pid:
-            return None
-        items = (ytm().get_playlist(pid[2:] if pid.startswith("VL") else pid, limit=25).get("tracks") or [])
+        ytm()
+        items = _source_get(source_for(), "/api/music/genre?" + urllib.parse.urlencode({"genre": genre})).get("tracks") or []
         random.shuffle(items)
         for item in items:
             t = remember_yt(item)
@@ -1705,27 +1717,21 @@ def fetch_audio(vid: str) -> Path:
         hit = _cache_path(vid)
         if hit:
             return hit
-        tmp = CACHE / f".{vid}.{uuid.uuid4().hex[:6]}"
-        cmd = [YTDLP, "-q", "--js-runtimes", "node", "--no-cache-dir", "--no-warnings", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio",
-               "-o", f"{tmp}.%(ext)s", f"https://music.youtube.com/watch?v={vid}"]
-        with _consent_lock:
-            require_online()
-            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-            _downloads.add(proc)
+        tmp = CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.m4a"
         try:
-            _, stderr = proc.communicate(timeout=120)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.communicate()
-            raise RuntimeError("download timed out")
-        finally:
-            with _consent_lock:
-                _downloads.discard(proc)
-        made = sorted(CACHE.glob(f"{tmp.name}.*"))
-        if not ONLINE or proc.returncode != 0 or not made:
-            for m in made:
-                m.unlink(missing_ok=True)
-            raise RuntimeError((stderr or "download failed").strip()[-300:])
+            with online_urlopen(source_for(f"yt:{vid}").rstrip("/") + f"/api/music/audio/{vid}", timeout=170) as r, tmp.open("wb") as out:
+                shutil.copyfileobj(r, out, 262144)
+        except urllib.error.HTTPError as exc:
+            tmp.unlink(missing_ok=True)
+            _source_status.clear()  # the connector recorded why; re-read it for the home screen
+            raise RuntimeError("blocked" if exc.code == 502 else f"source answered {exc.code}") from None
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+        if not ONLINE or tmp.stat().st_size == 0:
+            tmp.unlink(missing_ok=True)
+            raise RuntimeError("download failed")
+        made = [tmp]
         final = CACHE / f"{vid}{made[0].suffix}"
         made[0].replace(final)
         _evict()
@@ -1800,6 +1806,18 @@ def art_bytes(tid: str) -> tuple[bytes, str] | None:
 
 
 # ---------------------------------------------------------------- Home
+def source_card(x: dict) -> dict:
+    name = x.get("name") or x["id"].removeprefix("wizard-").replace("-", " ").title()
+    if x.get("installed") is None:
+        return {"id": x["id"], "name": name, "status": "off", "detail": "Turn on Online sources to use it", "ok": False}
+    if not x.get("installed"):
+        return {"id": x["id"], "name": name, "status": "missing", "detail": "Not installed \u00b7 get it in the App Store", "ok": False}
+    p = x.get("playback") or {}
+    detail = {"ok": "Playing", "untested": "Connected \u00b7 not tested yet"}.get(p.get("state"), p.get("message") or "Not working")
+    return {"id": x["id"], "name": name, "status": p.get("state", "untested"), "detail": detail,
+            "ok": p.get("state") in ("ok", "untested"), "open": f"/{x['id']}/"}
+
+
 def home() -> dict:
     liked = [track(r[0]) for r in db("SELECT id FROM likes WHERE value>0 ORDER BY at DESC LIMIT 30")]
     recent_ids, seen = [], set()
@@ -1811,12 +1829,9 @@ def home() -> dict:
     recent = [track(t) for t in recent_ids if t not in taste.disliked][:20]
     library = [track(r[0]) for r in db("SELECT id FROM tracks WHERE source='library' ORDER BY artist, album, title LIMIT 200")]
     count = db("SELECT COUNT(*) FROM tracks WHERE source='library'")[0][0]
-    yt_ok = ONLINE
     return {
         "settings": online_settings(),
-        "sources": [
-            {"id": "youtube", "name": "Online sources", "status": "enabled" if ONLINE else "disabled",
-             "detail": "Catalog access enabled; availability varies" if ONLINE else "Off · enable above when you choose", "ok": yt_ok},
+        "sources": [source_card(x) for x in sources_status()] + [
             {"id": "library", "name": "Wizard Library", "status": "connected", "detail": f"{count} track{'s' if count != 1 else ''} on your Wizard", "ok": True},
         ],
         "vibes": ([{"id": f"mix-{m['key'].replace(' ', '-')}", "label": m["name"], "count": len(m["ids"])} for m in mixes()]

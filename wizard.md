@@ -2,11 +2,11 @@
 wizard: 0.2
 id: wizard-music
 name: Music
-version: 0.2.0-test.1
+version: 0.2.0-test.2
 type: service
 category: app
 voice_names: [music, songs, music player, wizard music]
-summary: Your own music library, with an embedded player and optional online sources.
+summary: Your music player and library. Online songs come from music connector apps like YouTube Music.
 license: MIT
 source: https://github.com/humanitylabs-org/wizard-music
 icon: icon.png

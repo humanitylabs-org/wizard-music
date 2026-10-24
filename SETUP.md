@@ -6,7 +6,9 @@
 
 **Store Get is all the server setup a new user needs.** Music creates its own data folder and random server-only hub token. No environment variables, terminal commands or gateway allowlists are required on a normal Wizard.
 
-Online sources are **off by default**. The switch explains what leaves the box: searches and track details go to YouTube Music, Deezer, Apple and MusicBrainz for catalog results, audio and artwork. The choice is saved on your Wizard. Turning it off stops online listening, cancels active downloads, discards pending enrichment and blocks new provider requests, including connected-catalog lookups. Previously downloaded artwork and metadata may remain on disk. Local files remain available.
+Online sources are **off by default**. Online songs come from **music connector apps**, installed separately from the Store, the same way Money gets bank data from SimpleFIN. The first one is **YouTube Music** (`humanitylabs-org/wizard-youtube-music`). Music finds installed connectors automatically and shows each one's real status on its home screen. With the switch off, Music sends nothing to any connector or provider. Local files remain available.
+
+The YouTube Music connector needs a home internet connection: YouTube blocks cloud servers in data centers. It works on a Wizard at home, or on a cloud Wizard through Wizard Home Relay on a computer at home. Its own screen explains this and runs a real playback test.
 
 ## Your own music files
 
@@ -30,9 +32,8 @@ For a diagnostic standalone run, use `docker compose -p music-test -f compose.ya
 
 ## Advanced: optional integrations
 
-- Connectors catalog lookup: optional server-side `WIZARD_MUSIC_CONNECTORS_URL` and `MUSIC_ADAPTER_TOKEN` fields. The token is the dedicated Music adapter credential, never the owner, MCP, broker or hub token. Connected catalog lookup is gated by the online switch. It is catalog access, not Google/YouTube Music subscription or audio authorization.
+- Music sources: `WIZARD_MUSIC_SOURCES` lists connector apps as `id=url` pairs (default `wizard-youtube-music=http://wizard-youtube-music:9206`). Each must speak `wizard.music-source/1`.
 - External hub: set `WIZARD_MUSIC_EXTERNAL_HUB=1`, its recipient-owned `WIZARD_MUSIC_HUB_TOKEN`, and an exact loopback HTTP `WIZARD_MUSIC_HUB_ORIGIN`. The hub must share the network namespace. This advanced topology is not required by Store Get.
-- Online account auth, if independently authorized and required, belongs only in the recipient’s `/data/ytmusic-browser.json`, mode 0600. No borrowed cookies, accounts or access bypass are included.
 - Cache limit: `WIZARD_MUSIC_CACHE_MAX_BYTES` defaults to 3 GiB. Hub, data, library and Python/downloader paths remain environment-configurable for advanced host installations.
 
 ## Diagnostics
