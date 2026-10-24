@@ -115,7 +115,7 @@ def test_vibe_chip_seeds_from_its_track_not_its_label(hub, monkeypatch):
 def test_collection_station_keeps_returning_to_your_tracks(hub, monkeypatch):
     ids = seed_library(hub)
     counter = iter(range(1000, 5000))
-    monkeypatch.setattr(hub, '_radio_from', lambda tid: [add(hub, next(counter), 'R', f'Radio {i}') for i in range(6)])
+    monkeypatch.setattr(hub, '_radio_from', lambda tid: [add(hub, n, f'R{n}', f'Radio {i}') for i, n in zip(range(6), counter)])
     out = hub.play_spoken('play my synthwave')
     sid = out['station']['id']
     mine = {ids['tides'], ids['coast'], ids['snooker'], ids['xxx']}
