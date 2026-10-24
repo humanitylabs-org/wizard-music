@@ -116,3 +116,12 @@
 /* Back in view before the phone player answers: show no song rather than the old one, then fade the right one in. */
 .music-now-body, .music-mini > * { transition: opacity 140ms ease-out; }
 .music-now.music-stale .music-now-body, .music-mini.music-stale > * { opacity: 0; transition: none; }
+
+/* Tap a song: the player opens at once with a loading wheel until the audio starts. */
+.music-wheel { display: block; width: 34px; height: 34px; border-radius: 50%; border: 3px solid color-mix(in srgb, currentColor 22%, transparent); border-top-color: currentColor; animation: music-spin .8s linear infinite; }
+@keyframes music-spin { to { transform: rotate(360deg); } }
+.music-now-pending-art { position: relative; display: block; }
+.music-now-pending-art .music-art { opacity: .55; }
+.music-now-pending-art .music-wheel { position: absolute; top: 50%; left: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-width: 4px; color: var(--text); }
+.music-now-loading-note { margin: 22px 0 0; color: var(--text-dim); font-size: 14px; text-align: center; }
+@media (prefers-reduced-motion: reduce) { .music-wheel { animation-duration: 2.4s; } }

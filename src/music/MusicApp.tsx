@@ -202,6 +202,17 @@ function TrackRow({ track, active, played, onPlay, onPlayNext }: { track: MusicT
   </div>
 }
 
+// A tapped song opens Now Playing at once with a loading wheel while its station is fetched and the
+// audio starts; the sheet swaps to the real player the moment the engine has it.
+let pendingStart: MusicTrack | null = null
+let pendingFailed = false
+const pendingListeners = new Set<() => void>()
+function setPendingStart(track: MusicTrack | null) { pendingStart = track; pendingListeners.forEach((listener) => listener()) }
+export function usePendingStart(): MusicTrack | null {
+  return useSyncExternalStore((listener) => { pendingListeners.add(listener); return () => { pendingListeners.delete(listener) } }, () => pendingStart, () => null)
+}
+const LoadingWheel = ({ label }: { label: string }) => <span className="music-wheel" role="progressbar" aria-label={label} />
+
 export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () => void; notify: (message: string) => void }) {
   const snapshot = useMusicSnapshot()
   useFeedbackReporter(snapshot)
@@ -243,26 +254,32 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
     return () => { searchHandler = null }
   }, [runSearch])
 
-  const startStation = useCallback(async (seed: { trackId?: string; query?: string; label?: string }, key: string) => {
+  const startSeq = useRef(0)
+  const startStation = useCallback(async (seed: { trackId?: string; query?: string; label?: string }, key: string, tapped?: MusicTrack) => {
+    const seq = ++startSeq.current
     setStarting(key)
+    if (tapped) { pendingFailed = false; setPendingStart(tapped); onOpenNowPlaying() }
     try {
       const { station, tracks } = await musicApi.station(seed)
+      if (seq !== startSeq.current) return // a newer tap won
       await startEngine().load(tracks, 0, station)
       noteEngineStarted()
-      onOpenNowPlaying()
+      if (!tapped) onOpenNowPlaying()
     } catch (error) {
-      notify((error as Error).message || 'Could not start that station.')
-    } finally { setStarting('') }
+      if (seq === startSeq.current) { pendingFailed = Boolean(tapped); notify((error as Error).message || 'Could not start that station.') }
+    } finally {
+      if (seq === startSeq.current) { setStarting(''); if (tapped) setPendingStart(null) }
+    }
   }, [notify, onOpenNowPlaying])
 
   const playNext = useCallback((track: MusicTrack) => {
     const engine = engineIfStarted()
-    if (!engine || !snapshot.queue.length) { void startStation({ trackId: track.id }, track.id); return }
+    if (!engine || !snapshot.queue.length) { void startStation({ trackId: track.id }, track.id, track); return }
     engine.enqueueNext(track)
     notify(`${track.title} plays next`)
   }, [notify, snapshot.queue.length, startStation])
 
-  const playRow = (track: MusicTrack) => void startStation({ trackId: track.id }, track.id)
+  const playRow = (track: MusicTrack) => void startStation({ trackId: track.id }, track.id, track)
 
   return <section className="music-workspace" aria-label="Wizard Music">
     <form className="music-search" role="search" onSubmit={(event) => { event.preventDefault(); void runSearch(query) }}>
@@ -432,6 +449,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
   useFeedbackReporter(snapshot)
   const engine = engineIfStarted()
   const track = snapshot.queue[snapshot.index]
+  const pending = usePendingStart()
   const [likes, setLikes] = useState<Record<string, boolean>>({})
   const [scrub, setScrub] = useState<number | null>(null)
   const upNext = useMemo(() => snapshot.queue.slice(snapshot.index + 1, snapshot.index + 40).map((item, offset) => ({ item, position: snapshot.index + 1 + offset })), [snapshot.queue, snapshot.index])
@@ -439,7 +457,35 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
   const [showPlayed, setShowPlayedState] = useState(() => { try { return localStorage.getItem(SHOW_PLAYED_KEY) === '1' } catch { return false } })
   const sheet = useRef<HTMLDivElement>(null)
   useSwipeDownToClose(sheet, onClose)
+  // Opened for a tap whose start then failed: close back to the library rather than leave an empty layer.
+  // Only the tap → failure transition closes; restores and stale native snapshots keep their old behaviour.
+  // A started song can reach the snapshot a beat after the station loads (the phone's native player answers
+  // asynchronously), so the wheel stays up until the song is really there.
+  const lastTapped = useRef<MusicTrack | null>(null)
+  if (pending) lastTapped.current = pending
+  else if (track && engine && !pendingFailed) lastTapped.current = null
+  useEffect(() => {
+    if (pending || !pendingFailed) return
+    pendingFailed = false
+    if (!lastTapped.current) return // a later open (mini player) after a failure in a closed sheet
+    lastTapped.current = null
+    onClose()
+  }, [pending]) // eslint-disable-line react-hooks/exhaustive-deps
+  const loading = pending ?? (pendingFailed ? null : lastTapped.current)
   const setShowPlayed = (open: boolean) => { setShowPlayedState(open); try { localStorage.setItem(SHOW_PLAYED_KEY, open ? '1' : '0') } catch { /* storage blocked */ } }
+  const loadingView = (pending: MusicTrack) => <>
+    <header className="music-now-head">
+      <button type="button" className="icon-button" aria-label="Close player" onClick={onClose}><ChevronDown /></button>
+      <div><small>Starting</small><strong>{sourceLabel(pending.source)}</strong></div>
+      <span className="music-now-spacer" />
+    </header>
+    <div className="music-now-body">
+      <span className="music-now-pending-art"><Art track={pending} size="hero" /><LoadingWheel label={`Loading ${pending.title}`} /></span>
+      <div className="music-now-meta"><div><h2>{pending.title}</h2><p>{pending.artist}{pending.album ? ` · ${pending.album}` : ''}</p></div></div>
+      <p className="music-now-loading-note" role="status">Loading…</p>
+    </div>
+  </>
+  if (loading) return <div ref={sheet} className="music-now music-now-loading" role="dialog" aria-modal="true" aria-label="Now playing" aria-busy="true">{loadingView(loading)}</div>
   if (!track || !engine) return null
   const liked = likes[track.id] ?? Boolean(track.liked)
   const duration = snapshot.durationMs || track.durationMs
@@ -477,7 +523,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
       <div className="music-controls">
         <button type="button" className="music-icon-button music-thumb music-thumb-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph /></button>
         <button type="button" className="music-icon-button big" aria-label="Previous" onClick={() => engine.previous()}><PrevGlyph /></button>
-        <button type="button" className="music-play" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engine.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph size={30} /> : <PlayGlyph size={30} />}</button>
+        <button type="button" className="music-play" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engine.toggle()}>{snapshot.buffering && (snapshot.wantPlaying ?? true) ? <LoadingWheel label="Loading" /> : (snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph size={30} /> : <PlayGlyph size={30} />}</button>
         <button type="button" className="music-icon-button big" aria-label="Next" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
         <button type="button" className={`music-icon-button music-thumb music-like${liked ? ' on' : ''}`} aria-pressed={liked} aria-label={liked ? 'Thumbs up (on)' : 'Thumbs up'} onClick={like}><ThumbUpGlyph filled={liked} /></button>
       </div>
