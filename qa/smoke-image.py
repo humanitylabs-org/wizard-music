@@ -58,7 +58,7 @@ try:
     home = get('/wizard-music/api/home')
     assert home['library'] == [] and home['liked'] == [] and home['vibes'] == []
     assert get('/health')['configured'] is True
-    token_info = run('exec', name, 'python3', '-c',
+    token_info = run('exec', '--user', '1000:1000', name, 'python3', '-c',
         'import pathlib,hashlib,json; p=pathlib.Path("/data/hub-token"); print(json.dumps({"mode": oct(p.stat().st_mode & 0o777), "length":len(p.read_text()), "sha256":hashlib.sha256(p.read_bytes()).hexdigest()}))')
     token = json.loads(token_info)
     assert token['mode'] == '0o600' and token['length'] == 64
@@ -85,7 +85,7 @@ try:
     assert api('/wizard-music/api/feedback', {'id':track['id'], 'action':'like'})[0] == 200
     run('rm', '-f', name); create()
     assert get('/wizard-music/api/home')['liked'][0]['id'] == track['id']
-    after = run('exec', name, 'python3', '-c', 'import pathlib,hashlib; print(hashlib.sha256(pathlib.Path("/data/hub-token").read_bytes()).hexdigest())')
+    after = run('exec', '--user', '1000:1000', name, 'python3', '-c', 'import pathlib,hashlib; print(hashlib.sha256(pathlib.Path("/data/hub-token").read_bytes()).hexdigest())')
     assert after == token['sha256']
     info = json.loads(run('image', 'inspect', image))[0]
     receipt = {'ok':True, 'architecture':info['Architecture'], 'image_id':info['Id'], 'image':image,
