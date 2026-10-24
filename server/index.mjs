@@ -2,6 +2,7 @@
 // Wizard Music app server: static view + hub proxy, loopback only, behind the private gateway.
 import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
+import { requestAllowed } from './request-policy.mjs'
 import { extname, join, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BASE, createMusicProxy } from './music.mjs'
@@ -48,19 +49,18 @@ async function serveStatic(response, sub, head) {
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', 'http://local')
-    const host = new URL(`http://${request.headers.host || 'invalid'}`).hostname
-    if (!HOSTS.has(host)) { sendJson(response, 403, { error: 'host' }); return }
-    if (request.headers.origin && !ORIGINS.has(request.headers.origin)) { sendJson(response, 403, { error: 'origin' }); return }
-    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.1.0', configured, setup: configured ? 'library-or-online-source-required' : 'hub-token-and-origin-required' }); return }
+    if (!requestAllowed(request, { hosts: HOSTS, origins: ORIGINS })) { sendJson(response, 403, { error: 'origin' }); return }
+    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.1', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
     if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT); return }
     if (url.pathname === BASE) { response.writeHead(308, { Location: `${BASE}/` }); response.end(); return }
     if (!url.pathname.startsWith(`${BASE}/`)) { sendJson(response, 404, { error: 'not_found' }); return }
     const sub = url.pathname.slice(BASE.length)
-    if (request.method === 'POST') {
-      const origin = request.headers.origin
-      if (origin && !ORIGINS.has(origin)) { sendJson(response, 403, { error: 'origin' }); return }
+
+    if (sub === '/api/catalog') {
+      const consent = await fetch(`${process.env.WIZARD_MUSIC_HUB_ORIGIN}/api/settings`, { headers: { Authorization: `Bearer ${process.env.WIZARD_MUSIC_HUB_TOKEN}` }, signal: AbortSignal.timeout(3000) }).then(r => r.json())
+      if (!consent.online) { sendJson(response, 403, { error: 'online_sources_disabled' }); return }
+      await handleCatalog(request, response, url, sendJson); return
     }
-    if (sub === '/api/catalog') { await handleCatalog(request, response, url, sendJson); return }
     if (/^\/(api|stream|art)\//.test(sub)) { await handleMusic(request, response, url, sendJson); return }
     if (request.method !== 'GET' && request.method !== 'HEAD') { sendJson(response, 405, { error: 'method' }); return }
     await serveStatic(response, sub, request.method === 'HEAD')

@@ -23,6 +23,7 @@ import sys
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
@@ -34,6 +35,10 @@ HOST = os.environ.get("WIZARD_MUSIC_HUB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("WIZARD_MUSIC_HUB_PORT", "8793"))
 TOKEN = os.environ.get("WIZARD_MUSIC_HUB_TOKEN", "")
 ONLINE = os.environ.get("WIZARD_MUSIC_ONLINE", "0") == "1"
+# Anonymous YouTube Music radio from a Thai IP front-loads ~30 Thai/K-pop chart hits before the
+# songs that actually follow the seed (a Gui Boratto radio opened with Thai pop). Radio asks as
+# this region instead; a Thai seed still gets Thai radio. Search keeps the default region.
+RADIO_LOCATION = os.environ.get("WIZARD_MUSIC_RADIO_LOCATION", "US").strip()
 HOME = Path(os.environ.get("WIZARD_MUSIC_HUB_HOME", str(Path.home() / ".wizard-home/music-hub")))
 LIBRARY = Path(os.environ.get("WIZARD_MUSIC_LIBRARY", str(Path.home() / "Music/WizardMusic/Library")))
 CACHE = Path(os.environ.get("WIZARD_MUSIC_CACHE", str(HOME / "cache")))
@@ -73,9 +78,83 @@ _db.executescript(
     -- genre: Apple Music primary genre ('' = looked up, none found; NULL = not looked up yet)
     -- similar: JSON list of artists YouTube Music relates to this track's artists (fetched for thumbs-down)
     CREATE TABLE IF NOT EXISTS track_info (id TEXT PRIMARY KEY, genre TEXT, similar TEXT, at REAL);
+    -- tags: JSON {style: weight 0..1} for an artist ({} = looked up, nothing known); source musicbrainz|related
+    -- kept: songs you heard all the way through in a session you said was on point (a softer like)
+    CREATE TABLE IF NOT EXISTS kept (id TEXT, at REAL, reason TEXT, PRIMARY KEY (id, reason));
+    -- requests: you asked for this exact song (tapped it, or named it out loud); how = tap|spoken|backfill
+    CREATE TABLE IF NOT EXISTS requests (id TEXT, at REAL, how TEXT);
+    -- feedback_log: every like/unlike/dislike ever given (likes keeps only the latest), for reweighting later
+    CREATE TABLE IF NOT EXISTS feedback_log (id TEXT, at REAL, action TEXT);
+    CREATE TABLE IF NOT EXISTS artist_styles (key TEXT PRIMARY KEY, name TEXT, tags TEXT, source TEXT, at REAL);
+    -- mixes: a named set of songs you saved ("tea music"); ids JSON list, aliases JSON list of other spoken names
+    CREATE TABLE IF NOT EXISTS mixes (key TEXT PRIMARY KEY, name TEXT, ids TEXT, aliases TEXT, at REAL);
     """
 )
 _db.commit()
+
+# Per-install, default-off consent. Environment opt-in is retained only for legacy host installs.
+SETTINGS = HOME / "settings.json"
+try:
+    ONLINE = json.loads(SETTINGS.read_text()).get("online") is True
+except FileNotFoundError:
+    pass
+except (ValueError, OSError):
+    ONLINE = False
+_consent_lock = threading.RLock()
+_downloads = set()
+
+
+def online_settings():
+    return {"online": ONLINE}
+
+
+def require_online():
+    if not ONLINE:
+        raise LookupError("online sources disabled")
+
+
+def set_online(value):
+    global ONLINE, _ytm, _ytm_radio
+    if not isinstance(value, bool):
+        raise ValueError("online must be a boolean")
+    with _consent_lock:
+        tmp = SETTINGS.with_suffix(".tmp")
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as out:
+            json.dump({"online": value}, out)
+            out.flush()
+            os.fsync(out.fileno())
+        tmp.replace(SETTINGS)
+        ONLINE = value
+        if not value:
+            for proc in list(_downloads):
+                if proc.poll() is None:
+                    proc.terminate()
+            _ytm = _ytm_radio = None
+            # Queued work is discarded; transport guards also cover already-running workers.
+            with _info_cv:
+                _info_q.clear()
+                _info_pending.clear()
+    return online_settings()
+
+
+def online_urlopen(*args, **kwargs):
+    with _consent_lock:
+        require_online()
+        return urllib.request.urlopen(*args, **kwargs)
+
+
+def online_session():
+    import requests
+
+    class ConsentSession(requests.Session):
+        def send(self, *args, **kwargs):
+            # Each HTTP send (including retries/redirects) rechecks consent.
+            with _consent_lock:
+                require_online()
+                return super().send(*args, **kwargs)
+
+    return ConsentSession()
 
 
 def db(sql: str, args: tuple = (), many: bool = False):
@@ -100,8 +179,26 @@ def ytm():
             from ytmusicapi import YTMusic
 
             auth = HOME / "ytmusic-browser.json"
-            _ytm = YTMusic(str(auth)) if auth.exists() else YTMusic()
+            _ytm = YTMusic(str(auth), requests_session=online_session()) if auth.exists() else YTMusic(requests_session=online_session())
         return _ytm
+
+
+_ytm_radio = None
+
+
+def ytm_radio():
+    """YouTube Music client used for radio, pinned to RADIO_LOCATION."""
+    if not RADIO_LOCATION:
+        return ytm()
+    ytm()  # same ONLINE gate
+    global _ytm_radio
+    with _ytm_lock:
+        if _ytm_radio is None:
+            from ytmusicapi import YTMusic
+
+            auth = HOME / "ytmusic-browser.json"
+            _ytm_radio = YTMusic(str(auth), location=RADIO_LOCATION, requests_session=online_session()) if auth.exists() else YTMusic(location=RADIO_LOCATION, requests_session=online_session())
+        return _ytm_radio
 
 
 def _secs(text) -> int:
@@ -366,7 +463,7 @@ def itunes_genre(title: str, artist: str) -> str:
         return ""
     term = f"{names[0] if names else ''} {clean}".strip()
     query = urllib.parse.urlencode({"term": term, "entity": "song", "limit": 8, "country": ITUNES_COUNTRY})
-    with urllib.request.urlopen(urllib.request.Request("https://itunes.apple.com/search?" + query, headers=UA), timeout=8) as r:
+    with online_urlopen(urllib.request.Request("https://itunes.apple.com/search?" + query, headers=UA), timeout=8) as r:
         results = json.load(r).get("results", [])
     want_title, want_artists = _key(clean), [_key(n) for n in names]
     for item in results:
@@ -407,6 +504,8 @@ def save_info(tid: str, genre: str | None = None, similar: list[str] | None = No
 
 def enrich(tid: str, want_similar: bool = False) -> bool:
     """Look up genre (and similar artists) for a track. Returns True when it hit the network."""
+    if not ONLINE:
+        return False
     t = track(tid)
     if not t:
         return False
@@ -477,6 +576,526 @@ def learn_dislike(tid: str, budget: float = 5.0) -> dict:
     genre = (rows[0][0] or "") if rows else ""
     similar = json.loads(rows[0][1]) if rows and rows[0][1] else []
     return {"artists": artist_names(t["artist"]), "genre": genre, "similar": similar[:5]}
+
+
+# ---------------------------------------------------------------- Styles and your collections
+# "Play me some synthwave" should play the synthwave you already like, not whatever has the word in its
+# title. Each artist you like or keep playing gets style tags (MusicBrainz community tags; for artists
+# MusicBrainz doesn't tag, the tags of the artists YouTube Music relates to them). A collection is your
+# tracks whose style matches: liked, or played at least twice and not mostly skipped.
+MB_UA = {"User-Agent": "WizardMusic/1.0 ( private personal player )"}
+MB_MIN_GAP = 1.2  # MusicBrainz allows one request per second
+STYLE_AT = 0.5  # how well a track must match to join a collection
+COLLECTION_MIN = 3  # fewer of your tracks than this: seed a station from them plus the genre's own radio
+STYLE_FAMILIES = {
+    "synthwave": {"synthwave": 1, "retrowave": 1, "outrun": 1, "chillsynth": .9, "darksynth": .9, "dreamwave": .9,
+                  "chillwave": .7, "vaporwave": .6, "synth": .6, "synthpop": .4},
+    "vaporwave": {"vaporwave": 1, "mallsoft": .9, "future funk": .7, "chillwave": .6, "synthwave": .6, "simpsonwave": 1},
+    "chillwave": {"chillwave": 1, "chillsynth": .9, "synthwave": .6, "vaporwave": .6, "dream pop": .5},
+    "deep house": {"deep house": 1, "melodic house": .8, "organic house": .8, "minimal house": .8, "lo-fi house": .7,
+                   "garage house": .7, "house": .6, "tech house": .6, "progressive house": .6, "minimal": .6, "minimal techno": .5},
+    "house": {"house": 1, "deep house": .9, "tech house": .9, "melodic house": .9, "garage house": .9, "progressive house": .8,
+              "organic house": .8, "afro house": .8, "minimal": .6, "dance": .4},
+    "melodic house": {"melodic house": 1, "melodic techno": .9, "progressive house": .8, "deep house": .7, "organic house": .8},
+    "melodic techno": {"melodic techno": 1, "melodic house": .9, "progressive house": .6, "techno": .6},
+    "techno": {"techno": 1, "minimal techno": 1, "melodic techno": 1, "dub techno": .9, "minimal": .8, "tech house": .6},
+    "minimal": {"minimal": 1, "minimal techno": 1, "minimal house": 1, "tech house": .7, "deep house": .6, "microhouse": 1},
+    "downtempo": {"downtempo": 1, "chillout": .9, "trip hop": .8, "nu jazz": .6, "electronica": .5, "ambient": .5, "chillwave": .5},
+    "ambient": {"ambient": 1, "drone": .8, "new age": .7, "downtempo": .5, "idm": .4},
+    "trance": {"trance": 1, "progressive trance": 1, "uplifting trance": 1, "progressive house": .5},
+    "lofi": {"lofi": 1, "lo-fi": 1, "lo-fi hip hop": 1, "chillhop": 1, "lo-fi house": .6},
+    "drum and bass": {"drum and bass": 1, "liquid funk": .9, "jungle": .8, "dnb": 1},
+    "trip hop": {"trip hop": 1, "downtempo": .7},
+    "disco": {"disco": 1, "nu disco": 1, "italo disco": .9, "funk": .5},
+}
+STYLE_SAID = {"synth wave": "synthwave", "retro wave": "synthwave", "outrun": "synthwave", "retrowave": "synthwave",
+              "vapor wave": "vaporwave", "chill wave": "chillwave", "lo fi": "lofi", "lo-fi": "lofi", "dnb": "drum and bass",
+              "d and b": "drum and bass", "drum n bass": "drum and bass", "trip-hop": "trip hop", "triphop": "trip hop",
+              "minimal deep house": "deep house", "nu disco": "disco", "chill out": "downtempo", "chillout": "downtempo"}
+_STYLE_FILLER = re.compile(r"\b(?:i(?:'ve| have)?\s+(?:liked|like|love|loved|saved|curated)|that|which|you know|of|mine|my|own|"
+                           r"some|favou?rites?|faves?|collection|playlist|station|mix|radio|music|songs?|tracks?|stuff|tunes|"
+                           r"genre|kind|type|the|me|from|out of|all)\b", re.I)
+
+
+def style_request(q: str) -> str:
+    """'synthwave I like' / 'my deep house playlist' -> 'synthwave' / 'deep house' ('' when it names no style)."""
+    rest = re.sub(r"\s+", " ", _STYLE_FILLER.sub(" ", q or "")).strip(" ,.")
+    if not rest or len(rest.split()) > 3:
+        return ""
+    rest = STYLE_SAID.get(rest, rest)
+    vocab = set(STYLE_FAMILIES) | {g for g in GENRES if len(g) > 2} | set(STYLE_SAID.values())
+    if rest in vocab:
+        return rest
+    best = max(((heard_like(rest, v), v) for v in vocab), default=(0.0, ""))
+    return best[1] if best[0] >= 0.88 else ""
+
+
+def style_match(tags: dict[str, float], style: str) -> float:
+    family = STYLE_FAMILIES.get(style, {style: 1})
+    best = 0.0
+    for tag, weight in tags.items():
+        sim = family.get(tag, 0.0)
+        if not sim and (f" {style} " in f" {tag} " or f" {tag} " in f" {style} "):
+            sim = 0.7
+        best = max(best, weight * sim)
+    return best
+
+
+def _mb(path: str, **q) -> dict:
+    require_online()
+    q["fmt"] = "json"
+    req = urllib.request.Request(f"https://musicbrainz.org/ws/2/{path}?" + urllib.parse.urlencode(q), headers=MB_UA)
+    for attempt in range(3):
+        try:
+            with online_urlopen(req, timeout=10) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as exc:
+            if exc.code not in (429, 503):
+                raise
+            time.sleep(2 + 2 * attempt)
+        finally:
+            time.sleep(MB_MIN_GAP)
+    return {}
+
+
+def _mb_tags(items: list[dict]) -> dict[str, float]:
+    counts: dict[str, float] = {}
+    for item in items or []:
+        name = (item.get("name") or "").strip().lower()
+        if name and item.get("count", 0) > 0:
+            counts[name] = max(counts.get(name, 0), item["count"])
+    top = max(counts.values(), default=0)
+    return {k: round(v / top, 3) for k, v in counts.items()} if top else {}
+
+
+def mb_artist_tags(name: str, title: str = "") -> dict[str, float]:
+    """MusicBrainz tags for an artist; a known song of theirs picks the right artist among namesakes."""
+    want = _key(name)
+    aid = ""
+    if title:
+        clean = _clean_title(title).replace('"', "")
+        for rec in _mb("recording", query=f'recording:"{clean}" AND artist:"{name.replace(chr(34), "")}"', limit=5).get("recordings", []):
+            credit = next((c["artist"] for c in rec.get("artist-credit", []) if isinstance(c, dict) and _key(c.get("artist", {}).get("name", "")) == want), None)
+            if credit and rec.get("score", 0) >= 90:
+                aid = credit["id"]
+                break
+    if aid:
+        info = _mb(f"artist/{aid}", inc="tags+genres")
+        return _mb_tags((info.get("genres") or []) + (info.get("tags") or []))
+    hits = [a for a in _mb("artist", query=f'artist:"{name.replace(chr(34), "")}"', limit=5).get("artists", []) if _key(a.get("name", "")) == want]
+    hits.sort(key=lambda a: -sum(t.get("count", 0) for t in a.get("tags", [])))
+    return _mb_tags(hits[0].get("tags", [])) if hits else {}
+
+
+def artist_styles(key: str) -> dict[str, float] | None:
+    rows = db("SELECT tags FROM artist_styles WHERE key=?", (key,))
+    return json.loads(rows[0][0]) if rows else None
+
+
+def tag_artist(name: str, title: str = "") -> dict[str, float]:
+    """Look up and remember one artist's styles (own tags, else borrowed from related artists)."""
+    key = _key(name)
+    rows = db("SELECT tags, source FROM artist_styles WHERE key=?", (key,))
+    if rows and (rows[0][1] != "probe" or json.loads(rows[0][0])):
+        return json.loads(rows[0][0])  # looked up already (a bare probe for someone else's neighbours doesn't count)
+    tags, source = mb_artist_tags(name, title), "musicbrainz"
+    if not tags:
+        source, votes, voters = "related", {}, 0
+        try:
+            related = related_artists(name)[:6]
+        except Exception as exc:
+            print("related artists failed", name, repr(exc), file=sys.stderr)
+            related = []
+        for other in related:
+            okey = _key(other)
+            theirs = artist_styles(okey)
+            if theirs is None:
+                theirs = mb_artist_tags(other)
+                db("INSERT OR REPLACE INTO artist_styles(key,name,tags,source,at) VALUES(?,?,?,?,?)",
+                   (okey, other, json.dumps(theirs), "probe", time.time()))
+            if theirs:
+                voters += 1
+                for tag, w in theirs.items():
+                    votes[tag] = votes.get(tag, 0.0) + w
+        tags = {t: round(0.8 * v / voters, 3) for t, v in votes.items() if voters and v / voters >= 0.25}
+    db("INSERT OR REPLACE INTO artist_styles(key,name,tags,source,at) VALUES(?,?,?,?,?)", (key, name, json.dumps(tags), source, time.time()))
+    return tags
+
+
+# ---------------------------------------------------------------- Points
+# Every song earns points from what you did with it. The raw counts are kept (plays, requests, feedback_log,
+# kept), so the weights below can change later and every score is recomputed from the same history.
+# Override any of them in HOME/score_weights.json, e.g. {"heard_through": 1.5}.
+DEFAULT_WEIGHTS = {
+    "like": 5.0,           # thumbs up (current state)
+    "dislike": -10.0,      # thumbs down (current state); also keeps the song out of every collection
+    "request": 3.0,        # each time you asked for this exact song: tapped it, or named it
+    "heard_through": 1.0,  # each time it played to (nearly) the end with no skip or thumbs down
+    "partial": 0.25,       # each time it played at least 30 seconds, then something else came on (tracked; small for now)
+    "skip": -1.0,          # each time you skipped it
+    "approved": 1.0,       # it was heard through in a session you said was on point
+}
+CAPS = {"request": 6, "heard_through": 12, "skip": 8, "partial": 8}  # repeats count, with diminishing room to dominate
+YOURS_AT = 2.0  # points a song needs to join your collections
+
+
+def score_weights() -> dict[str, float]:
+    weights = dict(DEFAULT_WEIGHTS)
+    try:
+        custom = json.loads((HOME / "score_weights.json").read_text())
+        weights.update({k: float(v) for k, v in custom.items() if k in DEFAULT_WEIGHTS})
+    except FileNotFoundError:
+        pass
+    except Exception as exc:
+        print("score_weights.json ignored", repr(exc), file=sys.stderr)
+    return weights
+
+
+def _heard(events: list[tuple], disliked: set[str], partial: dict | None = None) -> dict[str, int]:
+    """Per song, how many times it played to (nearly) the end: not skipped, not turned down, and the next song
+    started no sooner than 60% of the way through. A song still playing at the end of `events` is left out.
+    Starts that ran 30 seconds or more but not that far are counted into `partial`."""
+    out: dict[str, int] = {}
+    durations = {r[0]: (r[1] or 0) / 1000 for r in db("SELECT id, duration_ms FROM tracks WHERE id IN (SELECT id FROM plays)")}
+    for i, (tid, at, action) in enumerate(events):
+        if action != "played" or tid in disliked or i + 1 >= len(events):
+            continue
+        later = events[i + 1:i + 3]
+        if any(e[0] == tid and e[2] == "skipped" for e in later):
+            continue
+        ran = later[0][1] - at
+        if ran >= max(60.0, 0.6 * durations.get(tid, 0)):
+            out[tid] = out.get(tid, 0) + 1
+        elif ran >= 30 and partial is not None:
+            partial[tid] = partial.get(tid, 0) + 1
+    return out
+
+
+def song_metrics() -> dict[str, dict]:
+    """Raw per-song counts behind the points."""
+    disliked = {r[0] for r in db("SELECT id FROM likes WHERE value<0")}
+    m: dict[str, dict] = {}
+
+    def row(tid):
+        return m.setdefault(tid, {"like": 0, "dislike": 0, "request": 0, "heard_through": 0, "partial": 0, "skip": 0, "approved": 0, "starts": 0})
+
+    for tid, value in db("SELECT id, value FROM likes WHERE value!=0"):
+        row(tid)["like" if value > 0 else "dislike"] = 1
+    events = db("SELECT id, at, action FROM plays ORDER BY at")
+    # A start you left within 30 seconds (a double tap, a test, changing your mind) is no evidence either way.
+    kept_starts: dict[str, list[float]] = {}
+    for i, (tid, at, action) in enumerate(events):
+        if action == "played" and (i + 1 >= len(events) or events[i + 1][1] - at >= 30):
+            kept_starts.setdefault(tid, []).append(at)
+    last: dict[str, float] = {}
+    for tid, at in db("SELECT id, at FROM requests ORDER BY at"):
+        # One request per minute per song, and only when the song then actually played.
+        if at - last.get(tid, -1e12) >= 60 and any(-5 <= s - at <= 90 for s in kept_starts.get(tid, [])):
+            row(tid)["request"] += 1
+            last[tid] = at
+    for tid, action, n in db("SELECT id, action, COUNT(*) FROM plays GROUP BY id, action"):
+        row(tid)["starts" if action == "played" else "skip"] = n
+    partial: dict[str, int] = {}
+    for tid, n in _heard(events, disliked, partial).items():
+        row(tid)["heard_through"] = n
+    for tid, n in partial.items():
+        row(tid)["partial"] = n
+    for (tid,) in db("SELECT DISTINCT id FROM kept"):
+        if tid not in disliked:
+            row(tid)["approved"] = 1
+    return m
+
+
+def song_points(metrics: dict, weights: dict | None = None) -> float:
+    w = weights or score_weights()
+    return round(sum(w[k] * min(metrics.get(k, 0), CAPS.get(k, 1)) for k in DEFAULT_WEIGHTS), 2)
+
+
+def scores(limit: int = 0) -> dict:
+    weights = score_weights()
+    rows = []
+    for tid, metrics in song_metrics().items():
+        t = track(tid)
+        if t:
+            rows.append({"id": tid, "title": t["title"], "artist": t["artist"], "points": song_points(metrics, weights), **metrics})
+    rows.sort(key=lambda r: -r["points"])
+    return {"weights": weights, "caps": CAPS, "yoursAt": YOURS_AT, "songs": rows[:limit] if limit else rows}
+
+
+def record_request(tid: str, how: str):
+    db("INSERT INTO requests(id,at,how) VALUES(?,?,?)", (tid, time.time(), how))
+    _collections_cache["at"] = 0.0
+
+
+def backfill_requests():
+    """Before requests were recorded: a station named '<song> radio' was started from that exact song."""
+    if db("SELECT 1 FROM requests LIMIT 1"):
+        return
+    for sid, seed, title, at in db("SELECT id, seed, title, at FROM stations"):
+        t = track(seed)
+        if t and title == f"{t['title']} radio":
+            db("INSERT INTO requests(id,at,how) VALUES(?,?,?)", (seed, at, "backfill"))
+    if not db("SELECT 1 FROM feedback_log LIMIT 1"):
+        for tid, value, at in db("SELECT id, value, at FROM likes WHERE value!=0"):
+            db("INSERT INTO feedback_log(id,at,action) VALUES(?,?,?)", (tid, at, "like" if value > 0 else "dislike"))
+
+
+def your_tracks() -> list[tuple[dict, float]]:
+    """Songs with at least YOURS_AT points and no thumbs down. -> [(track, points)]."""
+    taste = taste_profile()
+    weights = score_weights()
+    out = []
+    for tid, metrics in song_metrics().items():
+        if metrics["dislike"] or tid in taste.disliked:
+            continue
+        points = song_points(metrics, weights)
+        if points >= YOURS_AT:
+            t = track(tid)
+            if t and not blocked(t, taste):
+                out.append((t, points))
+    return out
+
+
+def heard_through(since: float, until: float) -> list[str]:
+    """Songs that played to (nearly) the end between since and until: not skipped, not turned down, and the
+    next song started no sooner than 60% of the way through. The song still playing at `until` is left out."""
+    events = db("SELECT id, at, action FROM plays WHERE at>=? AND at<=? ORDER BY at", (since, until))
+    disliked = {r[0] for r in db("SELECT id FROM likes WHERE value<0")}
+    out: list[str] = []
+    for i, (tid, at, action) in enumerate(events):
+        if action != "played" or tid in disliked:
+            continue
+        later = events[i + 1:]
+        if not later:
+            continue
+        if any(e[0] == tid and e[2] == "skipped" for e in later[:2]):
+            continue
+        t = track(tid) or {}
+        need = max(60.0, 0.6 * (t.get("durationMs") or 0) / 1000)
+        if later[0][1] - at >= need and tid not in out:
+            out.append(tid)
+    return out
+
+
+# ---------------------------------------------------------------- Saved mixes
+def _mix_key(name: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", (name or "").lower()).strip()
+
+
+def _mix_core(name: str) -> str:
+    """'my tea music playlist' -> 'tea' (what a spoken request and a mix name must share)."""
+    words = [w for w in _mix_key(name).split() if w not in GENERIC and w not in {"my", "mix", "playlist", "list"}]
+    return " ".join(words)
+
+
+def save_mix(name: str, ids: list[str], aliases: list[str] | None = None) -> dict:
+    """Save (or replace) a named mix of songs you picked; it shows as a chip and plays on request."""
+    name = (name or "").strip()[:60]
+    seen: list[str] = []
+    for tid in ids:
+        if track(tid) and tid not in seen:
+            seen.append(tid)
+    if not name or not seen:
+        raise ValueError("a mix needs a name and at least one known song")
+    db("INSERT OR REPLACE INTO mixes(key,name,ids,aliases,at) VALUES(?,?,?,?,?)",
+       (_mix_key(name), name, json.dumps(seen[:300]), json.dumps([a[:60] for a in (aliases or [])][:10]), time.time()))
+    return {"name": name, "tracks": [track(t) for t in seen]}
+
+
+def session_songs(since: float, until: float) -> list[str]:
+    """Songs that started between since and until, minus ones skipped early (before 60% or a minute in).
+    Unlike heard_through, the song still playing at the end counts."""
+    events = db("SELECT id, at, action FROM plays WHERE at>=? AND at<=? + 3600 ORDER BY at", (since, until))
+    disliked = {r[0] for r in db("SELECT id FROM likes WHERE value<0")}
+    out: list[str] = []
+    for i, (tid, at, action) in enumerate(events):
+        if action != "played" or at > until or tid in disliked or tid in out:
+            continue
+        nxt = next((e for e in events[i + 1:] if e[2] == "played" or e[0] == tid), None)
+        t = track(tid) or {}
+        if nxt and nxt[0] == tid and nxt[2] == "skipped" and nxt[1] - at < max(60.0, 0.6 * (t.get("durationMs") or 0) / 1000):
+            continue
+        out.append(tid)
+    return out
+
+
+def mixes() -> list[dict]:
+    out = []
+    for key, name, ids, aliases, at in db("SELECT key,name,ids,aliases,at FROM mixes ORDER BY at DESC"):
+        out.append({"key": key, "name": name, "ids": json.loads(ids or "[]"), "aliases": json.loads(aliases or "[]")})
+    return out
+
+
+def find_mix(said: str) -> dict | None:
+    core = _mix_core(said)
+    if not core:
+        return None
+    for m in mixes():
+        if any(core == _mix_core(n) or _mix_key(said) == _mix_key(n) for n in [m["name"], *m["aliases"]]):
+            return m
+    return None
+
+
+def mix_station(m: dict) -> dict:
+    """Your saved songs in a fresh order first, then radio grown from them that keeps bringing them back."""
+    ids = [t for t in m["ids"] if track(t)]
+    if not ids:
+        raise LookupError("that mix is empty")
+    order = ids[:]
+    random.shuffle(order)
+    return create_station({"trackId": order[0], "label": m["name"], "queue": order[1:], "pool": ids})
+
+
+def keep_session(since: float, until: float, reason: str) -> list[str]:
+    """You said this stretch of listening was on point: every song heard through counts as yours."""
+    ids = heard_through(since, until)
+    now = time.time()
+    for tid in ids:
+        db("INSERT OR IGNORE INTO kept(id,at,reason) VALUES(?,?,?)", (tid, now, reason[:80]))
+        queue_styles_for(tid)
+    _collections_cache["at"] = 0.0
+    return ids
+
+
+def track_styles(t: dict) -> dict[str, float]:
+    tags: dict[str, float] = {}
+    for name in artist_names(t.get("artist", "")):
+        for tag, w in (artist_styles(_key(name)) or {}).items():
+            tags[tag] = max(tags.get(tag, 0.0), w)
+    genre = genre_of(t["id"]).strip().lower()
+    if genre:
+        tags[genre] = max(tags.get(genre, 0.0), 0.6)
+    title = (t.get("title") or "").lower()
+    for style in set(STYLE_FAMILIES) | {m for fam in STYLE_FAMILIES.values() for m in fam}:
+        if len(style) > 4 and re.search(rf"\b{re.escape(style)}\b", title):
+            tags[style] = 1.0
+    return tags
+
+
+def collection(style: str) -> list[dict]:
+    """Your tracks in this style, best first."""
+    scored = []
+    for t, affinity in your_tracks():
+        match = style_match(track_styles(t), style)
+        if match >= STYLE_AT:
+            scored.append((match * 2 + affinity, t))
+    scored.sort(key=lambda x: -x[0])
+    out, seen = [], set()
+    for _, t in scored:  # one copy of a song even when YouTube has it twice
+        same = (_key(artist_names(t["artist"])[0] if artist_names(t["artist"]) else t["artist"]), _key(_clean_title(t["title"])))
+        if same not in seen:
+            seen.add(same)
+            out.append(t)
+    return out
+
+
+_collections_cache: dict = {"at": 0.0, "value": []}
+
+
+def style_label(style: str) -> str:
+    """'deep house' -> 'Deep house' (chips read as the style itself; 'your' was redundant)."""
+    return style[:1].upper() + style[1:]
+
+
+def hidden_chips() -> set[str]:
+    """Styles and vibe chips this listener never wants offered: HOME/hidden_chips.json, e.g. ["trip hop", "neo soul"]."""
+    try:
+        return {str(x).strip().lower() for x in json.loads((HOME / "hidden_chips.json").read_text())}
+    except (OSError, ValueError, TypeError):
+        return set()
+
+
+def collections(limit: int = 8) -> list[dict]:
+    """Styles you have at least COLLECTION_MIN tracks in, biggest first (cached for a minute)."""
+    if time.time() - _collections_cache["at"] < 60:
+        return _collections_cache["value"][:limit]
+    mine = [(t, track_styles(t)) for t, _ in your_tracks()]
+    out, kept = [], []
+    for style in STYLE_FAMILIES:  # listed in order of preference: synthwave before its near-twins
+        ids = {t["id"] for t, tags in mine if style_match(tags, style) >= STYLE_AT}
+        if style in hidden_chips() or len(ids) < COLLECTION_MIN or any(len(ids & k) / len(ids | k) > 0.6 for k in kept):
+            continue
+        kept.append(ids)
+        out.append({"style": style, "label": style_label(style), "count": len(ids)})
+    out.sort(key=lambda c: -c["count"])
+    _collections_cache.update(at=time.time(), value=out)
+    return out[:limit]
+
+
+_style_q: deque = deque()
+_style_cv = threading.Condition()
+
+
+def queue_style(name: str, title: str = ""):
+    if not ONLINE or not name or _key(name) in NOT_ARTISTS:
+        return
+    rows = db("SELECT tags, source FROM artist_styles WHERE key=?", (_key(name),))
+    if rows and (rows[0][1] != "probe" or json.loads(rows[0][0])):
+        return
+    with _style_cv:
+        if any(_key(n) == _key(name) for n, _ in _style_q) or len(_style_q) > 500:
+            return
+        _style_q.append((name, title))
+        _style_cv.notify()
+
+
+def queue_styles_for(tid: str):
+    t = track(tid)
+    for name in artist_names((t or {}).get("artist", "")):
+        queue_style(name, (t or {}).get("title", ""))
+
+
+def backfill_styles():
+    for t, _ in your_tracks():
+        queue_styles_for(t["id"])
+
+
+def _style_loop():
+    while True:
+        with _style_cv:
+            while not _style_q:
+                _style_cv.wait()
+            name, title = _style_q.popleft()
+        try:
+            tag_artist(name, title)
+        except Exception as exc:
+            print("style lookup failed", name, repr(exc), file=sys.stderr)
+            time.sleep(5)
+
+
+def style_station(style: str, said: str, q: str) -> dict | None:
+    """A station that plays your own tracks in this style, interleaved with radio grown from them."""
+    mine = collection(style)
+    label = style_label(style)
+    if not mine:
+        return None
+    seeds = random.sample(mine[: max(6, len(mine) // 2)], k=min(3, len(mine)))
+    radio: list[str] = []
+    for seed in seeds:
+        for cid in _radio_from(seed["id"]):
+            if cid not in radio:
+                radio.append(cid)
+    random.shuffle(radio)
+    if len(mine) < COLLECTION_MIN:  # too few of yours yet: lean on the genre's own radio as well
+        extra = genre_seed(style)
+        if extra:
+            radio = [c for c in _radio_from(extra) if c not in radio] + radio
+        label = f"{style.title()} radio"
+    picks = mine[:]
+    random.shuffle(picks)
+    first, rest = picks[0], [t["id"] for t in picks[1:]]
+    queue, mine_left = [], rest[:]
+    while mine_left or radio:  # two of yours, then one new song that follows from them
+        queue += mine_left[:2]
+        mine_left = mine_left[2:]
+        if radio:
+            queue.append(radio.pop(0))
+        if not mine_left:
+            queue += radio
+            radio = []
+    out = create_station({"trackId": first["id"], "label": label, "queue": queue, "pool": [t["id"] for t in mine]})
+    heard = f"{label} · {len(mine)} of your songs" if len(mine) >= COLLECTION_MIN else label
+    return {"kind": "collection", "said": said, "query": q, "heard": heard, "style": style, "mine": len(mine), **out}
 
 
 # ---------------------------------------------------------------- Search
@@ -616,7 +1235,7 @@ def _deezer(path: str, q: str, limit: int) -> list[dict]:
         return []
     query = urllib.parse.urlencode({"q": q, "limit": limit})
     req = urllib.request.Request(f"https://api.deezer.com/{path}?{query}", headers=UA)
-    with urllib.request.urlopen(req, timeout=4) as r:
+    with online_urlopen(req, timeout=4) as r:
         return json.load(r).get("data", []) or []
 
 
@@ -756,6 +1375,10 @@ def genre_seed(genre: str) -> str | None:
 def play_spoken(said: str) -> dict:
     """One spoken request -> what to play. Vibes and likes resolve locally; names are fixed first."""
     q = spoken_query(said)
+    mix = find_mix(q) if q else None
+    if mix:
+        out = mix_station(mix)
+        return {"kind": "mix", "said": said, "query": q, "heard": mix["name"], **out}
     if LIKES.match(q):
         liked = [track(r[0]) for r in db("SELECT id FROM likes WHERE value>0 ORDER BY at DESC LIMIT 60")]
         liked = [t for t in liked if t]
@@ -763,6 +1386,15 @@ def play_spoken(said: str) -> dict:
             raise LookupError("You haven’t liked any songs yet.")
         random.shuffle(liked)
         return {"kind": "likes", "said": said, "query": q, "heard": "Your likes", "station": None, "tracks": liked}
+    style = style_request(q) if q else ""
+    if style:
+        out = style_station(style, said, q)
+        if out:
+            return out
+        seed = genre_seed(style)
+        if seed:
+            out = create_station({"trackId": seed, "label": f"{style.title()} radio"})
+            return {"kind": "genre", "said": said, "query": q, "heard": f"{style.title()} radio", **out}
     vibe = spoken_vibe(q) if q else None
     if not q:  # "play music": pick up from what the listener likes or played last
         last = db("SELECT id FROM likes WHERE value>0 ORDER BY at DESC LIMIT 1") or db("SELECT id FROM plays WHERE action='played' ORDER BY at DESC LIMIT 1")
@@ -791,6 +1423,8 @@ def play_spoken(said: str) -> dict:
     fix = {**fix, "kind": kind}
     label = f"{fix['artist']} radio" if fix["kind"] == "artist" else f"{q.title()} radio" if fix["kind"] == "genre" else ""
     out = create_station({"trackId": first["id"], "label": label})
+    if fix["kind"] in {"song", "artist+words", "search"} and not style:
+        record_request(first["id"], "spoken")  # you named this song (a style word like "synthwave" names none)
     heard = fix["artist"] if fix["kind"] == "artist" else f"{q.title()} radio" if fix["kind"] == "genre" else f"{first['title']} · {first['artist']}"
     return {"kind": fix["kind"], "said": said, "query": q, "heard": heard, "corrected": fix["query"] if fix["artist"] else "", "source": fix["source"], **out}
 
@@ -816,7 +1450,7 @@ def _radio_from(tid: str) -> list[str]:
     ids: list[str] = []
     if seed_vid:
         try:
-            watch = ytm().get_watch_playlist(seed_vid, radio=True, limit=60)
+            watch = ytm_radio().get_watch_playlist(seed_vid, radio=True, limit=60)
             for item in watch.get("tracks", []):
                 t = remember_yt(item)
                 if t:
@@ -833,6 +1467,19 @@ def create_station(seed: dict) -> dict:
     tid = seed.get("trackId") or ""
     title = ""
     if not tid and seed.get("query"):
+        said = str(seed["query"]).strip()
+        mine = re.fullmatch(r"(?:your )?(.+)", said.lower())
+        if mine and mine.group(1) in STYLE_FAMILIES:  # a "Synthwave" chip (older clients send "Your synthwave")
+            out = style_station(mine.group(1), said, said)
+            if out:
+                return {"station": out["station"], "tracks": out["tracks"]}
+        mix = find_mix(said)
+        if mix:  # a saved mix chip, or its name typed/said
+            return mix_station(mix)
+        vibe = next((v for v in VIBES if v["label"].lower() == said.lower()), None)
+        if vibe:  # a vibe chip seeds from its well-loved track, not a text search for its label
+            seed = {**seed, "query": vibe["query"], "label": vibe["label"]}
+    if not tid and seed.get("query"):
         results = search(seed["query"])
         if not results:
             raise LookupError("nothing matched that")
@@ -842,8 +1489,10 @@ def create_station(seed: dict) -> dict:
     if not first:
         raise LookupError("unknown track")
     title = title or seed.get("label") or f"{first['title']} radio"
-    candidates = [c for c in _radio_from(tid) if c != tid]
+    candidates = [c for c in (seed.get("queue") or _radio_from(tid)) if c != tid]
     state = {"seed": tid, "queue": candidates, "played": [tid], "lastSeed": tid}
+    if seed.get("pool"):
+        state["pool"] = list(seed["pool"])[:300]  # your own tracks this station keeps coming back to
     sid = uuid.uuid4().hex[:16]
     db("INSERT INTO stations(id,title,seed,state,at) VALUES(?,?,?,?,?)", (sid, title, tid, json.dumps(state), time.time()))
     tracks = [first] + _take(sid, state, 14)
@@ -852,26 +1501,126 @@ def create_station(seed: dict) -> dict:
     return {"station": {"id": sid, "title": title, "more": f"{PUBLIC_PREFIX}/api/station/{sid}/more"}, "tracks": tracks}
 
 
+# Scripts that mark a regional chart insert rather than a song that follows the seed.
+_SCRIPTS = {"thai": re.compile(r"[\u0e00-\u0e7f]"), "hangul": re.compile(r"[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]")}
+
+
+def _scripts(text: str) -> set[str]:
+    return {name for name, rx in _SCRIPTS.items() if rx.search(text or "")}
+
+
+def station_scripts(state: dict) -> set[str]:
+    out: set[str] = set()
+    for tid in {state.get("seed"), state.get("lastSeed")}:
+        t = track(tid) if tid else None
+        if t:
+            out |= _scripts(f"{t.get('title', '')} {t.get('artist', '')}")
+    return out
+
+
+def off_station(t: dict, allowed: set[str], taste: Taste) -> bool:
+    """True when a candidate is in a language the station's seed is not (Thai/Korean filler)."""
+    if t.get("liked"):
+        return False
+    if any(taste.artist.get(_key(name), 0.0) > 0 for name in artist_names(t.get("artist", ""))):
+        return False
+    return bool(_scripts(t.get("title", "")) - allowed)
+
+
+# Variety: a station never serves another version of a song it just served, or that you played moments ago.
+# "Somebody (2024) (feat. Kimbra)" by Gotye, FISHER is the same song as "Somebody That I Used To Know
+# (modish. Remix)" by Gotye; "Show Me Love X Cola" is Show Me Love again.
+VARIETY_STATION = 40  # songs this station served recently
+VARIETY_PLAYED = 12   # songs you played most recently, on any station
+_TITLE_TAIL = re.compile(r"\s+(?:feat\.?|ft\.?|featuring)\s.*$", re.I)
+_TITLE_PARTS = re.compile(r"\s+(?:[-–—|/]|x|×|vs\.?)\s+", re.I)
+
+
+def song_names(title: str) -> list[list[str]]:
+    """Every song a title names, as words: "Beyoncé, Robin S - Break My Soul x Show Me Love (Mashup)"
+    names Break My Soul and Show Me Love. Version tags and featured artists are dropped."""
+    text = _BRACKETS.sub("", unicodedata.normalize("NFKC", title or "").casefold())
+    names = []
+    for part in _TITLE_PARTS.split(text.strip()):
+        words = re.findall(r"[^\W_]+", _TITLE_TAIL.sub("", part.strip()))
+        if words and words not in names:
+            names.append(words)
+    return names
+
+
+def song_sig(t: dict) -> tuple[list[list[str]], set[str]]:
+    return song_names(t.get("title", "")), {_key(a) for a in artist_names(t.get("artist", ""))}
+
+
+def _same_name(wa: list[str], wb: list[str], shared: bool) -> bool:
+    if wa == wb:  # a one-word title ("Rise") by someone else is a different song
+        return shared or len(wa) >= 2
+    short, long_ = (wa, wb) if len(wa) < len(wb) else (wb, wa)
+    if shared and long_[:len(short)] == short:  # "Somebody" (2024) vs "Somebody That I Used To Know"
+        return True
+    # A flip that keeps a 3+ word hook of the title ("USED TO KNOW" by SCXLETTE) is that song again.
+    k = len(short)
+    return k >= 3 and any(long_[i:i + k] == short for i in range(len(long_) - k + 1))
+
+
+def same_song(a: tuple[list[list[str]], set[str]], b: tuple[list[list[str]], set[str]]) -> bool:
+    shared = bool(a[1] & b[1])
+    return any(_same_name(wa, wb, shared) for wa in a[0] for wb in b[0])
+
+
+def recent_songs(state: dict) -> list[tuple[str, tuple[list[list[str]], set[str]]]]:
+    ids = state["played"][-VARIETY_STATION:]
+    ids += [r[0] for r in db("SELECT id FROM plays WHERE action='played' ORDER BY at DESC LIMIT ?", (VARIETY_PLAYED,))]
+    out = []
+    for tid in dict.fromkeys(ids):
+        t = track(tid)
+        if t:
+            out.append((tid, song_sig(t)))
+    return out
+
+
 def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
     taste = taste_profile()
+    recent = recent_songs(state)
     out: list[dict] = []
     attempts = 0
     while len(out) < n and attempts < 4:
         attempts += 1
+        allowed = station_scripts(state)
+        pool = set(state.get("pool") or [])
         while state["queue"] and len(out) < n:
             tid = state["queue"].pop(0)
-            if tid in state["played"]:
+            if tid in state["played"] and not (tid in pool and tid not in state["played"][-40:] and tid not in [t["id"] for t in out]):
                 continue
             t = track(tid)
-            if t and not blocked(t, taste):
+            if t and not blocked(t, taste) and not off_station(t, allowed, taste):
+                sig = song_sig(t)
+                if any(rid != tid and same_song(sig, rsig) for rid, rsig in recent):
+                    continue  # another version of a song you just heard
                 out.append(t)
                 state["played"].append(tid)
+                recent.append((tid, sig))
         if len(out) < n:
             # Endless: reseed from the most recent liked track in this station, else a recent track
             # that is not the kind of music you turned down.
             liked = [r[0] for r in db("SELECT id FROM likes WHERE value>0 ORDER BY at DESC LIMIT 20")]
-            pool = [p for p in state["played"][-30:] if p in liked] or [p for p in state["played"][-8:] if fits(p, taste)]
-            reseed = random.choice(pool) if pool else state["seed"]
+            if pool:  # a collection station grows from your own tracks and brings a few of them back
+                seeds = [p for p in pool if fits(p, taste)]
+                reseed = random.choice(seeds) if seeds else state["seed"]
+                again = [p for p in seeds if p not in state["played"][-40:]]
+                random.shuffle(again)
+                fresh = [c for c in _radio_from(reseed) if c not in state["played"]]
+                mixed = []
+                while again or fresh:
+                    mixed += again[:1] + fresh[:3]
+                    again, fresh = again[1:], fresh[3:]
+                state["lastSeed"] = reseed
+                state["queue"] = mixed
+                if not state["queue"]:
+                    break
+                continue
+            pool_ = [p for p in state["played"][-30:] if p in liked] or [p for p in state["played"][-8:] if fits(p, taste)]
+            reseed = random.choice(pool_) if pool_ else state["seed"]
             state["lastSeed"] = reseed
             state["queue"] = [c for c in _radio_from(reseed) if c not in state["played"]]
             if not state["queue"]:
@@ -957,14 +1706,26 @@ def fetch_audio(vid: str) -> Path:
         if hit:
             return hit
         tmp = CACHE / f".{vid}.{uuid.uuid4().hex[:6]}"
-        cmd = [YTDLP, "-q", "--no-cache-dir", "--no-warnings", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio",
+        cmd = [YTDLP, "-q", "--js-runtimes", "node", "--no-cache-dir", "--no-warnings", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio",
                "-o", f"{tmp}.%(ext)s", f"https://music.youtube.com/watch?v={vid}"]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        with _consent_lock:
+            require_online()
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            _downloads.add(proc)
+        try:
+            _, stderr = proc.communicate(timeout=120)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise RuntimeError("download timed out")
+        finally:
+            with _consent_lock:
+                _downloads.discard(proc)
         made = sorted(CACHE.glob(f"{tmp.name}.*"))
-        if proc.returncode != 0 or not made:
+        if not ONLINE or proc.returncode != 0 or not made:
             for m in made:
                 m.unlink(missing_ok=True)
-            raise RuntimeError((proc.stderr or "download failed").strip()[-300:])
+            raise RuntimeError((stderr or "download failed").strip()[-300:])
         final = CACHE / f"{vid}{made[0].suffix}"
         made[0].replace(final)
         _evict()
@@ -1020,7 +1781,7 @@ def art_bytes(tid: str) -> tuple[bytes, str] | None:
         host = urllib.parse.urlparse(url).hostname or ""
         if not url.startswith("https://") or not ART_HOSTS.match(host):
             return None
-        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "WizardMusic/1"}), timeout=10) as r:
+        with online_urlopen(urllib.request.Request(url, headers={"User-Agent": "WizardMusic/1"}), timeout=10) as r:
             data = r.read(2_000_000)
     elif tid.startswith("lib:"):
         try:
@@ -1052,12 +1813,16 @@ def home() -> dict:
     count = db("SELECT COUNT(*) FROM tracks WHERE source='library'")[0][0]
     yt_ok = ONLINE
     return {
+        "settings": online_settings(),
         "sources": [
             {"id": "youtube", "name": "Online sources", "status": "enabled" if ONLINE else "disabled",
-             "detail": "Catalog access enabled; availability varies" if ONLINE else "Setup required · disabled by default", "ok": yt_ok},
+             "detail": "Catalog access enabled; availability varies" if ONLINE else "Off · enable above when you choose", "ok": yt_ok},
             {"id": "library", "name": "Wizard Library", "status": "connected", "detail": f"{count} track{'s' if count != 1 else ''} on your Wizard", "ok": True},
         ],
-        "vibes": [{"id": v["id"], "label": v["label"]} for v in VIBES] if ONLINE else [],
+        "vibes": ([{"id": f"mix-{m['key'].replace(' ', '-')}", "label": m["name"], "count": len(m["ids"])} for m in mixes()]
+                  + [{"id": f"mine-{c['style'].replace(' ', '-')}", "label": c["label"], "count": c["count"]} for c in collections(6)]
+                  + [{"id": v["id"], "label": v["label"]} for v in VIBES
+                     if v["id"] not in hidden_chips() and v["label"].lower() not in hidden_chips()]) if ONLINE else [],
         "liked": [t for t in liked if t],
         "recent": [t for t in recent if t],
         "library": [t for t in library if t],
@@ -1107,8 +1872,12 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth():
             return
         try:
+            if path == "/api/settings":
+                return self._json(200, online_settings())
             if path == "/api/home":
                 return self._json(200, home())
+            if path == "/api/scores":  # points per song, with the raw counts behind them
+                return self._json(200, scores(int(qs.get("limit", ["0"])[0] or 0)))
             if path == "/api/search":
                 q = (qs.get("q") or [""])[0][:200]
                 return self._json(200, {"tracks": search(q) if q.strip() else []})
@@ -1148,11 +1917,33 @@ class Handler(BaseHTTPRequestHandler):
             return
         try:
             body = self._body()
+            if url.path == "/api/settings":
+                return self._json(200, set_online(body.get("online")))
             if url.path == "/api/station":
-                return self._json(200, create_station(body))
+                out = create_station(body)
+                if body.get("trackId") and not body.get("label") and out.get("tracks"):
+                    record_request(out["tracks"][0]["id"], "tap")  # you tapped this song
+                return self._json(200, out)
             if url.path == "/api/play":
                 said = str(body.get("said", ""))[:300]
                 return self._json(200, play_spoken(said))
+            if url.path == "/api/keep":  # "that session was on point"
+                since, until = float(body.get("since", 0)), float(body.get("until") or time.time())
+                if not 0 < since < until or until - since > 86400:
+                    return self._json(400, {"error": "since/until must span at most a day"})
+                ids = keep_session(since, until, str(body.get("reason") or "session on point"))
+                return self._json(200, {"kept": [track(t) for t in ids]})
+            if url.path == "/api/mixes":  # save a named mix: explicit ids, or the songs played between since/until
+                ids = [str(t)[:40] for t in (body.get("ids") or [])]
+                if not ids and body.get("since"):
+                    since, until = float(body["since"]), float(body.get("until") or time.time())
+                    if not 0 < since < until or until - since > 86400:
+                        return self._json(400, {"error": "since/until must span at most a day"})
+                    ids = session_songs(since, until)
+                try:
+                    return self._json(200, save_mix(str(body.get("name", "")), ids, [str(a) for a in body.get("aliases") or []]))
+                except ValueError as e:
+                    return self._json(400, {"error": str(e)})
             if url.path == "/api/feedback":
                 tid = str(body.get("id", ""))[:40]
                 action = body.get("action")
@@ -1162,15 +1953,19 @@ class Handler(BaseHTTPRequestHandler):
                 if action in {"like", "unlike", "dislike"}:
                     value = {"like": 1, "unlike": 0, "dislike": -1}[action]
                     db("INSERT OR REPLACE INTO likes(id,value,at) VALUES(?,?,?)", (tid, value, time.time()))
+                    db("INSERT INTO feedback_log(id,at,action) VALUES(?,?,?)", (tid, time.time(), action))
+                    _collections_cache["at"] = 0.0
                     taste_changed()
                     if action == "dislike":
                         learned = learn_dislike(tid)
                     elif action == "like":
                         queue_info(tid)
+                        queue_styles_for(tid)
                 else:
                     fresh = record_play(tid, action, str(body.get("eventId", "")))
                     if action == "played" and fresh:
                         prefetch(tid)
+                        queue_styles_for(tid)
                 # The player sends what is queued after this track; answer with what no longer fits.
                 upcoming = body.get("upcoming") if isinstance(body.get("upcoming"), list) else []
                 taste = taste_profile()
@@ -1248,6 +2043,9 @@ def main():
     scan_library()
     threading.Thread(target=_library_loop, daemon=True).start()
     threading.Thread(target=_info_loop, daemon=True).start()
+    threading.Thread(target=_style_loop, daemon=True).start()
+    _quiet(backfill_requests)
+    threading.Thread(target=lambda: _quiet(backfill_styles), daemon=True).start()
     for tid, value in db("SELECT id, value FROM likes WHERE value != 0"):
         queue_info(tid, similar=value < 0)  # learn genre/similar artists for thumbs given before this existed
     server = ThreadingHTTPServer((HOST, PORT), Handler)

@@ -9,8 +9,8 @@ import { request as httpRequest } from 'node:http'
 
 export const BASE = '/wizard-music'
 const HUB_PREFIX = '/wizard/music/'
-const API_GET = /^\/api\/(home|search|station\/[a-f0-9]{16}\/more)$/
-const API_POST = /^\/api\/(station|feedback|scan|play)$/
+const API_GET = /^\/api\/(home|settings|scores|search|station\/[a-f0-9]{16}\/more)$/
+const API_POST = /^\/api\/(settings|station|feedback|scan|play|keep|mixes)$/
 const MEDIA = /^\/(stream|art)\/((?:yt|lib)(?::|%3A)[A-Za-z0-9_-]{1,40})$/
 const FORWARD_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control', 'last-modified']
 

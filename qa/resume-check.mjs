@@ -3,7 +3,8 @@
 import { readFile } from 'node:fs/promises'
 import { chromium } from 'playwright'
 const [port = '9205', shots = '/tmp'] = process.argv.slice(2)
-const core = '/home/telos/apps/wizard-os-home/web/core/'
+const core = (process.env.WIZARD_CORE_DIR || '').replace(/\/?$/, '/')
+if (core === '/') throw new Error('Set WIZARD_CORE_DIR to the installed Wizard web/core directory')
 const base = `http://127.0.0.1:${port}/wizard-music/`
 
 // A stand-in for the phone's background player: it remembers nothing across page loads, like after an update.
@@ -36,9 +37,9 @@ async function run(browser, mode) {
   await page.locator('.music-row').nth(1).click()
   await page.waitForTimeout(1500)
   if (!(await page.locator('.music-now').count())) await page.locator('.music-mini-open').click()
-  await page.locator('.music-now h2').waitFor({ timeout: 15000 })
+  await page.locator('.music-now .music-deck-slide:not(.side) h2').waitFor({ timeout: 15000 })
   await page.waitForTimeout(3000)
-  const title = (await page.locator('.music-now h2').textContent()).trim()
+  const title = (await page.locator('.music-now .music-deck-slide:not(.side) h2').textContent()).trim()
   // Jump to 1:13 and pause, as if you'd been listening a while.
   await page.locator('.music-play[aria-label=Pause]').click()
   const slider = page.locator('.music-now input[type=range]')
@@ -51,7 +52,7 @@ async function run(browser, mode) {
   await page.reload()
   await page.locator('.music-now').waitFor({ timeout: 15000 })
   await page.waitForTimeout(1500)
-  const after = await page.evaluate(() => ({ title: document.querySelector('.music-now h2')?.textContent, clock: document.querySelector('.music-seek-times span')?.textContent, play: document.querySelector('.music-play')?.getAttribute('aria-label'), cmds: window.__cmds || null }))
+  const after = await page.evaluate(() => ({ title: document.querySelector('.music-now .music-deck-slide:not(.side) h2')?.textContent, clock: document.querySelector('.music-seek-times span')?.textContent, play: document.querySelector('.music-play')?.getAttribute('aria-label'), cmds: window.__cmds || null }))
   await page.screenshot({ path: `${shots}/music-resume-${mode}.png` })
   await page.goBack()
   await page.waitForTimeout(500)

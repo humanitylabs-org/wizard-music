@@ -1,10 +1,28 @@
 services:
+  wizard-music-init:
+    image: ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.1
+    pull_policy: never
+    user: '0:0'
+    network_mode: none
+    restart: 'no'
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: ['no-new-privileges:true']
+    read_only: true
+    command: ['python3', '-c', 'import os; [(os.makedirs(p, exist_ok=True), os.chown(p, 1000, 1000), os.chmod(p, 448)) for p in ("/data", "/music")]']
+    volumes:
+      - ${APP_DATA_DIR}/data:/data
+      - ${APP_DATA_DIR}/music:/music
   wizard-music:
-    image: ghcr.io/humanitylabs-org/wizard-music:0.1.0-test
+    depends_on:
+      wizard-music-init:
+        condition: service_completed_successfully
+    image: ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.1
     pull_policy: never
     restart: unless-stopped
     ports: ['127.0.0.1:${APP_PORT:-9205}:9205']
     cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER, SETUID, SETGID]
     security_opt: ['no-new-privileges:true']
     read_only: true
     tmpfs: [/tmp]
@@ -12,12 +30,11 @@ services:
       WIZARD_MUSIC_APP_HOST: 0.0.0.0
       WIZARD_MUSIC_APP_PORT: '9205'
       WIZARD_MUSIC_HUB_ORIGIN: http://127.0.0.1:8793
-      WIZARD_MUSIC_HUB_TOKEN: ${WIZARD_MUSIC_HUB_TOKEN:-}
       WIZARD_MUSIC_CONNECTORS_URL: ${WIZARD_MUSIC_CONNECTORS_URL:-}
       MUSIC_ADAPTER_TOKEN: ${MUSIC_ADAPTER_TOKEN:-}
       WIZARD_MUSIC_HUB_HOME: /data
       WIZARD_MUSIC_LIBRARY: /music
-      WIZARD_MUSIC_ONLINE: ${WIZARD_MUSIC_ONLINE:-0}
+      WIZARD_MUSIC_ONLINE: "0"
       WIZARD_TRUSTED_HOSTS: ${WIZARD_TRUSTED_HOSTS:-}
       WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
     volumes:

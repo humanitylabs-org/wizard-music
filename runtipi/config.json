@@ -3,19 +3,19 @@
   "name": "Music",
   "wizard_type": "service",
   "available": true,
-  "short_desc": "Your music library inside Wizard. Backend setup required.",
-  "description": "Private test release; no bundled music or account. Configure your own library and hub token using SETUP.md. Native background playback not certified.",
+  "short_desc": "Your music library, online search and radio. Ready on first open.",
+  "description": "Test release: open Music and choose whether to enable online sources, or add your own audio files. No token or server configuration needed. No bundled music or account. Native background playback not certified.",
   "author": "Humanity Labs",
   "port": 9205,
   "categories": [
     "media"
   ],
   "tipi_version": 1,
-  "version": "0.1.0",
+  "version": "0.2.0-test.1",
   "source": "https://github.com/humanitylabs-org/wizard-music",
   "exposable": false,
   "supported_architectures": [
-    "arm64"
+    "arm64", "amd64"
   ],
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",
@@ -35,19 +35,6 @@
       "label": "Scoped Music adapter token (not owner, MCP or broker token)",
       "env_variable": "MUSIC_ADAPTER_TOKEN",
       "required": false
-    },
-    {
-      "type": "password",
-      "label": "Music backend token (generate a new random value)",
-      "env_variable": "WIZARD_MUSIC_HUB_TOKEN",
-      "required": true
-    },
-    {
-      "type": "text",
-      "label": "Enable optional online catalogs (0 or 1)",
-      "env_variable": "WIZARD_MUSIC_ONLINE",
-      "required": false,
-      "default": "0"
     },
     {
       "type": "text",

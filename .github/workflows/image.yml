@@ -1,0 +1,67 @@
+name: app-image
+on:
+  push:
+    branches: [main, feature/run-from-source, release/v0.2.0-test]
+    paths-ignore: [wizard.md, runtipi/docker-compose.yml, SETUP.md, README.md]
+  workflow_dispatch: {}
+permissions:
+  contents: read
+  packages: write
+jobs:
+  image:
+    uses: humanitylabs-org/wizard-app-index/.github/workflows/app-image.yml@feature/packaging-rule-14
+    with:
+      context: .
+      dockerfile: Dockerfile
+      image: ghcr.io/humanitylabs-org/wizard-music
+  tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci && npm test && npm run build
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r hub/requirements.txt pytest
+      - run: python -m pytest -q hub/tests && python qa/test_offline.py
+      - run: python qa/check-portability.py
+  smoke-package:
+    needs: [image, tests]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {arch: amd64, runner: ubuntu-24.04}
+          - {arch: arm64, runner: ubuntu-24.04-arm}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Smoke immutable native image and export Alpha archive
+        env:
+          INDEX: ${{ needs.image.outputs.digest }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          source="ghcr.io/humanitylabs-org/wizard-music@$INDEX"
+          image="ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.1"
+          docker pull "$source"
+          docker tag "$source" "$image"
+          python3 qa/smoke-image.py "$image" "evidence/$ARCH"
+          mkdir -p artifacts
+          docker save "$image" | gzip -n > "artifacts/wizard-music-$ARCH.tar.gz"
+          sha256sum "artifacts/wizard-music-$ARCH.tar.gz" > "artifacts/SHA256SUMS-$ARCH"
+          cp "evidence/$ARCH/smoke.json" "artifacts/smoke-$ARCH.json"
+          printf '%s\n' "$INDEX" > artifacts/index-digest.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: music-release-${{ matrix.arch }}
+          path: artifacts/*
+          retention-days: 14

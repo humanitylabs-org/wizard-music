@@ -1,12 +1,21 @@
-# Music · private Wizard test release
-Repackages the existing embedded Music web player and music hub, not a new native app. Supports an owner's mounted audio library, search, playback, queue, liked songs and persisted listening state. Ships no music, credentials, history or account. Online catalogs are opt-in; source availability is not guaranteed.
+# Wizard Music
 
-See **SETUP.md** for exact recipient/backend wiring, **API.md** for endpoint and MCP contracts. Requires a Wizard host serving its approved `/wizard-os-home/core/app-client.js`, same-origin gateway routing and private authorization. A bare container port is an API diagnostic, not a complete Wizard preview.
+Your music library inside Wizard, with a player, search, radio, liked songs and saved mixes. This MIT-licensed test release ships no music, account, history or credentials.
 
-Runtime dependencies: Node 22, Python 3, FFmpeg, tinytag, ytmusicapi and yt-dlp, all declared in Dockerfile/package-lock/hub requirements. React/Vite/TypeScript build dependencies are declared, no sibling checkout dependency. Docker volumes store only the recipient's database/cache and a read-only mounted library. UI session position/queue is in browser localStorage under `wizard-music.session.v1`.
+**Install:** in the Wizard App Store’s Alpha channel, choose Music → Get → Open. Turn on Online sources if you want catalog search and radio, or add your own audio files. No manual server configuration is needed. See [SETUP.md](SETUP.md) for first-song instructions and optional advanced integrations, and [API.md](API.md) for the API/MCP contract.
 
-Source lineage: embedded UI from existing Music ae5c008 plus its existing shared WizardApp adoption; hub from existing 8e5a1ba. Only runtime/source files are extracted: historical APKs, research, media, personal env, old git history and owner data are excluded. Package adds portable runtime, private setup, read-only MCP and offline-first source configuration. Native background playback remains a separate shell capability; no APK is included or changed.
+Online sources are off by default; searches and track details leave the box only after consent. Provider availability and region restrictions vary. Use only recordings you are authorized to access.
 
-Build: `npm ci && npm test && npm run build`, then `docker build -t wizard-music-test .` on the designated build host. Use the image digest in the release receipt for installation.
+## Runtime and development
 
-License: MIT for this package (see LICENSE). React is MIT; Vite/Vitest/Playwright are MIT/Apache-2.0; Python is PSF; tinytag MIT, ytmusicapi MIT, yt-dlp Unlicense, FFmpeg LGPL/GPL as distributed by Debian. No third-party recordings are distributed.
+Node 22, Python 3, FFmpeg, tinytag, ytmusicapi and yt-dlp are declared in Dockerfile/package-lock/hub requirements. The image initializes the data mount and a random server-only token, then runs both servers as uid1000 with no effective capabilities. The library is read-only. Wizard provides its shared App client, same-origin authenticated gateway, Appearance v1, Back and sharing.
+
+`npm ci && npm test && npm run build`; hub: `uv run --no-project --with pytest --with-requirements requirements.txt -- python -m pytest -q tests` from `hub/`; offline: `python qa/test_offline.py`. Sustained builds run on the designated worker or GitHub Actions. The shared Actions builder produces native amd64/arm64 images; release smoke jobs export matching Alpha Store archives. The Store checks the prerelease checksums before loading.
+
+Player gestures: swipe left/right for next/previous, pull down Now Playing to minimize it, and press Back to return to the library without leaving Music. Playback position survives reopening. Saved mixes, collections, points, keep-session feedback and radio variety use the existing hub domain implementation.
+
+Browser QA uses the installed approved shared core: set `WIZARD_CORE_DIR`; `qa/swipe-check.mjs` also needs `WIZARD_QA_AUDIO` pointing to a labelled generated WAV. These fixture scripts do not prove real-provider playback. Real clean-install evidence is recorded separately in the release receipt.
+
+## License
+
+MIT for this package (see LICENSE). React, Vite, Vitest and tinytag are MIT; Playwright Apache-2.0; Python PSF; ytmusicapi MIT; yt-dlp Unlicense; FFmpeg LGPL/GPL as distributed by Debian. No third-party recordings are distributed. Native Android screen-off/Bluetooth/lock-screen playback remains a separate Wizard shell capability; this package does not include an APK.

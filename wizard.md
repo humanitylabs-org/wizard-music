@@ -2,7 +2,7 @@
 wizard: 0.2
 id: wizard-music
 name: Music
-version: 0.1.0
+version: 0.2.0-test.1
 type: service
 category: app
 voice_names: [music, songs, music player, wizard music]
@@ -35,6 +35,10 @@ provides: [music]
 needs: []
 uses: []
 ---
-Private test release. Empty library; configure the recipient's backend using SETUP.md.
+## Registry packaging
+
+The Alpha Store installs architecture-specific, checksum-verified Docker archives from the public prerelease, like Android Apps. The shared Actions builder also produces a multi-architecture GHCR index. Image-only packaging is not required on older Wizard releases.
+
+Test release. Open Music after Store Get; online sources are off until you choose to enable them. Your data directory and server-only token are initialized automatically.
 Requires the host's shared WizardApp client and authenticated same-origin gateway.
 Native background playback is not certified by this embedded web package.
