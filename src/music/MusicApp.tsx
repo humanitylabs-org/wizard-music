@@ -9,7 +9,8 @@ import './music.css'
 const BASE = new URL('./', document.baseURI).pathname
 
 type MusicSource = { id: string; name: string; status: string; detail: string; ok: boolean }
-type MusicHome = { settings?: { online: boolean }; sources: MusicSource[]; vibes: { id: string; label: string }[]; liked: MusicTrack[]; recent: MusicTrack[]; library: MusicTrack[]; taste?: { avoid: string[] } }
+type MusicPlayback = { state: 'off' | 'untested' | 'ok' | 'blocked' | 'failed'; via: string; message: string }
+type MusicHome = { settings?: { online: boolean; relay?: boolean }; playback?: MusicPlayback; sources: MusicSource[]; vibes: { id: string; label: string }[]; liked: MusicTrack[]; recent: MusicTrack[]; library: MusicTrack[]; taste?: { avoid: string[] } }
 type FeedbackAction = 'like' | 'unlike' | 'dislike' | 'played' | 'skipped'
 type FeedbackResult = { track: MusicTrack; drop?: string[]; learned?: { artists: string[]; genre: string; similar: string[] } | null }
 
@@ -21,6 +22,8 @@ async function musicJson<T>(path: string, init?: RequestInit): Promise<T> {
 export const musicApi = {
   home: () => musicJson<MusicHome>(BASE + 'api/home'),
   settings: (online: boolean) => musicJson<{online: boolean}>(BASE + 'api/settings', { method: 'POST', body: JSON.stringify({online}) }),
+  /** Home connection (Wizard Home Relay) address, or '' to remove it. Never read back. */
+  relay: (relay: string) => musicJson<{online: boolean; relay: boolean}>(BASE + 'api/settings', { method: 'POST', body: JSON.stringify({relay}) }),
   search: (q: string) => musicJson<{ tracks: MusicTrack[] }>(`${BASE}api/search?q=${encodeURIComponent(q)}`),
   station: (seed: { trackId?: string; query?: string; label?: string }) => musicJson<{ station: MusicStation; tracks: MusicTrack[] }>(BASE + 'api/station', { method: 'POST', body: JSON.stringify(seed) }),
   feedback: (id: string, action: FeedbackAction, upcoming: string[] = []) => musicJson<FeedbackResult>(BASE + 'api/feedback', { method: 'POST', body: JSON.stringify({ id, action, upcoming }) }),
@@ -302,6 +305,8 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
         finally { setSavingConsent(false) }
       }} /> Online sources</label>
       <p>When on, searches and track details go to YouTube Music, Deezer, Apple and MusicBrainz to find songs, audio and artwork.</p>
+      {home.playback?.message && <p className="music-warning" role="alert">{home.playback.message}</p>}
+      {home.settings?.online && <HomeConnection connected={Boolean(home.settings.relay)} onSaved={async () => setHome(await musicApi.home())} notify={notify} />}
     </section>}
 
     {starting && <p className="music-status" role="status">Starting your station…</p>}
@@ -558,4 +563,24 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
       </section>
     </div>
   </div>
+}
+
+/** Optional home-network exit for a Wizard on a data-center server (YouTube blocks those). */
+function HomeConnection({ connected, onSaved, notify }: { connected: boolean; onSaved: () => Promise<void>; notify: (message: string) => void }) {
+  const [open, setOpen] = useState(false)
+  const [address, setAddress] = useState('')
+  const [saving, setSaving] = useState(false)
+  const save = async (value: string) => {
+    setSaving(true)
+    try { await musicApi.relay(value); setAddress(''); setOpen(false); await onSaved() }
+    catch { notify('That address didn\u2019t work. It looks like socks5h://wizard:\u2026@100.x.x.x:18765') }
+    finally { setSaving(false) }
+  }
+  if (connected && !open) return <p className="music-home-link">Home connection on \u00b7 <button type="button" className="music-link" onClick={() => void save('')} disabled={saving}>Remove</button></p>
+  if (!open) return <p className="music-home-link">On a cloud server? <button type="button" className="music-link" onClick={() => setOpen(true)}>Add a home connection</button></p>
+  return <form className="music-home-form" onSubmit={(event) => { event.preventDefault(); void save(address) }}>
+    <p>Install Wizard Home Relay on a computer at home that\u2019s on your Tailscale, then paste the address it prints.</p>
+    <input type="password" autoComplete="off" value={address} placeholder="socks5h://wizard:\u2026@100.x.x.x:18765" aria-label="Home connection address" onChange={(event) => setAddress(event.target.value)} />
+    <div><button type="submit" className="secondary-action" disabled={saving || !address.trim()}>Save</button><button type="button" className="music-link" onClick={() => setOpen(false)}>Cancel</button></div>
+  </form>
 }

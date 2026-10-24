@@ -1,6 +1,6 @@
 services:
   wizard-music-init:
-    image: ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.1
+    image: ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.2
     pull_policy: never
     user: '0:0'
     network_mode: none
@@ -17,7 +17,7 @@ services:
     depends_on:
       wizard-music-init:
         condition: service_completed_successfully
-    image: ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.1
+    image: ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.2
     pull_policy: never
     restart: unless-stopped
     ports: ['127.0.0.1:${APP_PORT:-9205}:9205']

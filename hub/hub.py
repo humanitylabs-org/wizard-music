@@ -94,18 +94,59 @@ _db.commit()
 
 # Per-install, default-off consent. Environment opt-in is retained only for legacy host installs.
 SETTINGS = HOME / "settings.json"
+# Optional home-network exit (Wizard Home Relay) for providers that block data-center
+# addresses. A socks5h URL with credentials; never returned to the browser.
+RELAY = ""
+RELAY_RE = re.compile(r"^socks5h://[A-Za-z0-9._~-]{1,64}:[A-Za-z0-9._~-]{8,200}@[A-Za-z0-9.-]{1,253}:[0-9]{2,5}$")
 try:
-    ONLINE = json.loads(SETTINGS.read_text()).get("online") is True
+    _saved = json.loads(SETTINGS.read_text())
+    ONLINE = _saved.get("online") is True
+    RELAY = _saved.get("relay") if isinstance(_saved.get("relay"), str) and RELAY_RE.match(_saved.get("relay")) else ""
 except FileNotFoundError:
     pass
-except (ValueError, OSError):
+except (ValueError, OSError, AttributeError):
     ONLINE = False
+# Last real online playback attempt: proves (or disproves) audio, not just catalog access.
+PLAYBACK = {"state": "untested", "at": 0.0}
+BLOCK_MARKERS = ("confirm you’re not a bot", "confirm you're not a bot", "sign in to confirm", "http error 429", "http error 403")
 _consent_lock = threading.RLock()
 _downloads = set()
 
 
 def online_settings():
-    return {"online": ONLINE}
+    return {"online": ONLINE, "relay": bool(RELAY)}
+
+
+def _write_settings():
+    tmp = SETTINGS.with_suffix(".tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as out:
+        json.dump({"online": ONLINE, **({"relay": RELAY} if RELAY else {})}, out)
+        out.flush()
+        os.fsync(out.fileno())
+    tmp.replace(SETTINGS)
+
+
+def set_relay(value):
+    """Save (or clear with "") the home relay address; the next provider request uses it."""
+    global RELAY, _ytm, _ytm_radio
+    if not isinstance(value, str) or (value and not RELAY_RE.match(value.strip())):
+        raise ValueError("relay must be a socks5h://user:token@host:port address")
+    with _consent_lock:
+        RELAY = value.strip()
+        _write_settings()
+        _ytm = _ytm_radio = None
+        PLAYBACK.update(state="untested", at=0.0)
+    return online_settings()
+
+
+def proxies():
+    return {"http": RELAY, "https": RELAY} if RELAY else {}
+
+
+def classify_failure(stderr: str) -> str:
+    low = (stderr or "").lower()
+    return "blocked" if any(m in low for m in BLOCK_MARKERS) else "failed"
 
 
 def require_online():
@@ -118,14 +159,8 @@ def set_online(value):
     if not isinstance(value, bool):
         raise ValueError("online must be a boolean")
     with _consent_lock:
-        tmp = SETTINGS.with_suffix(".tmp")
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as out:
-            json.dump({"online": value}, out)
-            out.flush()
-            os.fsync(out.fileno())
-        tmp.replace(SETTINGS)
         ONLINE = value
+        _write_settings()
         if not value:
             for proc in list(_downloads):
                 if proc.poll() is None:
@@ -154,7 +189,9 @@ def online_session():
                 require_online()
                 return super().send(*args, **kwargs)
 
-    return ConsentSession()
+    session = ConsentSession()
+    session.proxies.update(proxies())
+    return session
 
 
 def db(sql: str, args: tuple = (), many: bool = False):
@@ -1708,6 +1745,8 @@ def fetch_audio(vid: str) -> Path:
         tmp = CACHE / f".{vid}.{uuid.uuid4().hex[:6]}"
         cmd = [YTDLP, "-q", "--js-runtimes", "node", "--no-cache-dir", "--no-warnings", "--no-playlist", "-f", "bestaudio[ext=m4a]/bestaudio",
                "-o", f"{tmp}.%(ext)s", f"https://music.youtube.com/watch?v={vid}"]
+        if RELAY:
+            cmd[1:1] = ["--proxy", RELAY]
         with _consent_lock:
             require_online()
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -1725,7 +1764,10 @@ def fetch_audio(vid: str) -> Path:
         if not ONLINE or proc.returncode != 0 or not made:
             for m in made:
                 m.unlink(missing_ok=True)
+            if ONLINE:
+                PLAYBACK.update(state=classify_failure(stderr), at=time.time())
             raise RuntimeError((stderr or "download failed").strip()[-300:])
+        PLAYBACK.update(state="ok", at=time.time())
         final = CACHE / f"{vid}{made[0].suffix}"
         made[0].replace(final)
         _evict()
@@ -1800,6 +1842,30 @@ def art_bytes(tid: str) -> tuple[bytes, str] | None:
 
 
 # ---------------------------------------------------------------- Home
+def playback_status() -> dict:
+    """What the owner should know about online playback, from the last real attempt."""
+    state = PLAYBACK["state"] if ONLINE else "off"
+    message = {
+        "off": "",
+        "untested": "",
+        "ok": "",
+        "blocked": ("YouTube is blocking this Wizard's network (common on data-center servers), so online songs "
+                    "can't play. Add a Home connection below, or run Music on a Wizard at home. Your own files still play."),
+        "failed": "The last online song couldn't be downloaded. Try another, or check the Home connection.",
+    }[state]
+    return {"state": state, "via": "home relay" if RELAY else "this server", "message": message}
+
+
+def online_source() -> dict:
+    p = playback_status()
+    if not ONLINE:
+        return {"id": "youtube", "name": "Online sources", "status": "disabled", "detail": "Off · enable above when you choose", "ok": False}
+    via = " via your home connection" if RELAY else ""
+    detail = {"ok": f"Playing{via}", "untested": f"On{via} · not tried yet",
+              "blocked": "Blocked by YouTube on this network", "failed": "Last song failed"}[p["state"]]
+    return {"id": "youtube", "name": "Online sources", "status": p["state"], "detail": detail, "ok": p["state"] in ("ok", "untested")}
+
+
 def home() -> dict:
     liked = [track(r[0]) for r in db("SELECT id FROM likes WHERE value>0 ORDER BY at DESC LIMIT 30")]
     recent_ids, seen = [], set()
@@ -1811,12 +1877,11 @@ def home() -> dict:
     recent = [track(t) for t in recent_ids if t not in taste.disliked][:20]
     library = [track(r[0]) for r in db("SELECT id FROM tracks WHERE source='library' ORDER BY artist, album, title LIMIT 200")]
     count = db("SELECT COUNT(*) FROM tracks WHERE source='library'")[0][0]
-    yt_ok = ONLINE
     return {
         "settings": online_settings(),
+        "playback": playback_status(),
         "sources": [
-            {"id": "youtube", "name": "Online sources", "status": "enabled" if ONLINE else "disabled",
-             "detail": "Catalog access enabled; availability varies" if ONLINE else "Off · enable above when you choose", "ok": yt_ok},
+            online_source(),
             {"id": "library", "name": "Wizard Library", "status": "connected", "detail": f"{count} track{'s' if count != 1 else ''} on your Wizard", "ok": True},
         ],
         "vibes": ([{"id": f"mix-{m['key'].replace(' ', '-')}", "label": m["name"], "count": len(m["ids"])} for m in mixes()]
@@ -1918,7 +1983,14 @@ class Handler(BaseHTTPRequestHandler):
         try:
             body = self._body()
             if url.path == "/api/settings":
-                return self._json(200, set_online(body.get("online")))
+                if set(body) - {"online", "relay"} or not body:
+                    raise ValueError("online and/or relay")
+                out = online_settings()
+                if "relay" in body:
+                    out = set_relay(body["relay"])
+                if "online" in body:
+                    out = set_online(body["online"])
+                return self._json(200, out)
             if url.path == "/api/station":
                 out = create_station(body)
                 if body.get("trackId") and not body.get("label") and out.get("tracks"):

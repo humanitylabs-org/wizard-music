@@ -20,9 +20,9 @@ def hub(monkeypatch, tmp_path):
 
 
 def test_default_off_persist_and_revoke(hub, monkeypatch):
-    assert hub.online_settings() == {'online': False}
-    assert hub.home()['settings'] == {'online': False}
-    assert hub.set_online(True) == {'online': True}
+    assert hub.online_settings() == {'online': False, 'relay': False}
+    assert hub.home()['settings'] == {'online': False, 'relay': False}
+    assert hub.set_online(True) == {'online': True, 'relay': False}
     assert json.loads(hub.SETTINGS.read_text()) == {'online': True}
     assert hub.SETTINGS.stat().st_mode & 0o777 == 0o600
     # A previously-created HTTP session must not retain permission after revocation.
@@ -70,3 +70,30 @@ def test_settings_reload_ignores_legacy_env_after_revoke(hub, monkeypatch):
     spec.loader.exec_module(module)
     assert module.ONLINE is False
     module._db.close()
+
+
+def test_relay_saved_private_and_routes_downloads(hub, monkeypatch):
+    hub.set_online(True)
+    with pytest.raises(ValueError): hub.set_relay('http://example.com:80')
+    with pytest.raises(ValueError): hub.set_relay('socks5h://u:short@h:1')
+    addr = 'socks5h://wizard:abcdefgh12345678@100.64.1.2:18765'
+    assert hub.set_relay(addr) == {'online': True, 'relay': True}
+    assert json.loads(hub.SETTINGS.read_text())['relay'] == addr
+    assert hub.SETTINGS.stat().st_mode & 0o777 == 0o600
+    assert 'abcdefgh' not in json.dumps(hub.home())  # never returned to the browser
+    assert hub.online_session().proxies['https'] == addr
+    seen = {}
+    class Proc:
+        returncode = 1
+        def communicate(self, timeout=None): return '', "ERROR: Sign in to confirm you're not a bot"
+        def poll(self): return 0
+    def popen(cmd, **kw): seen['cmd'] = cmd; return Proc()
+    monkeypatch.setattr(hub.subprocess, 'Popen', popen)
+    with pytest.raises(RuntimeError): hub.fetch_audio('aaaaaaaaaaa')
+    assert seen['cmd'][1:3] == ['--proxy', addr]
+    assert hub.playback_status()['state'] == 'blocked'
+    assert 'blocking' in hub.home()['playback']['message']
+    assert hub.home()['sources'][0]['ok'] is False
+    assert hub.set_relay('') == {'online': True, 'relay': False}
+    assert 'relay' not in json.loads(hub.SETTINGS.read_text())
+    assert hub.playback_status()['state'] == 'untested'

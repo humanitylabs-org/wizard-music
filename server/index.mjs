@@ -50,7 +50,7 @@ const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', 'http://local')
     if (!requestAllowed(request, { hosts: HOSTS, origins: ORIGINS })) { sendJson(response, 403, { error: 'origin' }); return }
-    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.1', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
+    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.2', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
     if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT); return }
     if (url.pathname === BASE) { response.writeHead(308, { Location: `${BASE}/` }); response.end(); return }
     if (!url.pathname.startsWith(`${BASE}/`)) { sendJson(response, 404, { error: 'not_found' }); return }

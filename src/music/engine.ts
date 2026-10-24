@@ -115,6 +115,9 @@ export function playedTracks(snapshot: Pick<MusicSnapshot, 'queue' | 'index'>, m
   return snapshot.queue.slice(from, end).map((item, offset) => ({ item, position: from + offset }))
 }
 
+/** Failed tracks in a row before playback stops and says so. */
+export const MAX_SKIPS = 2
+export const SOURCE_DOWN = 'Songs aren\u2019t playing on this Wizard right now. See Online sources on Music\u2019s home.'
 export const EMPTY_SNAPSHOT: MusicSnapshot = { queue: [], index: -1, playing: false, buffering: false, positionMs: 0, durationMs: 0, station: null, error: '', engine: 'web' }
 
 export function absoluteMusicUrl(path: string): string {
@@ -157,6 +160,8 @@ export class WebEngine implements MusicEngine {
   private pendingSeekMs: number | null = null
   /** Whether you want music on. Survives pauses the system causes (Wizard closing, the WebView stopping). */
   private wantPlaying = false
+  /** Consecutive tracks that failed to load. */
+  private failures = 0
 
   constructor(audio: HTMLAudioElement = new Audio(), fetchImpl: FetchLike = (...args) => fetch(...args), store: SessionStore | null = null) {
     this.audio = audio
@@ -177,8 +182,16 @@ export class WebEngine implements MusicEngine {
     audio.addEventListener('playing', () => this.set({ buffering: false, error: '' }))
     audio.addEventListener('canplay', () => this.set({ buffering: false }))
     audio.addEventListener('ended', () => this.advance(1, true))
+    audio.addEventListener('playing', () => { this.failures = 0 })
     audio.addEventListener('error', () => {
       if (!audio.src) return
+      // One bad song skips; a run of failures means the source itself is down. Stop
+      // instead of silently clicking through the whole queue.
+      if (++this.failures >= MAX_SKIPS) {
+        this.wantPlaying = false
+        this.set({ playing: false, buffering: false, error: SOURCE_DOWN })
+        return
+      }
       this.set({ buffering: false, error: 'This track could not be played. Skipping.' })
       window.setTimeout(() => this.advance(1, true), 900)
     })

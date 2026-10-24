@@ -3,19 +3,20 @@
   "name": "Music",
   "wizard_type": "service",
   "available": true,
-  "short_desc": "Your music library, online search and radio. Ready on first open.",
-  "description": "Test release: open Music and choose whether to enable online sources, or add your own audio files. No token or server configuration needed. No bundled music or account. Native background playback not certified.",
+  "short_desc": "Your music library, online search and radio. On a cloud server, online songs need a home connection.",
+  "description": "Test release: open Music and choose whether to enable online sources, or add your own audio files. No token or server configuration needed. No bundled music or account. Native background playback not certified. YouTube blocks data-center servers: on a VPS Wizard, add a Home connection in Music (Wizard Home Relay on a computer at home, over Tailscale). Wizards at home need nothing extra.",
   "author": "Humanity Labs",
   "port": 9205,
   "categories": [
     "media"
   ],
   "tipi_version": 1,
-  "version": "0.2.0-test.1",
+  "version": "0.2.0-test.2",
   "source": "https://github.com/humanitylabs-org/wizard-music",
   "exposable": false,
   "supported_architectures": [
-    "arm64", "amd64"
+    "arm64",
+    "amd64"
   ],
   "dynamic_config": true,
   "min_tipi_version": "4.8.0",

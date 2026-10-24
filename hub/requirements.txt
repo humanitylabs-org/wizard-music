@@ -1,3 +1,4 @@
 tinytag==2.3.2
 ytmusicapi==1.12.3
 yt-dlp[default]==2026.10.21
+PySocks==1.7.1

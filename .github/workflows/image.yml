@@ -51,7 +51,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           source="ghcr.io/humanitylabs-org/wizard-music@$INDEX"
-          image="ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.1"
+          image="ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.2"
           docker pull "$source"
           docker tag "$source" "$image"
           python3 qa/smoke-image.py "$image" "evidence/$ARCH"

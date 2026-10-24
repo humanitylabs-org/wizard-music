@@ -301,3 +301,21 @@ describe('Wizard Music played history', () => {
     expect(played[played.length - 1].item.id).toBe('yt:t100')
   })
 })
+
+describe('playback failures', () => {
+  it('stops after repeated load failures instead of clicking through the queue', async () => {
+    vi.useFakeTimers()
+    const audio = new FakeAudio()
+    const engine = new WebEngine(audio as unknown as HTMLAudioElement, (async () => new Response('{"tracks":[]}')) as typeof fetch)
+    await engine.load([track(1), track(2), track(3), track(4)], 0, null)
+    audio.dispatchEvent(new Event('error'))
+    vi.advanceTimersByTime(1000)
+    expect(engine.snapshot().index).toBe(1)
+    audio.dispatchEvent(new Event('error'))
+    vi.advanceTimersByTime(1000)
+    expect(engine.snapshot().index).toBe(1)
+    expect(engine.snapshot().playing).toBe(false)
+    expect(engine.snapshot().error).toMatch(/aren.t playing/)
+    vi.useRealTimers()
+  })
+})

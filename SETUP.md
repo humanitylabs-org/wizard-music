@@ -8,6 +8,10 @@
 
 Online sources are **off by default**. The switch explains what leaves the box: searches and track details go to YouTube Music, Deezer, Apple and MusicBrainz for catalog results, audio and artwork. The choice is saved on your Wizard. Turning it off stops online listening, cancels active downloads, discards pending enrichment and blocks new provider requests, including connected-catalog lookups. Previously downloaded artwork and metadata may remain on disk. Local files remain available.
 
+## Wizards on a cloud server (VPS)
+
+YouTube blocks most data-center addresses, so online songs fail on a VPS Wizard while search still works. Music now says so instead of skipping tracks. The fix is a **Home connection**: install Wizard Home Relay on any always-on computer at home that is on your Tailscale (`sh install.sh` from `humanitylabs-org/wizard-home-relay`), then paste the address it prints into Music under Online sources, **Add a home connection**. Only YouTube traffic goes through it; the relay listens on Tailscale only, needs its token, and refuses every other site. A Wizard running at home needs none of this.
+
 ## Your own music files
 
 Ask your Wizard to add your authorized MP3, M4A, FLAC, OGG, Opus, AAC or WAV files to Music’s library folder. The Store install creates `app-data/<store>/wizard-music/music`, mounted read-only at `/music` in the player. Files appear after the automatic scan (about a minute), or ask your agent to rescan. No cloud permission or online switch is needed for local files. Browser codec support varies.
