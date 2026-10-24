@@ -8,7 +8,7 @@ import './music.css'
 
 const BASE = new URL('./', document.baseURI).pathname
 
-type MusicSource = { id: string; name: string; status: string; detail: string; ok: boolean }
+type MusicSource = { id: string; name: string; status: string; detail: string; ok: boolean; open?: string }
 type MusicHome = { settings?: { online: boolean }; sources: MusicSource[]; vibes: { id: string; label: string }[]; liked: MusicTrack[]; recent: MusicTrack[]; library: MusicTrack[]; taste?: { avoid: string[] } }
 type FeedbackAction = 'like' | 'unlike' | 'dislike' | 'played' | 'skipped'
 type FeedbackResult = { track: MusicTrack; drop?: string[]; learned?: { artists: string[]; genre: string; similar: string[] } | null }
@@ -301,7 +301,7 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
         } catch (error) { notify((error as Error).message) }
         finally { setSavingConsent(false) }
       }} /> Online sources</label>
-      <p>When on, searches and track details go to YouTube Music, Deezer, Apple and MusicBrainz to find songs, audio and artwork.</p>
+      <p>When on, Music uses your music connector apps (like YouTube Music) and looks up song details with Deezer, Apple and MusicBrainz.</p>
     </section>}
 
     {starting && <p className="music-status" role="status">Starting your station…</p>}
@@ -314,7 +314,9 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
       {homeError && <div className="music-card music-error"><p>{homeError}</p><button type="button" className="secondary-action" onClick={loadHome}>Try again</button></div>}
 
       {home && <div className="music-sources" aria-label="Music sources">
-        {home.sources.map((source) => <span key={source.id} className={`music-source${source.ok ? ' ok' : ''}`}><b>{source.name}</b><small>{source.detail}</small></span>)}
+        {home.sources.map((source) => source.open
+          ? <a key={source.id} href={source.open} className={`music-source${source.ok ? ' ok' : ''}`}><b>{source.name}</b><small>{source.detail}</small></a>
+          : <span key={source.id} className={`music-source${source.ok ? ' ok' : ''}`}><b>{source.name}</b><small>{source.detail}</small></span>)}
       </div>}
 
       {home && Boolean(home.taste?.avoid.length) && <p className="music-taste" aria-label="Music you turned down">Playing less: {home.taste!.avoid.join(' · ')}</p>}

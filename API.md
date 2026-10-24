@@ -1,4 +1,4 @@
-# Music HTTP / MCP contract (0.2.0-test.1)
+# Music HTTP / MCP contract (0.2.0-test.2)
 The Wizard authenticated gateway is the authorization boundary. Never publish the app port directly; it has no user login. Host/Origin allowlists prevent browser cross-origin access but are not authentication. The hub additionally requires a bearer token; only the server adds it.
 
 - `GET /health`: app process and configuration only, not backend health.
