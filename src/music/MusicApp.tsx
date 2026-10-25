@@ -319,6 +319,8 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
           : <span key={source.id} className={`music-source${source.ok ? ' ok' : ''}`}><b>{source.name}</b><small>{source.detail}</small></span>)}
       </div>}
 
+      {home?.settings?.online && <AccountLibrarySection onOpenNowPlaying={onOpenNowPlaying} notify={notify} />}
+
       {home && Boolean(home.taste?.avoid.length) && <p className="music-taste" aria-label="Music you turned down">Playing less: {home.taste!.avoid.join(' · ')}</p>}
 
       {home && home.vibes.length > 0 && <section className="music-section" aria-label="Start a station">
@@ -458,6 +460,58 @@ function useSwipeDownToClose(ref: { current: HTMLDivElement | null }, onClose: (
     el.addEventListener('touchcancel', cancel)
     return () => { el.removeEventListener('touchstart', down); el.removeEventListener('touchmove', move); el.removeEventListener('touchend', up); el.removeEventListener('touchcancel', cancel) }
   }, [ref])
+}
+
+export type AccountLibrary = { state: string; connect: string; error?: string; limit: number; playlists?: { id: string; title: string; count?: number | string }[]; tracks?: MusicTrack[] }
+
+export async function readAccountLibrary(kind: 'status' | 'playlists' | 'likes' | 'playlist', id = ''): Promise<AccountLibrary> {
+  const response = await fetch(`${BASE}api/account-library/${kind}?${new URLSearchParams({ id, limit: '100' })}`, { credentials: 'include', headers: { Accept: 'application/json' } })
+  const result = await response.json() as AccountLibrary
+  if (!response.ok) throw new Error(result.error || 'Account library unavailable. Open YouTube Music to check your connection.')
+  return result
+}
+
+export async function playAccountTracks(tracks: MusicTrack[], index = 0) {
+  if (!tracks[index]) throw new Error('No playable songs in this selection.')
+  await startEngine().load(tracks, index, null)
+  noteEngineStarted()
+}
+
+export function AccountLibrarySection({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () => void; notify: (message: string) => void }) {
+  const [data, setData] = useState<AccountLibrary | null>(null)
+  const [selection, setSelection] = useState<{ kind: 'status' | 'playlists' | 'likes' | 'playlist'; id?: string; title: string }>({ kind: 'status', title: 'Your YouTube Music' })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const request = useRef(0)
+  const load = useCallback(async (next: typeof selection) => {
+    const seq = ++request.current
+    setSelection(next); setData(null); setLoading(true); setError('')
+    try { const result = await readAccountLibrary(next.kind, next.id); if (seq === request.current) setData(result) }
+    catch (e) { if (seq === request.current) setError((e as Error).message) }
+    finally { if (seq === request.current) setLoading(false) }
+  }, [])
+  useEffect(() => { void load({ kind: 'status', title: 'Your YouTube Music' }); return () => { ++request.current } }, [load])
+  const play = async (index = 0) => {
+    try { await playAccountTracks(data?.tracks ?? [], index); onOpenNowPlaying() }
+    catch (e) { notify((e as Error).message || 'Could not start playback.') }
+  }
+  return <section className="music-section" aria-label="Your YouTube Music" aria-busy={loading}>
+    <div className="music-section-head"><h3>{selection.title}</h3><button type="button" className="music-chip" disabled={loading} onClick={() => void load(selection)}>Refresh</button></div>
+    <p className="music-empty">Browse your account’s playlists and liked songs. Music’s thumbs up and down stay on this Wizard; they do not change YouTube likes.</p>
+    {data?.state === 'connected' && <div className="music-chips">
+      {selection.kind === 'playlist' && <button type="button" className="music-chip" onClick={() => void load({ kind: 'playlists', title: 'YouTube playlists' })}>Back to playlists</button>}
+      <button type="button" className="music-chip" onClick={() => void load({ kind: 'playlists', title: 'YouTube playlists' })}>Playlists</button>
+      <button type="button" className="music-chip" onClick={() => void load({ kind: 'likes', title: 'YouTube liked songs' })}>Liked songs</button>
+    </div>}
+    {loading && <p role="status">Loading your YouTube library…</p>}
+    {(error || data?.error) && <p className="music-error" role="alert">{error || data?.error}</p>}
+    <a href="/wizard-youtube-music/" className="music-chip">{data?.state === 'signed_out' ? 'Connect YouTube Music' : 'Open YouTube Music connection'}</a>
+    {data?.playlists?.map(p => <div className="music-row" key={p.id}><button type="button" className="music-row-main" onClick={() => void load({ kind: 'playlist', id: p.id, title: p.title })}><span className="music-row-text"><strong>{p.title}</strong>{p.count != null && <small>{p.count} songs</small>}</span></button></div>)}
+    {data?.tracks && data.tracks.length > 0 && <button type="button" className="music-chip" onClick={() => void play()}>Play all</button>}
+    {data?.tracks?.map((track, index) => <TrackRow key={`${track.id}-${index}`} track={track} onPlay={() => void play(index)} />)}
+    {(data?.tracks?.length === 0 || data?.playlists?.length === 0) && <p className="music-empty">No items returned by your account.</p>}
+    {(data?.tracks || data?.playlists) && <p className="music-empty">Showing up to {data.limit} items. The connector does not yet support browsing beyond this limit. Playback uses the existing music source; signing in does not guarantee playback.</p>}
+  </section>
 }
 
 const SHOW_PLAYED_KEY = 'wizard-music.show-played'

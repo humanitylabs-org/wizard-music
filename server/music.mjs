@@ -9,7 +9,7 @@ import { request as httpRequest } from 'node:http'
 
 export const BASE = '/wizard-music'
 const HUB_PREFIX = '/wizard/music/'
-const API_GET = /^\/api\/(home|settings|scores|search|station\/[a-f0-9]{16}\/more)$/
+const API_GET = /^\/api\/(home|settings|scores|search|account-library\/(status|playlists|likes|playlist)|station\/[a-f0-9]{16}\/more)$/
 const API_POST = /^\/api\/(settings|station|feedback|scan|play|keep|mixes)$/
 const MEDIA = /^\/(stream|art)\/((?:yt|lib)(?::|%3A)[A-Za-z0-9_-]{1,40})$/
 const FORWARD_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control', 'last-modified']
@@ -39,7 +39,7 @@ export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000,
     const sub = url.pathname.slice(appBase.length)
     const route = musicRoute(request.method ?? 'GET', sub)
     if (!route) { sendJson(response, 404, { error: 'not_found' }); return }
-    const upstreamPath = sub + (sub === '/api/search' || sub.endsWith('/more') ? url.search : '')
+    const upstreamPath = sub + (sub === '/api/search' || sub.startsWith('/api/account-library/') || sub.endsWith('/more') ? url.search : '')
     const headers = { Authorization: `Bearer ${token}`, Accept: route === 'api' ? 'application/json' : '*/*' }
     if (request.headers.range && route === 'media') headers.Range = String(request.headers.range).slice(0, 100)
     let body = null

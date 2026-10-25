@@ -194,6 +194,42 @@ def source_for(tid: str = "") -> str:
     raise RuntimeError("no music source connected")
 
 
+def account_library(kind="status", playlist="", limit=100):
+    """Read-only account library; never conflate connector likes with Wizard taste."""
+    if kind not in ("status", "playlists", "likes", "playlist"):
+        raise ValueError("Unknown library kind")
+    if kind == "playlist" and not re.fullmatch(r"[A-Za-z0-9_-]{1,160}", playlist):
+        raise ValueError("Invalid playlist id")
+    limit = max(1, min(int(limit), 100))
+    result = {"state": "unavailable", "connect": "/wizard-youtube-music/", "limit": limit}
+    if not ONLINE:
+        return {**result, "state": "off", "error": "Turn on Online sources to browse your YouTube library."}
+    source = next((s for s in sources_status(refresh=True) if s["id"] == "wizard-youtube-music"), None)
+    if not source or not source.get("installed"):
+        return {**result, "error": "YouTube Music connector is unavailable. Open it to check the connection."}
+    if not {"playlists", "likes", "playlist"}.issubset(set((source.get("capabilities") or {}).get("library", []))):
+        return {**result, "state": "unsupported", "error": "Update the YouTube Music connector to browse your account library."}
+    state = (source.get("account_status") or {}).get("state", "signed_out")
+    result["state"] = state
+    if state != "connected":
+        return {**result, "error": "Connect and verify your YouTube account to browse playlists and liked songs."}
+    if kind == "status":
+        return result
+    query = urllib.parse.urlencode({"id": playlist, "limit": limit})
+    try:
+        raw = _source_get(source["base"], f"/api/music/library/{kind}?{query}")
+        if kind == "playlists":
+            playlists = [{"id": p["playlistId"], "title": p.get("title") or "Untitled playlist", "count": p.get("count")}
+                         for p in raw["playlists"][:limit]
+                         if re.fullmatch(r"[A-Za-z0-9_-]{1,160}", str(p.get("playlistId", "")))]
+            return {**result, "playlists": playlists}
+        tracks = [t for t in (remember_yt(item) for item in raw["tracks"][:limit]) if t]
+        return {**result, "tracks": tracks}
+    except Exception:
+        _source_status.clear()
+        return {**result, "state": "unavailable", "error": "Account library unavailable. Open YouTube Music to verify your connection, then retry."}
+
+
 class _Connector:
     """Small client with the method names the radio/search code already uses."""
 
@@ -1895,6 +1931,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, home())
             if path == "/api/scores":  # points per song, with the raw counts behind them
                 return self._json(200, scores(int(qs.get("limit", ["0"])[0] or 0)))
+            if path in ("/api/account-library/status", "/api/account-library/playlists", "/api/account-library/likes", "/api/account-library/playlist"):
+                try:
+                    result = account_library(path.rsplit("/", 1)[1], qs.get("id", [""])[0], int(qs.get("limit", ["100"])[0]))
+                except ValueError as exc:
+                    return self._json(400, {"error": str(exc)})
+                return self._json(200 if "error" not in result or path.endswith("/status") else 409 if result["state"] in ("signed_out", "needs_attention") else 503, result)
             if path == "/api/search":
                 q = (qs.get("q") or [""])[0][:200]
                 return self._json(200, {"tracks": search(q) if q.strip() else []})

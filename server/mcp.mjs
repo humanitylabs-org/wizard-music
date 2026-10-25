@@ -1,4 +1,5 @@
 const tools = [
+ {name:'music_account_library', description:'Browse connected YouTube playlists and liked songs, read-only; does not sync Wizard taste or start playback.', inputSchema:{type:'object', properties:{kind:{type:'string',enum:['status','playlists','likes','playlist']},id:{type:'string',pattern:'^[A-Za-z0-9_-]{1,160}$'}},required:['kind'],additionalProperties:false}},
  {name:'music_status', description:'Read app configuration status; does not prove upstream connectivity.', inputSchema:{type:'object', properties:{}, additionalProperties:false}},
  {name:'music_home', description:'Read sources, library, liked tracks and recent history.', inputSchema:{type:'object', properties:{}, additionalProperties:false}},
  {name:'music_search', description:'Search configured library and optionally enabled online catalog.', inputSchema:{type:'object', properties:{query:{type:'string',maxLength:200}}, required:['query'], additionalProperties:false}}
@@ -18,6 +19,7 @@ export async function handleMcp(req,res,send,port) {
  if(m.method!=='tools/call'){send(res,200,{jsonrpc:'2.0',id:m.id,error:{code:-32601,message:'Method not found'}});return}
  const name=m.params?.name, a=m.params?.arguments||{}
  const paths={music_status:'/wizard-music/api/status',music_home:'/wizard-music/api/home',music_search:'/wizard-music/api/search?q='+encodeURIComponent(typeof a.query==='string'?a.query.slice(0,200):'')}
+ if(name==='music_account_library' && ['status','playlists','likes','playlist'].includes(a.kind) && Object.keys(a).every(k=>['kind','id'].includes(k)) && (a.id===undefined || (typeof a.id==='string' && /^[A-Za-z0-9_-]{1,160}$/.test(a.id))) && (a.kind!=='playlist' || typeof a.id==='string')) paths.music_account_library='/wizard-music/api/account-library/'+a.kind+'?'+new URLSearchParams({id:a.id||'',limit:'100'})
  if(!Object.hasOwn(paths,name) || (name==='music_search' && typeof a.query!=='string')){send(res,200,{jsonrpc:'2.0',id:m.id,error:{code:-32602,message:'Invalid tool or arguments'}});return}
  try {const r=await fetch(`http://127.0.0.1:${port}${paths[name]}`,{signal:AbortSignal.timeout(150000)}); answer({content:[{type:'text',text:await r.text()}],isError:!r.ok})}catch{answer({content:[{type:'text',text:'Music backend unavailable'}],isError:true})}
 }
