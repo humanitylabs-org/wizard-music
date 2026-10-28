@@ -33,7 +33,7 @@ view:
 health: /health
 provides: [music]
 needs: []
-uses: []
+uses: [music-source]
 ---
 ## Registry packaging
 
