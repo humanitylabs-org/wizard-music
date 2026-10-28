@@ -4,8 +4,8 @@ Owner rule: a text-bearing floating panel is fully opaque. Scrims may still dim.
 
 Reuse:
 - overlay panel material: REUSE `--wz-panel`
-- existing app overlay selectors and layout: EXTEND with opaque backing only
-- NEW: none
+
+Extend the existing app overlay selectors with opaque backing only. No new component implementation.
 
 ## Serving source
 
