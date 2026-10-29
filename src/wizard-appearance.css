@@ -16,9 +16,9 @@
   background: var(--wz-canvas);
 }
 :root[data-wz-hosted], :root[data-wz-hosted] body, :root[data-wz-hosted] #root { background: var(--wz-canvas); }
-:root[data-wz-hosted] .music-mini { background: color-mix(in srgb, var(--wz-overlay) 94%, var(--wiz) 6%); -webkit-backdrop-filter: blur(18px) saturate(1.2); backdrop-filter: blur(18px) saturate(1.2); }
-:root[data-wz-hosted] .music-now { background: linear-gradient(180deg, color-mix(in srgb, var(--wiz-deep) 22%, var(--wz-overlay)) 0%, var(--wz-overlay) 46%); -webkit-backdrop-filter: blur(22px) saturate(1.2); backdrop-filter: blur(22px) saturate(1.2); }
-:root[data-wz-hosted] .music-toast { background: var(--wz-overlay); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
+:root[data-wz-hosted] .music-mini { background: linear-gradient(color-mix(in srgb, var(--wz-overlay, transparent) 94%, var(--wiz) 6%), color-mix(in srgb, var(--wz-overlay, transparent) 94%, var(--wiz) 6%)), var(--wz-panel, #0f1014); -webkit-backdrop-filter: blur(18px) saturate(1.2); backdrop-filter: blur(18px) saturate(1.2); }
+:root[data-wz-hosted] .music-now { background: linear-gradient(180deg, color-mix(in srgb, var(--wiz-deep) 22%, var(--wz-overlay, transparent)) 0%, var(--wz-overlay, transparent) 46%), var(--wz-panel, #0f1014); -webkit-backdrop-filter: blur(22px) saturate(1.2); backdrop-filter: blur(22px) saturate(1.2); }
+:root[data-wz-hosted] .music-toast { background: linear-gradient(var(--wz-overlay, transparent), var(--wz-overlay, transparent)), var(--wz-panel, #0f1014); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }
 /* No art: an accent glow on the glass, not a grey/black plate. */
 :root[data-wz-hosted] .music-art-fallback { background: radial-gradient(120% 90% at 30% 15%, color-mix(in srgb, var(--wiz) 30%, transparent), color-mix(in srgb, var(--wz-text) 5%, transparent) 70%); color: color-mix(in srgb, var(--wiz) 70%, var(--wz-text)); }
 :root[data-wz-hosted][data-color-scheme="light"] .music-art-hero { box-shadow: 0 24px 60px rgba(40, 30, 15, .25); }
