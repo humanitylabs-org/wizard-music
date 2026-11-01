@@ -20,7 +20,7 @@ for _ in range(30):
  time.sleep(.5)
 assert home['library'][0]['title']=='Recipient QA Melody'
 config=json.loads(run(*cmd,'config','--format','json',env=env))
-assert config['services']['wizard-music']['pull_policy']=='never'
+assert '@sha256:' in config['services']['wizard-music']['image'] and 'pull_policy' not in config['services']['wizard-music']
 # Recreate same package and mounts, never remove data.
 run(*cmd,'up','-d','--force-recreate',env=env)
 for _ in range(30):
@@ -30,5 +30,5 @@ for _ in range(30):
  except Exception:pass
  time.sleep(.5)
 assert home['library'][0]['title']=='Recipient QA Melody'
-r={'ok':True,'compose':'runtipi/docker-compose.yml','port':ports,'pull_policy':'never','data_preserved':True,'image_id':run('docker','image','inspect',image,'--format','{{.Id}}'),'scope':'Exact package Compose installed/recreated; not public or private store catalog admission'}
+r={'ok':True,'compose':'runtipi/docker-compose.yml','port':ports,'data_preserved':True,'image_id':run('docker','image','inspect',image,'--format','{{.Id}}'),'scope':'Exact package Compose installed/recreated; not public or private store catalog admission'}
 (root/'evidence/package-install.json').write_text(json.dumps(r,indent=2));print(json.dumps(r,indent=2))
