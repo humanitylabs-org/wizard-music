@@ -26,6 +26,7 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
       - run: python -m pip install -r hub/requirements.txt pytest
       - run: python -m pytest -q hub/tests && python qa/test_offline.py
       - run: python qa/check-portability.py
@@ -51,7 +52,7 @@ jobs:
           ARCH: ${{ matrix.arch }}
         run: |
           source="ghcr.io/humanitylabs-org/wizard-music@$INDEX"
-          image="ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.2"
+          image="ghcr.io/humanitylabs-org/wizard-music:0.2.0-test.3"
           docker pull "$source"
           docker tag "$source" "$image"
           python3 qa/smoke-image.py "$image" "evidence/$ARCH"

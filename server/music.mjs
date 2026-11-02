@@ -12,7 +12,7 @@ const HUB_PREFIX = '/wizard/music/'
 const API_GET = /^\/api\/(home|settings|scores|search|account-library\/(status|playlists|likes|playlist)|station\/[a-f0-9]{16}\/more)$/
 const API_POST = /^\/api\/(settings|station|feedback|scan|play|keep|mixes)$/
 const MEDIA = /^\/(stream|art)\/((?:yt|lib)(?::|%3A)[A-Za-z0-9_-]{1,40})$/
-const FORWARD_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control', 'last-modified']
+const FORWARD_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control', 'last-modified', 'etag']
 
 /** Path inside the app (after BASE), or null when the request is not a music API/media path. */
 export function musicRoute(method, sub) {
