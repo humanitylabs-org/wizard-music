@@ -71,30 +71,30 @@ def hub(monkeypatch, tmp_path):
 
 
 def test_remux_turns_fragments_into_a_plain_file_without_touching_the_audio(hub, tmp_path):
-    song = make_fragmented(tmp_path / 'song.m4a')
+    song = make_fragmented(hub.CACHE / 'song.m4a')
     before, length = packets_md5(song), probe_duration(song)
     assert hub.is_fragmented_mp4(song)
     assert hub.remux_plain(song) == song
     assert not hub.is_fragmented_mp4(song)
     assert packets_md5(song) == before
     assert abs(probe_duration(song) - length) < 0.1
-    assert not [p for p in tmp_path.iterdir() if p.name.startswith('.')]  # no temp files left
+    assert not [p for p in hub.CACHE.iterdir() if p.name.startswith('.')]  # no temp files left
 
 
 def test_plain_and_non_mp4_files_are_left_alone(hub, tmp_path):
-    song = make_fragmented(tmp_path / 'song.m4a')
+    song = make_fragmented(hub.CACHE / 'song.m4a')
     hub.remux_plain(song)
     inode = song.stat().st_ino
     hub.remux_plain(song)
     assert song.stat().st_ino == inode
-    junk = tmp_path / 'junk.m4a'
+    junk = hub.CACHE / 'junk.m4a'
     junk.write_bytes(b'not audio at all')
     assert not hub.is_fragmented_mp4(junk)
     assert hub.remux_plain(junk).read_bytes() == b'not audio at all'
 
 
 def test_missing_ffmpeg_keeps_the_song_playable(hub, tmp_path, monkeypatch):
-    song = make_fragmented(tmp_path / 'song.m4a')
+    song = make_fragmented(hub.CACHE / 'song.m4a')
     raw = song.read_bytes()
     monkeypatch.setattr(hub, 'FFMPEG', str(tmp_path / 'no-ffmpeg'))
     assert hub.remux_plain(song).read_bytes() == raw
@@ -110,3 +110,10 @@ def test_download_and_old_cache_both_end_up_plain(hub, tmp_path):
     old.write_bytes(Fake.body)
     assert hub.is_fragmented_mp4(old)
     assert not hub.is_fragmented_mp4(hub.fetch_audio('aaaaaaaaaaa'))
+
+
+def test_files_outside_the_audio_cache_are_never_rewritten(hub, tmp_path):
+    outside = make_fragmented(tmp_path / 'outside.m4a')
+    raw = outside.read_bytes()
+    assert not hub.is_fragmented_mp4(outside)
+    assert hub.remux_plain(outside).read_bytes() == raw

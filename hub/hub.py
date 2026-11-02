@@ -1742,15 +1742,25 @@ FFMPEG = os.environ.get("WIZARD_MUSIC_FFMPEG", "ffmpeg")
 _remux_failed: set[str] = set()
 
 
+def _inside(path: Path, root: Path) -> Path | None:
+    """The real path when it sits inside root (the audio cache), else None."""
+    full = os.path.realpath(str(path))
+    base = os.path.realpath(str(root))
+    return Path(full) if full.startswith(base + os.sep) else None
+
+
 def is_fragmented_mp4(path: Path) -> bool:
     """True for DASH-style MP4 audio (top-level moof boxes), which is how YouTube serves its m4a.
 
     Safari and the Mac app's WebKit read such a file as about twice its real length: the song
     ends halfway through the bar and the rest is silence before the next track starts.
     """
+    safe = _inside(path, CACHE)
+    if safe is None:
+        return False
     try:
-        size_total = path.stat().st_size
-        with path.open("rb") as fh:
+        size_total = safe.stat().st_size
+        with safe.open("rb") as fh:
             pos = 0
             for _ in range(64):  # top-level boxes only; moof comes right after moov/sidx
                 head = fh.read(16)
@@ -1779,22 +1789,23 @@ def remux_plain(path: Path) -> Path:
     the seek bar maps to the real song. Leaves the file alone when it is already plain or ffmpeg
     is missing or fails; the song still plays as before.
     """
-    if path.suffix.lower() not in (".m4a", ".mp4") or path.name in _remux_failed or not is_fragmented_mp4(path):
+    safe = _inside(path, CACHE)
+    if safe is None or safe.suffix.lower() not in (".m4a", ".mp4") or safe.name in _remux_failed or not is_fragmented_mp4(safe):
         return path
-    out = path.with_name(f".{path.stem.lstrip('.')}.{uuid.uuid4().hex[:6]}.plain.m4a")
+    out = safe.with_name(f".{safe.stem.lstrip('.')}.{uuid.uuid4().hex[:6]}.plain.m4a")
     try:
-        proc = subprocess.run([FFMPEG, "-nostdin", "-v", "error", "-y", "-i", str(path), "-map", "0:a:0",
+        proc = subprocess.run([FFMPEG, "-nostdin", "-v", "error", "-y", "-i", str(safe), "-map", "0:a:0",
                                "-c", "copy", "-movflags", "+faststart", str(out)], capture_output=True, timeout=120)
-        ok = proc.returncode == 0 and out.exists() and out.stat().st_size >= path.stat().st_size // 2 and not is_fragmented_mp4(out)
+        ok = proc.returncode == 0 and out.exists() and out.stat().st_size >= safe.stat().st_size // 2 and not is_fragmented_mp4(out)
         if not ok:
-            print("remux failed", path.name, (proc.stderr or b"")[-300:].decode("utf-8", "replace"), file=sys.stderr)
-            _remux_failed.add(path.name)
+            print("remux failed", safe.name, (proc.stderr or b"")[-300:].decode("utf-8", "replace"), file=sys.stderr)
+            _remux_failed.add(safe.name)
             out.unlink(missing_ok=True)
             return path
-        os.replace(out, path)
+        os.replace(out, safe)
     except (OSError, subprocess.SubprocessError) as exc:
-        print("remux failed", path.name, repr(exc), file=sys.stderr)
-        _remux_failed.add(path.name)
+        print("remux failed", safe.name, repr(exc), file=sys.stderr)
+        _remux_failed.add(safe.name)
         out.unlink(missing_ok=True)
     return path
 
@@ -1816,7 +1827,6 @@ def fetch_audio(vid: str) -> Path:
         hit = _cache_path(vid)
         if hit:
             # Songs cached before the fix are still fragmented; fix each once, on its next play.
-            os.utime(hit)
             return remux_plain(hit)
         tmp = CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.m4a"
         try:
@@ -2110,7 +2120,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def _stream(self, tid: str):
         path = audio_path(tid)
-        size = path.stat().st_size
+        st = path.stat()
+        size = st.st_size
         ctype = {".m4a": "audio/mp4", ".webm": "audio/webm", ".opus": "audio/ogg", ".mp3": "audio/mpeg",
                  ".flac": "audio/flac", ".wav": "audio/wav", ".ogg": "audio/ogg", ".aac": "audio/aac"}.get(
             path.suffix.lower(), mimetypes.guess_type(path.name)[0] or "application/octet-stream")
@@ -2137,7 +2148,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")
         # Changes when a cached song is rewritten (fragmented -> plain), so players never splice old and new bytes.
-        self.send_header("ETag", f'"{size:x}-{path.stat().st_ino:x}"')  # mtime moves on every play (cache LRU)
+        self.send_header("ETag", f'"{size:x}-{st.st_ino:x}"')  # mtime moves on every play (cache LRU)
         self.send_header("Content-Length", str(end - start + 1))
         self.send_header("Cache-Control", "private, max-age=86400")
         self.end_headers()
