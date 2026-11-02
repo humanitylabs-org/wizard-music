@@ -2120,8 +2120,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _stream(self, tid: str):
         path = audio_path(tid)
-        st = path.stat()
-        size = st.st_size
+        size = path.stat().st_size
         ctype = {".m4a": "audio/mp4", ".webm": "audio/webm", ".opus": "audio/ogg", ".mp3": "audio/mpeg",
                  ".flac": "audio/flac", ".wav": "audio/wav", ".ogg": "audio/ogg", ".aac": "audio/aac"}.get(
             path.suffix.lower(), mimetypes.guess_type(path.name)[0] or "application/octet-stream")
@@ -2147,8 +2146,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")
-        # Changes when a cached song is rewritten (fragmented -> plain), so players never splice old and new bytes.
-        self.send_header("ETag", f'"{size:x}-{st.st_ino:x}"')  # mtime moves on every play (cache LRU)
+        # A rewritten song (fragmented -> plain) changes size, so players never splice old and new bytes.
+        self.send_header("ETag", f'"{size:x}"')
         self.send_header("Content-Length", str(end - start + 1))
         self.send_header("Cache-Control", "private, max-age=86400")
         self.end_headers()
