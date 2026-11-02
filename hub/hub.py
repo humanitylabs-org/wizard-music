@@ -1738,6 +1738,78 @@ def _cache_path(vid: str) -> Path | None:
     return None
 
 
+FFMPEG = os.environ.get("WIZARD_MUSIC_FFMPEG", "ffmpeg")
+_remux_failed: set[str] = set()
+
+
+def _inside(path: Path, root: Path) -> Path | None:
+    """The real path when it sits inside root (the audio cache), else None."""
+    full = os.path.realpath(str(path))
+    base = os.path.realpath(str(root))
+    return Path(full) if full.startswith(base + os.sep) else None
+
+
+def is_fragmented_mp4(path: Path) -> bool:
+    """True for DASH-style MP4 audio (top-level moof boxes), which is how YouTube serves its m4a.
+
+    Safari and the Mac app's WebKit read such a file as about twice its real length: the song
+    ends halfway through the bar and the rest is silence before the next track starts.
+    """
+    safe = _inside(path, CACHE)
+    if safe is None:
+        return False
+    try:
+        size_total = safe.stat().st_size
+        with safe.open("rb") as fh:
+            pos = 0
+            for _ in range(64):  # top-level boxes only; moof comes right after moov/sidx
+                head = fh.read(16)
+                if len(head) < 8:
+                    return False
+                size, kind = int.from_bytes(head[:4], "big"), head[4:8]
+                if kind == b"moof":
+                    return True
+                if kind == b"mdat":
+                    return False  # plain file: samples without fragments
+                if size == 1 and len(head) == 16:
+                    size = int.from_bytes(head[8:16], "big")
+                if size < 8 or pos + size > size_total:
+                    return False
+                pos += size
+                fh.seek(pos)
+    except OSError:
+        return False
+    return False
+
+
+def remux_plain(path: Path) -> Path:
+    """Rewrite fragmented MP4 audio as a plain MP4 in place (stream copy, no re-encode).
+
+    Every browser then reports the real length, so the next song starts when this one ends and
+    the seek bar maps to the real song. Leaves the file alone when it is already plain or ffmpeg
+    is missing or fails; the song still plays as before.
+    """
+    safe = _inside(path, CACHE)
+    if safe is None or safe.suffix.lower() not in (".m4a", ".mp4") or safe.name in _remux_failed or not is_fragmented_mp4(safe):
+        return path
+    out = safe.with_name(f".{safe.stem.lstrip('.')}.{uuid.uuid4().hex[:6]}.plain.m4a")
+    try:
+        proc = subprocess.run([FFMPEG, "-nostdin", "-v", "error", "-y", "-i", str(safe), "-map", "0:a:0",
+                               "-c", "copy", "-movflags", "+faststart", str(out)], capture_output=True, timeout=120)
+        ok = proc.returncode == 0 and out.exists() and out.stat().st_size >= safe.stat().st_size // 2 and not is_fragmented_mp4(out)
+        if not ok:
+            print("remux failed", safe.name, (proc.stderr or b"")[-300:].decode("utf-8", "replace"), file=sys.stderr)
+            _remux_failed.add(safe.name)
+            out.unlink(missing_ok=True)
+            return path
+        os.replace(out, safe)
+    except (OSError, subprocess.SubprocessError) as exc:
+        print("remux failed", safe.name, repr(exc), file=sys.stderr)
+        _remux_failed.add(safe.name)
+        out.unlink(missing_ok=True)
+    return path
+
+
 def fetch_audio(vid: str) -> Path:
     if not ONLINE:
         raise LookupError("online sources disabled")
@@ -1746,7 +1818,7 @@ def fetch_audio(vid: str) -> Path:
         raise LookupError("bad id")
     vid = m.group(0)  # only [A-Za-z0-9_-]{11} from here on; never a path
     hit = _cache_path(vid)
-    if hit:
+    if hit and (hit.name in _remux_failed or not is_fragmented_mp4(hit)):
         os.utime(hit)
         return hit
     with _dl_guard:
@@ -1754,7 +1826,8 @@ def fetch_audio(vid: str) -> Path:
     with lock:
         hit = _cache_path(vid)
         if hit:
-            return hit
+            # Songs cached before the fix are still fragmented; fix each once, on its next play.
+            return remux_plain(hit)
         tmp = CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.m4a"
         try:
             with online_urlopen(source_for(f"yt:{vid}").rstrip("/") + f"/api/music/audio/{vid}", timeout=170) as r, tmp.open("wb") as out:
@@ -1769,7 +1842,7 @@ def fetch_audio(vid: str) -> Path:
         if not ONLINE or tmp.stat().st_size == 0:
             tmp.unlink(missing_ok=True)
             raise RuntimeError("download failed")
-        made = [tmp]
+        made = [remux_plain(tmp)]
         final = CACHE / f"{vid}{made[0].suffix}"
         made[0].replace(final)
         _evict()
@@ -2073,6 +2146,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Accept-Ranges", "bytes")
+        # A rewritten song (fragmented -> plain) changes size, so players never splice old and new bytes.
+        self.send_header("ETag", f'"{size:x}"')
         self.send_header("Content-Length", str(end - start + 1))
         self.send_header("Cache-Control", "private, max-age=86400")
         self.end_headers()

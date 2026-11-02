@@ -86,7 +86,8 @@
 .music-now-meta > div { flex: 1; min-width: 0; }
 .music-now-meta h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 23px; font-weight: 700; }
 .music-now-meta p { margin: 5px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2, #a9abb6); font-size: 15px; }
-.music-seek { margin-top: 16px; }
+/* The swipe deck reaches 44px below the song title (bigger swipe target); keep the seek bar above it or every drag lands on the deck. */
+.music-seek { position: relative; z-index: 1; margin-top: 16px; }
 .music-seek input { width: 100%; height: 28px; margin: 0; accent-color: var(--wiz); }
 .music-seek-times { display: flex; justify-content: space-between; color: var(--text-dim); font: 500 12px/1 var(--mono); }
 .music-seek-times span:nth-child(2) { font-family: var(--font); }
