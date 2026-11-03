@@ -74,6 +74,8 @@
 .root-workspace:has(.music-mini) .new-thread-fab { bottom: calc(154px + var(--safe-area-bottom)); }
 
 /* Full-screen Now Playing. */
+/* The mini player steps aside while the full player is open (never a second player under Up next). */
+.music-shell:has(> .music-now) > .music-mini { visibility: hidden; }
 .music-now { position: fixed; inset: 0; z-index: 60; overscroll-behavior: contain; display: flex; flex-direction: column; background: linear-gradient(180deg, color-mix(in srgb, var(--wiz-deep) 22%, var(--bg)) 0%, var(--bg) 46%); animation: music-rise var(--sheet-time) var(--ease); }
 @keyframes music-rise { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
 .music-now-head { display: flex; align-items: center; gap: 8px; padding: calc(var(--safe-area-top) + 6px) 10px 6px; }
