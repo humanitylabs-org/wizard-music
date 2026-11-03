@@ -26,4 +26,8 @@
 :root[data-wz-hosted] .music-art-fallback { background: radial-gradient(120% 90% at 30% 15%, color-mix(in srgb, var(--wiz) 30%, transparent), color-mix(in srgb, var(--wz-text) 5%, transparent) 70%); color: color-mix(in srgb, var(--wiz) 70%, var(--wz-text)); }
 :root[data-wz-hosted][data-color-scheme="light"] .music-art-hero { box-shadow: 0 24px 60px rgba(40, 30, 15, .25); }
 /* Sticky search floats over the scrolling shelf: opaque skin base tinted with the overlay material so titles never show through the field. */
-:root[data-wz-hosted] .music-search { background: linear-gradient(var(--wz-overlay), var(--wz-overlay)), var(--wz-base); -webkit-backdrop-filter: blur(18px) saturate(1.2); backdrop-filter: blur(18px) saturate(1.2); }
+:root[data-wz-hosted] .music-search { background: linear-gradient(color-mix(in srgb, var(--wz-text) 7%, transparent), color-mix(in srgb, var(--wz-text) 7%, transparent)), linear-gradient(var(--wz-overlay), var(--wz-overlay)), var(--wz-base); -webkit-backdrop-filter: blur(18px) saturate(1.2); backdrop-filter: blur(18px) saturate(1.2); }
+/* Browse wears the same material as Now Playing (Miguel, 3 Nov 2026: "when the player is open it looks really clean, I need
+ * that to look equally clean"): the overlay tint with a soft accent glow at the top, painted over the opaque skin base, so
+ * cards and lists never sit on a busy wallpaper. */
+:root[data-wz-hosted] .music-shell { --top-material: linear-gradient(color-mix(in srgb, var(--wiz-deep) 16%, var(--wz-overlay)), color-mix(in srgb, var(--wiz-deep) 16%, var(--wz-overlay))), var(--wz-base, var(--bg)); background: linear-gradient(180deg, color-mix(in srgb, var(--wiz-deep) 16%, var(--wz-overlay)) 0, var(--wz-overlay) 360px), var(--wz-base, var(--bg)); }

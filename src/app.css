@@ -34,6 +34,9 @@ button { font: inherit; cursor: pointer; }
 .music-shell { display: flex; flex-direction: column; height: 100%; }
 .music-shell-head { flex: none; padding: calc(var(--safe-area-top) + 14px) 18px 8px; }
 .music-shell-head h1 { margin: 0; font-size: 26px; font-weight: 750; letter-spacing: -.01em; }
-.music-shell-main { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px; }
+.music-shell { --top-material: color-mix(in srgb, var(--wiz-deep) 14%, var(--bg)); background: linear-gradient(180deg, var(--top-material) 0, var(--bg) 360px); }
+/* The library scroller is a named container: browse layout follows the window's width, never the device. */
+.music-shell-main { --gutter: 18px; container: musicmain / inline-size; flex: 1; min-height: 0; overflow-y: auto; padding: 0 var(--gutter); }
+@media (min-width: 640px) { .music-shell-main { --gutter: 26px; } }
 .music-shell .music-mini { margin-bottom: calc(var(--safe-area-bottom) + 10px); }
 .music-toast { position: fixed; left: 50%; bottom: calc(var(--safe-area-bottom) + 86px); z-index: 80; transform: translateX(-50%); max-width: calc(100vw - 32px); padding: 10px 16px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--bg-raised); color: var(--text); font-size: 14px; box-shadow: 0 10px 30px #0009; }
