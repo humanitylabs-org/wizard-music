@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import { browserSessionStore, EMPTY_SNAPSHOT, musicEngine, NativeEngine, playedTracks, readSession, WebEngine, type MusicEngine, type MusicSnapshot, type MusicStation, type MusicTrack } from './engine'
 import { hostedAudioBridge } from './backgroundAudio'
 if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNativeMusic = hostedAudioBridge()
@@ -185,6 +185,12 @@ export function endListening() {
   rememberView('home')
 }
 const ChevronDown = () => <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" /></svg>
+const ChevronRight = () => <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 6 6 6-6 6" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" /></svg>
+const ShuffleGlyph = () => <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h3.5c2 0 3.2 1 4.3 2.7l2.4 4.6c1 1.7 2.3 2.7 4.3 2.7H20M4 17h3.5c1.3 0 2.3-.4 3.1-1.2M14.4 8.2c.8-.8 1.8-1.2 3.1-1.2H20m-2.5-2.5L20 7l-2.5 2.5m0 5L20 17l-2.5 2.5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+const RefreshGlyph = () => <svg width="18" height="18" viewBox="0 0 24 24" aria-hidden="true"><path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4.5v4h-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+const ListGlyph = () => <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h11M4 12h11M4 17h7m6-1.5V5l4-1" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /><circle cx="15.5" cy="16.5" r="2" fill="none" stroke="currentColor" strokeWidth="1.8" /></svg>
+/** Station tiles cycle through the skin's own colour roles, so every skin tints them its way. */
+const STATION_TINTS = ['var(--wiz)', 'var(--wz-success, var(--ok))', 'var(--wz-warning, var(--wiz-deep))', 'var(--wz-danger, var(--wiz))', 'var(--wz-accent, var(--wiz-deep))']
 
 function Art({ track, size }: { track?: MusicTrack; size: 'row' | 'card' | 'hero' | 'mini' }) {
   const [failed, setFailed] = useState(false)
@@ -283,72 +289,90 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
 
   const playRow = (track: MusicTrack) => void startStation({ trackId: track.id }, track.id, track)
 
+  const online = Boolean(home?.settings?.online)
+  const nothingYet = Boolean(home && home.library.length === 0 && home.liked.length === 0)
+  // The switch is the first step while Music is offline (or empty); once it is on it moves to the quiet footer.
+  const consentFirst = Boolean(home && (!online || nothingYet))
+  const consent = home && <section className={`music-card music-consent${consentFirst ? ' first' : ''}`} aria-label="Online sources">
+    <label><span>Online sources</span><input type="checkbox" role="switch" aria-label="Online sources" checked={online} disabled={savingConsent} onChange={async (event) => {
+      const enabled = event.target.checked
+      setSavingConsent(true)
+      try {
+        await musicApi.settings(enabled)
+        if (!enabled) { ++searchSeq.current; setResults(null); setQuery(''); endListening() }
+        setHome(await musicApi.home())
+      } catch (error) { notify((error as Error).message) }
+      finally { setSavingConsent(false) }
+    }} /></label>
+    <p>When on, Music uses your music connector apps (like YouTube Music) and looks up song details with Deezer, Apple and MusicBrainz.</p>
+  </section>
+
   return <section className="music-workspace" aria-label="Wizard Music">
-    <form className="music-search" role="search" onSubmit={(event) => { event.preventDefault(); void runSearch(query) }}>
+    <div className="music-searchbar"><form className="music-search" role="search" onSubmit={(event) => { event.preventDefault(); void runSearch(query) }}>
       <SearchGlyph />
       <input type="search" value={query} placeholder="Song, artist, or vibe" aria-label="Search music" enterKeyHint="search" onChange={(event) => { setQuery(event.target.value); if (!event.target.value) setResults(null) }} />
       {query && <button type="button" className="music-clear" aria-label="Clear search" onClick={() => { setQuery(''); setResults(null) }}>×</button>}
-    </form>
+    </form></div>
 
-    {home && <section className="music-card music-consent" aria-label="Online sources">
-      <label><input type="checkbox" role="switch" aria-label="Online sources" checked={Boolean(home.settings?.online)} disabled={savingConsent} onChange={async (event) => {
-        const enabled = event.target.checked
-        setSavingConsent(true)
-        try {
-          await musicApi.settings(enabled)
-          if (!enabled) { ++searchSeq.current; setResults(null); setQuery(''); endListening() }
-          setHome(await musicApi.home())
-        } catch (error) { notify((error as Error).message) }
-        finally { setSavingConsent(false) }
-      }} /> Online sources</label>
-      <p>When on, Music uses your music connector apps (like YouTube Music) and looks up song details with Deezer, Apple and MusicBrainz.</p>
-    </section>}
+    {consentFirst && consent}
 
     {starting && <p className="music-status" role="status">Starting your station…</p>}
 
-    {results !== null ? <div className="music-results">
-      <div className="music-section-head"><h3>{searching ? 'Searching…' : `Results for “${query.trim()}”`}</h3>{query.trim() && <button type="button" className="music-chip" onClick={() => void startStation({ query: query.trim(), label: query.trim() }, 'vibe:query')}>Station from this</button>}</div>
+    {results !== null ? <section className="music-section music-results" aria-label="Search results">
+      <div className="music-section-head"><h3>{searching ? 'Searching…' : `Results for “${query.trim()}”`}</h3>{query.trim() && <button type="button" className="music-pill" onClick={() => void startStation({ query: query.trim(), label: query.trim() }, 'vibe:query')}><PlayGlyph size={16} />Station from this</button>}</div>
       {!searching && !results.length && <p className="music-empty">Nothing matched. Try an artist, a song, or a mood.</p>}
-      {results.map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}
-    </div> : <>
-      {homeError && <div className="music-card music-error"><p>{homeError}</p><button type="button" className="secondary-action" onClick={loadHome}>Try again</button></div>}
-
-      {home && <div className="music-sources" aria-label="Music sources">
-        {home.sources.map((source) => source.open
-          ? <a key={source.id} href={source.open} className={`music-source${source.ok ? ' ok' : ''}`}><b>{source.name}</b><small>{source.detail}</small></a>
-          : <span key={source.id} className={`music-source${source.ok ? ' ok' : ''}`}><b>{source.name}</b><small>{source.detail}</small></span>)}
-      </div>}
-
-      {home?.settings?.online && <AccountLibrarySection onOpenNowPlaying={onOpenNowPlaying} notify={notify} />}
-
-      {home && Boolean(home.taste?.avoid.length) && <p className="music-taste" aria-label="Music you turned down">Playing less: {home.taste!.avoid.join(' · ')}</p>}
-
-      {home && home.vibes.length > 0 && <section className="music-section" aria-label="Start a station">
-        <div className="music-section-head"><h3>Start a station</h3></div>
-        <div className="music-chips">
-          {home.vibes.map((vibe) => <button key={vibe.id} type="button" className="music-chip" disabled={Boolean(starting)} onClick={() => void startStation({ query: vibe.label, label: vibe.label }, `vibe:${vibe.id}`)}>{vibe.label}</button>)}
-        </div>
-      </section>}
+      <div className="music-list">{results.map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}</div>
+    </section> : <>
+      {homeError && <div className="music-card music-error"><p>{homeError}</p><button type="button" className="music-pill" onClick={loadHome}>Try again</button></div>}
 
       {home && home.recent.length > 0 && <section className="music-section" aria-label="Recently played">
         <div className="music-section-head"><h3>Recently played</h3></div>
         <div className="music-shelf">
-          {home.recent.map((track) => <button type="button" key={track.id} className="music-tile" onClick={() => playRow(track)}><Art track={track} size="card" /><strong>{track.title}</strong><small>{track.artist}</small></button>)}
+          {home.recent.map((track) => <button type="button" key={track.id} className={`music-tile${track.id === current?.id ? ' active' : ''}`} onClick={() => playRow(track)}>
+            <span className="music-tile-art"><Art track={track} size="card" /><span className="music-tile-play" aria-hidden="true"><PlayGlyph size={18} /></span></span>
+            <strong>{track.title}</strong><small>{track.artist}</small>
+          </button>)}
+        </div>
+      </section>}
+
+      {home && home.vibes.length > 0 && <section className="music-section" aria-label="Start a station">
+        <div className="music-section-head"><h3>Start a station</h3></div>
+        <div className="music-stations">
+          {home.vibes.map((vibe, index) => <button key={vibe.id} type="button" className="music-station" style={{ '--tint': STATION_TINTS[index % STATION_TINTS.length] } as CSSProperties} disabled={Boolean(starting)} aria-busy={starting === `vibe:${vibe.id}`} onClick={() => void startStation({ query: vibe.label, label: vibe.label }, `vibe:${vibe.id}`)}>
+            <span className="music-station-name">{vibe.label}</span>
+            <span className="music-station-play" aria-hidden="true">{starting === `vibe:${vibe.id}` ? <LoadingWheel label="Starting" /> : <PlayGlyph size={16} />}</span>
+          </button>)}
         </div>
       </section>}
 
       {home && home.liked.length > 0 && <section className="music-section" aria-label="Liked songs">
-        <div className="music-section-head"><h3>Liked</h3><button type="button" className="music-chip" onClick={async () => { const station: MusicStation | null = null; await startEngine().load(home.liked, 0, station); noteEngineStarted(); onOpenNowPlaying() }}>Play all</button></div>
-        {home.liked.slice(0, 8).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}
+        <div className="music-section-head"><h3>Liked</h3><button type="button" className="music-pill music-pill-solid" onClick={async () => { const station: MusicStation | null = null; await startEngine().load(home.liked, 0, station); noteEngineStarted(); onOpenNowPlaying() }}><PlayGlyph size={16} />Play all</button></div>
+        <div className="music-list">{home.liked.slice(0, 8).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}</div>
       </section>}
+
+      {online && <AccountLibrarySection onOpenNowPlaying={onOpenNowPlaying} notify={notify} />}
 
       {home && home.library.length > 0 && <section className="music-section" aria-label="Your library">
-        <div className="music-section-head"><h3>On your Wizard</h3><button type="button" className="music-chip" onClick={async () => { await startEngine().load([...home.library].sort(() => Math.random() - 0.5), 0, null); noteEngineStarted(); onOpenNowPlaying() }}>Shuffle</button></div>
-        {home.library.slice(0, 12).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}
+        <div className="music-section-head"><h3>On your Wizard</h3><button type="button" className="music-pill music-pill-solid" onClick={async () => { await startEngine().load([...home.library].sort(() => Math.random() - 0.5), 0, null); noteEngineStarted(); onOpenNowPlaying() }}><ShuffleGlyph />Shuffle</button></div>
+        <div className="music-list">{home.library.slice(0, 12).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}</div>
       </section>}
 
-      {home && home.library.length === 0 && home.liked.length === 0 && <p className="music-empty">Your music starts here. Turn on Online sources above, search for a song and tap it to play. Or ask your Wizard to add your own MP3, M4A, FLAC, OGG or WAV files to Music’s library folder; they appear automatically. No music or account is bundled.</p>}
+      {nothingYet && <p className="music-empty">Your music starts here. Turn on Online sources above, search for a song and tap it to play. Or ask your Wizard to add your own MP3, M4A, FLAC, OGG or WAV files to Music’s library folder; they appear automatically. No music or account is bundled.</p>}
       {!home && !homeError && <p className="music-status">Loading your music…</p>}
+
+      {home && <footer className="music-foot" aria-label="Music sources">
+        <div className="music-section-head"><h3>Sources</h3></div>
+        <div className="music-sources">
+          {home.sources.map((source) => {
+            const body = <><span className={`music-source-dot${source.ok ? ' ok' : ''}`} aria-hidden="true" /><span className="music-row-text"><strong>{source.name}</strong><small>{source.detail}</small></span>{source.open && <ChevronRight />}</>
+            return source.open
+              ? <a key={source.id} href={source.open} className={`music-source${source.ok ? ' ok' : ''}`}>{body}</a>
+              : <span key={source.id} className={`music-source${source.ok ? ' ok' : ''}`}>{body}</span>
+          })}
+        </div>
+        {!consentFirst && consent}
+        {Boolean(home.taste?.avoid.length) && <p className="music-taste" aria-label="Music you turned down">Playing less: {home.taste!.avoid.join(' · ')}</p>}
+      </footer>}
     </>}
   </section>
 }
@@ -495,22 +519,26 @@ export function AccountLibrarySection({ onOpenNowPlaying, notify }: { onOpenNowP
     try { await playAccountTracks(data?.tracks ?? [], index); onOpenNowPlaying() }
     catch (e) { notify((e as Error).message || 'Could not start playback.') }
   }
-  return <section className="music-section" aria-label="Your YouTube Music" aria-busy={loading}>
-    <div className="music-section-head"><h3>{selection.title}</h3><button type="button" className="music-chip" disabled={loading} onClick={() => void load(selection)}>Refresh</button></div>
-    <p className="music-empty">Browse your account’s playlists and liked songs. Music’s thumbs up and down stay on this Wizard; they do not change YouTube likes.</p>
-    {data?.state === 'connected' && <div className="music-chips">
+  const signedIn = data?.state === 'connected'
+  return <section className="music-section music-account" aria-label="Your YouTube Music" aria-busy={loading}>
+    <div className="music-section-head"><h3>{selection.title}</h3><button type="button" className="music-round" disabled={loading} title="Refresh" onClick={() => void load(selection)}><RefreshGlyph /><span className="music-sr">Refresh</span></button></div>
+    {signedIn && <div className="music-chips" role="group" aria-label="Your YouTube library">
       {selection.kind === 'playlist' && <button type="button" className="music-chip" onClick={() => void load({ kind: 'playlists', title: 'YouTube playlists' })}>Back to playlists</button>}
-      <button type="button" className="music-chip" onClick={() => void load({ kind: 'playlists', title: 'YouTube playlists' })}>Playlists</button>
-      <button type="button" className="music-chip" onClick={() => void load({ kind: 'likes', title: 'YouTube liked songs' })}>Liked songs</button>
+      <button type="button" className={`music-chip${selection.kind === 'playlists' ? ' on' : ''}`} aria-pressed={selection.kind === 'playlists'} onClick={() => void load({ kind: 'playlists', title: 'YouTube playlists' })}>Playlists</button>
+      <button type="button" className={`music-chip${selection.kind === 'likes' ? ' on' : ''}`} aria-pressed={selection.kind === 'likes'} onClick={() => void load({ kind: 'likes', title: 'YouTube liked songs' })}>Liked songs</button>
     </div>}
-    {loading && <p role="status">Loading your YouTube library…</p>}
-    {(error || data?.error) && <p className="music-error" role="alert">{error || data?.error}</p>}
-    <a href="/wizard-youtube-music/" className="music-chip">{data?.state === 'signed_out' ? 'Connect YouTube Music' : 'Open YouTube Music connection'}</a>
-    {data?.playlists?.map(p => <div className="music-row" key={p.id}><button type="button" className="music-row-main" onClick={() => void load({ kind: 'playlist', id: p.id, title: p.title })}><span className="music-row-text"><strong>{p.title}</strong>{p.count != null && <small>{p.count} songs</small>}</span></button></div>)}
-    {data?.tracks && data.tracks.length > 0 && <button type="button" className="music-chip" onClick={() => void play()}>Play all</button>}
-    {data?.tracks?.map((track, index) => <TrackRow key={`${track.id}-${index}`} track={track} onPlay={() => void play(index)} />)}
+    {loading && <p className="music-status" role="status">Loading your YouTube library…</p>}
+    {!signedIn && !loading && <div className="music-card music-connect">
+      {(error || data?.error) && <p className="music-error" role="alert">{error || data?.error}</p>}
+      <a href="/wizard-youtube-music/" className="music-pill music-pill-solid">{data?.state === 'signed_out' ? 'Connect YouTube Music' : 'Open YouTube Music connection'}</a>
+    </div>}
+    {signedIn && (error || data?.error) && <p className="music-error" role="alert">{error || data?.error}</p>}
+    {data?.playlists && data.playlists.length > 0 && <div className="music-list">{data.playlists.map(p => <div className="music-row" key={p.id}><button type="button" className="music-row-main" onClick={() => void load({ kind: 'playlist', id: p.id, title: p.title })}><span className="music-art music-art-row music-art-list" aria-hidden="true"><ListGlyph /></span><span className="music-row-text"><strong>{p.title}</strong>{p.count != null && <small>{p.count} songs</small>}</span></button></div>)}</div>}
+    {data?.tracks && data.tracks.length > 0 && <div className="music-section-actions"><button type="button" className="music-pill music-pill-solid" onClick={() => void play()}><PlayGlyph size={16} />Play all</button></div>}
+    {data?.tracks && data.tracks.length > 0 && <div className="music-list">{data.tracks.map((track, index) => <TrackRow key={`${track.id}-${index}`} track={track} onPlay={() => void play(index)} />)}</div>}
     {(data?.tracks?.length === 0 || data?.playlists?.length === 0) && <p className="music-empty">No items returned by your account.</p>}
-    {(data?.tracks || data?.playlists) && <p className="music-empty">Showing up to {data.limit} items. The connector does not yet support browsing beyond this limit. Playback uses the existing music source; signing in does not guarantee playback.</p>}
+    {signedIn && <p className="music-note">Thumbs up and down stay on this Wizard; they don’t change your YouTube likes.{(data?.tracks || data?.playlists) ? ` Showing up to ${data!.limit} items; more can’t be browsed yet, and signing in doesn’t guarantee playback.` : ''}</p>}
+    {signedIn && <a href="/wizard-youtube-music/" className="music-link">Open YouTube Music connection <ChevronRight /></a>}
   </section>
 }
 
