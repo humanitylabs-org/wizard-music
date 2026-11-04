@@ -1,23 +1,40 @@
 /**
- * Wizard app keys (the shared contract): a control marked `data-wz-key="<key>"` (and optionally
- * `data-wz-key-label`) is clicked by a plain keypress. Keys are 'Space', 'Enter', 'ArrowUp/Down/Left/Right'
- * or one lower-case printable character. The shell's WizardApp SDK (`/wizard-os-home/core/app-client.js`,
- * `WizardApp.keys`) does this and draws the keycaps while ⌥ is held. This is the same rule set as a fallback
- * for Wizards whose SDK has no `keys` yet; it stands down whenever `window.WizardApp.keys` exists, so a key
- * never fires twice.
+ * Wizard app keys (the shared contract, one anchor): a control marked `data-wz-key="<key>"` (and optionally
+ * `data-wz-key-label`) is pressed by ⌥ + that key. A key is one lower-case letter or one of '/', ',', '.', ';'.
+ * Wizard keeps digits, [ ], arrows, h, w, s, space, d, v and c for itself, so apps never mark those.
  *
- * Rules: no Alt/Ctrl/Meta; never while typing in a field; the first visible, enabled match wins, looked up
- * inside the topmost open modal when one is open (nothing behind it).
+ * Inside Wizard the shell routes ⌥+key to the app's marked control and draws the keycaps while ⌥ is held.
+ * This file is the app's own fallback for when Music runs on its own (not framed in Wizard) and no
+ * `window.WizardApp.keys` exists, so a key never fires twice. Plain keys never do anything.
+ *
+ * Rules: ⌥ alone (no Ctrl/Meta/Shift); matched by `event.code` (a Mac's ⌥P types "π"); never while typing in
+ * a field; a held key presses once; the first visible, enabled match wins, looked up inside the topmost
+ * open modal when one is open (nothing behind it).
  */
 
-const NAMED: Record<string, string> = { ' ': 'Space', Spacebar: 'Space', Enter: 'Enter', ArrowUp: 'ArrowUp', ArrowDown: 'ArrowDown', ArrowLeft: 'ArrowLeft', ArrowRight: 'ArrowRight' }
+const RESERVED = new Set(['h', 'w', 's', 'd', 'v', 'c'])
+const PUNCT: Record<string, string> = { Slash: '/', Comma: ',', Period: '.', Semicolon: ';' }
 const NON_TEXT_INPUTS = new Set(['button', 'submit', 'reset', 'checkbox', 'radio', 'range', 'color', 'file', 'image'])
 
-/** The contract name of a keypress, or null when it can never be an app key. */
-export function appKeyName(event: Pick<KeyboardEvent, 'key' | 'altKey' | 'ctrlKey' | 'metaKey'>): string | null {
-  if (event.altKey || event.ctrlKey || event.metaKey) return null
-  if (NAMED[event.key]) return NAMED[event.key]
-  return event.key.length === 1 && event.key !== ' ' ? event.key : null
+type KeyLike = Pick<KeyboardEvent, 'code' | 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey'>
+
+/** The contract key an `event.code` stands for ('KeyP' -> 'p', 'Slash' -> '/'), or null. */
+export function codeKey(code: string): string | null {
+  const letter = /^Key([A-Z])$/.exec(code)
+  if (letter) return letter[1].toLowerCase()
+  return PUNCT[code] ?? null
+}
+
+/** True for a key an app may mark: one lower-case letter or / , . ; and not one Wizard keeps. */
+export function allowedAppKey(key: string): boolean {
+  return (/^[a-z]$/.test(key) && !RESERVED.has(key)) || key === '/' || key === ',' || key === '.' || key === ';'
+}
+
+/** The app key an ⌥ keypress names, or null (plain keys, other modifiers, reserved keys). */
+export function appKeyName(event: KeyLike): string | null {
+  if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return null
+  const key = codeKey(event.code)
+  return key && allowedAppKey(key) ? key : null
 }
 
 /** True while the owner is typing: a text field, a select, or anything editable has focus. */
@@ -56,23 +73,29 @@ export function appKeyTarget(key: string, doc: Document = document): HTMLElement
   return null
 }
 
-/** Press a marked control: fields take focus (the "/ = search" key), everything else is clicked. */
+/** Press a marked control: fields take focus (the "⌥/ = search" key), everything else is clicked. */
 export function pressAppKey(el: HTMLElement) {
   const tag = el.tagName
   if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') { el.focus(); return }
   el.click()
 }
 
+/** True when this fallback should act: not framed inside Wizard and no shell SDK keys. */
+export function fallbackActive(win: Window = window): boolean {
+  if (win.parent !== win) return false
+  return !(win as Window & { WizardApp?: { keys?: unknown } }).WizardApp?.keys
+}
+
 /** Install the fallback handler on `win`. Returns the uninstall function. */
 export function installAppKeys(win: Window = window): () => void {
   const onKey = (event: KeyboardEvent) => {
-    if ((win as Window & { WizardApp?: { keys?: unknown } }).WizardApp?.keys) return
+    if (!fallbackActive(win)) return
     if (event.defaultPrevented || event.isComposing) return
     const key = appKeyName(event)
     if (!key || typingIn(event.target)) return
     const el = appKeyTarget(key, win.document)
     if (!el) return
-    // Space must neither scroll the page nor also press a focused button; a held key presses once.
+    // ⌥+key must not also type its character (π, ÷); a held key presses once.
     event.preventDefault()
     if (event.repeat) return
     pressAppKey(el)

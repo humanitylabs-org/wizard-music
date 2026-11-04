@@ -413,7 +413,7 @@ export function MiniPlayer({ onOpen, notify }: { onOpen: () => void; notify: (me
         render={(item) => <><Art track={item} size="mini" /><span className="music-row-text"><strong>{item.title}</strong><small>{item.artist}</small></span></>} />
     </button>
     <button type="button" className="music-mini-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph size={22} /></button>
-    <button type="button" className="music-mini-toggle" data-wz-key="Space" data-wz-key-label="Play / pause" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engineIfStarted()?.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph /> : <PlayGlyph />}</button>
+    <button type="button" className="music-mini-toggle" data-wz-key="p" data-wz-key-label="Play / pause" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engineIfStarted()?.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph /> : <PlayGlyph />}</button>
     <button type="button" className="music-mini-next" data-wz-key="k" data-wz-key-label="Next" aria-label="Next song" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
     <button type="button" className="music-mini-close" aria-label="Close: stop this song and end the session" onClick={endListening}><CloseGlyph size={20} /></button>
     <span className="music-mini-progress" style={{ transform: `scaleX(${progress})` }} />
@@ -648,7 +648,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
       <div className="music-controls">
         <button type="button" className="music-icon-button music-thumb music-thumb-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph /></button>
         <button type="button" className="music-icon-button big" data-wz-key="j" data-wz-key-label="Previous" aria-label="Previous" onClick={() => engine.previous()}><PrevGlyph /></button>
-        <button type="button" className="music-play" data-wz-key="Space" data-wz-key-label="Play / pause" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engine.toggle()}>{snapshot.buffering && (snapshot.wantPlaying ?? true) ? <LoadingWheel label="Loading" /> : (snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph size={30} /> : <PlayGlyph size={30} />}</button>
+        <button type="button" className="music-play" data-wz-key="p" data-wz-key-label="Play / pause" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engine.toggle()}>{snapshot.buffering && (snapshot.wantPlaying ?? true) ? <LoadingWheel label="Loading" /> : (snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph size={30} /> : <PlayGlyph size={30} />}</button>
         <button type="button" className="music-icon-button big" data-wz-key="k" data-wz-key-label="Next" aria-label="Next" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
         <button type="button" className={`music-icon-button music-thumb music-like${liked ? ' on' : ''}`} aria-pressed={liked} aria-label={liked ? 'Thumbs up (on)' : 'Thumbs up'} onClick={like}><ThumbUpGlyph filled={liked} /></button>
       </div>
