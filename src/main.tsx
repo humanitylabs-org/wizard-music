@@ -139,7 +139,7 @@ function App() {
   }, [autoOpenNowPlaying])
   // The Wizard OS orb drives playback: "play …", pause, next, louder (src/music/voice.ts).
   useEffect(() => installMusicVoice(notify), [notify])
-  // Space play/pause, k next, j previous, / search (the shared data-wz-key contract; stands down for WizardApp.keys).
+  // ⌥P play/pause, ⌥K next, ⌥J previous, ⌥/ search (the shared data-wz-key contract; only outside Wizard, without WizardApp.keys).
   useEffect(() => installAppKeys(), [])
   // A voice search shows its results list, so Now Playing steps aside.
   useEffect(() => musicControl.onSearchShown(() => { if (nowPlayingRef.current) closeNowPlaying() }), [closeNowPlaying])
