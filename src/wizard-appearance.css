@@ -31,3 +31,8 @@
  * that to look equally clean"): the overlay tint with a soft accent glow at the top, painted over the opaque skin base, so
  * cards and lists never sit on a busy wallpaper. */
 :root[data-wz-hosted] .music-shell { --top-material: linear-gradient(color-mix(in srgb, var(--wiz-deep) 16%, var(--wz-overlay)), color-mix(in srgb, var(--wiz-deep) 16%, var(--wz-overlay))), var(--wz-base, var(--bg)); background: linear-gradient(180deg, color-mix(in srgb, var(--wiz-deep) 16%, var(--wz-overlay)) 0, var(--wz-overlay) 360px), var(--wz-base, var(--bg)); }
+/* Inside a Wizard window the shell already ends the frame above its dock/home bar and keeps the device inset itself:
+ * no second safe-area gap under the mini player or at the end of Now Playing. Full screen still reaches the glass. */
+:root[data-wz-hosted]:not([data-presentation="immersive"]) .music-shell .music-mini { margin-bottom: 8px; }
+:root[data-wz-hosted]:not([data-presentation="immersive"]) .music-now-body { padding-bottom: 24px; }
+
