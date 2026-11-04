@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
 import { browserSessionStore, EMPTY_SNAPSHOT, musicEngine, NativeEngine, playedTracks, readSession, WebEngine, type MusicEngine, type MusicSnapshot, type MusicStation, type MusicTrack } from './engine'
 import { hostedAudioBridge } from './backgroundAudio'
 if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNativeMusic = hostedAudioBridge()
@@ -232,6 +232,31 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
   const [starting, setStarting] = useState('')
   const searchSeq = useRef(0)
   const current = snapshot.queue[snapshot.index]
+  // Back (phone Back, Android Back, Escape) on search results returns to Music's home, like the search box's ×.
+  // Results own one history entry (like Now Playing), so the phone's Back pops it instead of leaving Music. The
+  // WizardApp handler is registered before the app shell's own, so an open Now Playing still closes first.
+  const resultsRef = useRef<MusicTrack[] | null>(null)
+  resultsRef.current = results
+  const clearSearch = useCallback(() => { ++searchSeq.current; setQuery(''); setResults(null); setSearching(false) }, [])
+  const showingResults = results !== null
+  useEffect(() => {
+    const at = history.state?.wizardMusic
+    if (showingResults && at !== 'search' && at !== 'now') history.pushState({ wizardMusic: 'search' }, '')
+    // results gone by ×, an emptied box or Online sources off: step back over the results' own entry
+    if (!showingResults && at === 'search') history.back()
+  }, [showingResults])
+  useEffect(() => {
+    const onPop = () => {
+      const at = history.state?.wizardMusic
+      if (at !== 'search' && at !== 'now' && resultsRef.current !== null) { ++searchSeq.current; setQuery(''); setResults(null); setSearching(false) }
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+  useLayoutEffect(() => window.WizardApp?.back?.register?.({
+    canGoBack: () => resultsRef.current !== null,
+    back: () => { if (resultsRef.current === null) return false; clearSearch(); return true }
+  }), [clearSearch])
 
   const loadHome = useCallback(() => {
     setHomeError('')
@@ -310,8 +335,8 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
   return <section className="music-workspace" aria-label="Wizard Music">
     <div className="music-searchbar"><form className="music-search" role="search" onSubmit={(event) => { event.preventDefault(); void runSearch(query) }}>
       <SearchGlyph />
-      <input type="search" value={query} placeholder="Song, artist, or vibe" aria-label="Search music" enterKeyHint="search" onChange={(event) => { setQuery(event.target.value); if (!event.target.value) setResults(null) }} />
-      {query && <button type="button" className="music-clear" aria-label="Clear search" onClick={() => { setQuery(''); setResults(null) }}>×</button>}
+      <input type="search" value={query} placeholder="Song, artist, or vibe" aria-label="Search music" enterKeyHint="search" onChange={(event) => { setQuery(event.target.value); if (!event.target.value) clearSearch() }} />
+      {query && <button type="button" className="music-clear" aria-label="Clear search" onClick={clearSearch}>×</button>}
     </form></div>
 
     {consentFirst && consent}
