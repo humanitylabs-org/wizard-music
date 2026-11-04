@@ -335,7 +335,7 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
   return <section className="music-workspace" aria-label="Wizard Music">
     <div className="music-searchbar"><form className="music-search" role="search" onSubmit={(event) => { event.preventDefault(); void runSearch(query) }}>
       <SearchGlyph />
-      <input type="search" value={query} placeholder="Song, artist, or vibe" aria-label="Search music" enterKeyHint="search" onChange={(event) => { setQuery(event.target.value); if (!event.target.value) clearSearch() }} />
+      <input type="search" value={query} placeholder="Song, artist, or vibe" aria-label="Search music" enterKeyHint="search" data-wz-key="/" data-wz-key-label="Search" onClick={(event) => event.currentTarget.focus()} onChange={(event) => { setQuery(event.target.value); if (!event.target.value) clearSearch() }} />
       {query && <button type="button" className="music-clear" aria-label="Clear search" onClick={clearSearch}>×</button>}
     </form></div>
 
@@ -413,8 +413,8 @@ export function MiniPlayer({ onOpen, notify }: { onOpen: () => void; notify: (me
         render={(item) => <><Art track={item} size="mini" /><span className="music-row-text"><strong>{item.title}</strong><small>{item.artist}</small></span></>} />
     </button>
     <button type="button" className="music-mini-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph size={22} /></button>
-    <button type="button" className="music-mini-toggle" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engineIfStarted()?.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph /> : <PlayGlyph />}</button>
-    <button type="button" className="music-mini-next" aria-label="Next song" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
+    <button type="button" className="music-mini-toggle" data-wz-key="Space" data-wz-key-label="Play / pause" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engineIfStarted()?.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph /> : <PlayGlyph />}</button>
+    <button type="button" className="music-mini-next" data-wz-key="k" data-wz-key-label="Next" aria-label="Next song" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
     <button type="button" className="music-mini-close" aria-label="Close: stop this song and end the session" onClick={endListening}><CloseGlyph size={20} /></button>
     <span className="music-mini-progress" style={{ transform: `scaleX(${progress})` }} />
   </div>
@@ -647,9 +647,9 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
       </div>
       <div className="music-controls">
         <button type="button" className="music-icon-button music-thumb music-thumb-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph /></button>
-        <button type="button" className="music-icon-button big" aria-label="Previous" onClick={() => engine.previous()}><PrevGlyph /></button>
-        <button type="button" className="music-play" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engine.toggle()}>{snapshot.buffering && (snapshot.wantPlaying ?? true) ? <LoadingWheel label="Loading" /> : (snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph size={30} /> : <PlayGlyph size={30} />}</button>
-        <button type="button" className="music-icon-button big" aria-label="Next" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
+        <button type="button" className="music-icon-button big" data-wz-key="j" data-wz-key-label="Previous" aria-label="Previous" onClick={() => engine.previous()}><PrevGlyph /></button>
+        <button type="button" className="music-play" data-wz-key="Space" data-wz-key-label="Play / pause" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engine.toggle()}>{snapshot.buffering && (snapshot.wantPlaying ?? true) ? <LoadingWheel label="Loading" /> : (snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph size={30} /> : <PlayGlyph size={30} />}</button>
+        <button type="button" className="music-icon-button big" data-wz-key="k" data-wz-key-label="Next" aria-label="Next" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
         <button type="button" className={`music-icon-button music-thumb music-like${liked ? ' on' : ''}`} aria-pressed={liked} aria-label={liked ? 'Thumbs up (on)' : 'Thumbs up'} onClick={like}><ThumbUpGlyph filled={liked} /></button>
       </div>
       {snapshot.error && <p className="music-status" role="status">{snapshot.error}</p>}

@@ -2,6 +2,7 @@ import { StrictMode, useCallback, useEffect, useLayoutEffect, useRef, useState }
 import { createRoot } from 'react-dom/client'
 import { lastViewWasNowPlaying, MiniPlayer, MusicApp, musicControl, NowPlaying, rememberView, restoreMusicSession, whenTrackLoaded } from './music/MusicApp'
 import { installMusicVoice } from './music/voice'
+import { installAppKeys } from './music/appKeys'
 
 function musicIsPlaying() {
   const snap = musicControl.engine()?.snapshot()
@@ -138,6 +139,8 @@ function App() {
   }, [autoOpenNowPlaying])
   // The Wizard OS orb drives playback: "play …", pause, next, louder (src/music/voice.ts).
   useEffect(() => installMusicVoice(notify), [notify])
+  // Space play/pause, k next, j previous, / search (the shared data-wz-key contract; stands down for WizardApp.keys).
+  useEffect(() => installAppKeys(), [])
   // A voice search shows its results list, so Now Playing steps aside.
   useEffect(() => musicControl.onSearchShown(() => { if (nowPlayingRef.current) closeNowPlaying() }), [closeNowPlaying])
   useLayoutEffect(() => {
