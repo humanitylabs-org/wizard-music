@@ -19,7 +19,7 @@ async function musicJson<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 export const musicApi = {
-  home: () => musicJson<MusicHome>(BASE + 'api/home'),
+  home: (signal?: AbortSignal) => musicJson<MusicHome>(BASE + 'api/home', { signal, cache: 'no-store' }),
   search: (q: string) => musicJson<{ tracks: MusicTrack[] }>(`${BASE}api/search?q=${encodeURIComponent(q)}`),
   station: (seed: { trackId?: string; query?: string; label?: string }) => musicJson<{ station: MusicStation; tracks: MusicTrack[] }>(BASE + 'api/station', { method: 'POST', body: JSON.stringify(seed) }),
   feedback: (id: string, action: FeedbackAction, upcoming: string[] = []) => musicJson<FeedbackResult>(BASE + 'api/feedback', { method: 'POST', body: JSON.stringify({ id, action, upcoming }) }),
@@ -225,11 +225,53 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
   const searchSeq = useRef(0)
   const current = snapshot.queue[snapshot.index]
 
-  const loadHome = useCallback(() => {
-    setHomeError('')
-    musicApi.home().then(setHome).catch((error: Error) => setHomeError(error.message))
+  const homeRefresh = useRef<() => void>(() => undefined)
+  const loadHome = useCallback(() => homeRefresh.current(), [])
+  useEffect(() => {
+    // Mixes can be added by an agent while Music stays open. Refresh just the home
+    // data, never the document, search or engine. Keep good data on transient errors.
+    let disposed = false, hasHome = false
+    let inFlight: AbortController | null = null
+    const visible = () => {
+      if (document.hidden) return false
+      try { return window.WizardApp?.view?.isVisible?.() ?? true } catch { return true }
+    }
+    const refresh = (quiet = true) => {
+      if (disposed || inFlight) return
+      const controller = new AbortController()
+      inFlight = controller
+      if (!quiet) setHomeError('')
+      // A hung hub must not block every later poll or a return-to-Music refresh.
+      const timeout = window.setTimeout(() => controller.abort(), 10000)
+      void musicApi.home(controller.signal).then((payload) => {
+        if (disposed || controller.signal.aborted) return
+        hasHome = true
+        setHome(payload)
+        setHomeError('')
+      }).catch((error: Error) => {
+        if (!disposed && (!quiet || !hasHome)) setHomeError(controller.signal.aborted ? 'Your music hub did not answer. Try again in a moment.' : error.message)
+      }).finally(() => {
+        window.clearTimeout(timeout)
+        if (inFlight === controller) inFlight = null
+      })
+    }
+    const onVisible = () => { if (visible()) refresh() }
+    homeRefresh.current = () => refresh(false)
+    refresh(false)
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    // Focus alone misses an app left visible all day, and shell window switches
+    // do not always change document.visibilityState. Both are bounded by this poll.
+    const timer = window.setInterval(onVisible, 15000)
+    return () => {
+      disposed = true
+      homeRefresh.current = () => undefined
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+      inFlight?.abort()
+    }
   }, [])
-  useEffect(() => { loadHome() }, [loadHome])
 
   const runSearch = useCallback(async (text: string, quiet = false): Promise<number> => {
     const q = text.trim()
