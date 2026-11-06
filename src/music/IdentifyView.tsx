@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { createPortal, flushSync } from 'react-dom'
-import { identifyControl, identifyJson, type Candidate } from './identify'
+import { identifyControl, identifyJson, IDENTIFY_TARGET_SECONDS, IDENTIFY_LIMIT_SECONDS, type Candidate } from './identify'
 import './identify.css'
 
 declare global { interface Window { WzSheet: { open(dialog: HTMLDialogElement): void; close(dialog: HTMLDialogElement): void } } }
@@ -9,19 +9,14 @@ const label = (s: string) => ({ pending: 'Saved · identifying…', uploaded: 'S
 
 export function IdentifyButtons() {
   const state = useSyncExternalStore(identifyControl.subscribe, identifyControl.snapshot)
-  return <div className="identify-header"><button type="button" className="wz-button secondary" onClick={() => { flushSync(() => { void identifyControl.start() }) }} disabled={state.phase !== 'idle'} aria-label="Identify song">◉ <span>Identify</span></button><button type="button" className="wz-button secondary" onClick={() => identifyControl.open()}>Hunts</button></div>
+  return <div className="identify-header"><button type="button" className="wz-button secondary" onClick={() => { flushSync(() => { void identifyControl.start() }) }} disabled={state.phase !== 'idle'} aria-label="Identify song">◉ <span>Identify</span></button><button type="button" className="wz-button secondary" onClick={() => identifyControl.open()}>Identifications</button></div>
 }
-// Shazam fingerprints often match a few clean seconds. Wang (2003) found 10–15 s
-// clips robust in heavy noise where 5 s clips drop off: 12 s is our loud-room
-// "enough" target, not a send timer. Only the separate 30 s safety cap sends.
-export const CAPTURE_TARGET_SECONDS = 12
+// Clean Shazam fingerprints often match from a few seconds. Wang (2003) shows
+// 10–15 s clips robust in heavy noise where 5 s clips drop off: 12 s is our
+// loud-room "enough" target, never an auto-send timer. The separate hard cap is 30 s.
 export function CaptureProgress({ elapsed }: { elapsed: number }) {
-  const progress = Math.min(1, elapsed / CAPTURE_TARGET_SECONDS)
   const copy = elapsed < 4 ? 'Hold it up to the music…' : elapsed < 8 ? 'Catching the beat…' : elapsed < 12 ? 'Almost there, keep it steady…' : 'That should be enough to find it. Keep listening a bit longer to boost the odds.'
-  return <><div className="identify-ring" role="progressbar" aria-label="Audio capture target" aria-valuemin={0} aria-valuemax={12} aria-valuenow={Math.min(12, elapsed)}>
-    <svg viewBox="0 0 120 120" aria-hidden="true"><circle className="identify-ring-track" cx="60" cy="60" r="54" /><circle className="identify-ring-fill" cx="60" cy="60" r="54" pathLength="1" strokeDasharray="1" strokeDashoffset={1 - progress} /></svg>
-    <strong>{Math.floor(elapsed)}<small>seconds</small></strong>
-  </div><p className="identify-encouragement">{copy}</p></>
+  return <><div className="identify-ring" role="progressbar" aria-label="Audio capture target" aria-valuemin={0} aria-valuemax={12} aria-valuenow={Math.min(12, elapsed)}><svg viewBox="0 0 120 120" aria-hidden="true"><circle className="identify-ring-track" cx="60" cy="60" r="54" /><circle className="identify-ring-fill" cx="60" cy="60" r="54" pathLength="1" strokeDasharray="1" strokeDashoffset={1 - Math.min(1, elapsed / IDENTIFY_TARGET_SECONDS)} /></svg><strong>{Math.floor(elapsed)}<small>seconds</small></strong></div><p className="identify-guidance">{copy}</p></>
 }
 function Clip({ src }: { src: string }) { return <audio key={src} controls preload="metadata" src={src} /> }
 export function IdentifyView({ notify }: { notify(message: string): void }) {
@@ -58,30 +53,31 @@ export function IdentifyView({ notify }: { notify(message: string): void }) {
   const queued = state.locals.filter(c => !state.hunts.some(h => h.id === c.id))
   return <>
     {state.open && <section className="identify-view" aria-label="Song identification">
-      <div className="identify-top"><button className="wz-button secondary" onClick={() => identifyControl.back()}>← Music</button><h2>Hunts</h2><button className="wz-button secondary" onClick={() => { void identifyControl.drain() }}>Refresh</button></div>
+      <div className="identify-top"><button className="wz-button secondary" onClick={() => identifyControl.back()}>← Music</button><h2>Identifications</h2><button className="wz-button secondary" onClick={() => { void identifyControl.drain() }}>Refresh</button></div>
       {state.phase !== 'idle' ? <section className="identify-recording" role="status" aria-live="polite">
-        {state.phase === 'recording' ? <CaptureProgress elapsed={state.elapsed} /> : <p>{state.phase === 'starting' ? 'Starting microphone…' : 'Saving your clip…'}</p>}
+        {state.phase === 'recording' ? <CaptureProgress elapsed={state.elapsed} /> : <p>{state.phase === 'starting' ? 'Starting microphone…' : state.phase === 'ready' ? 'Recording saved · ready to send' : 'Saving your clip…'}</p>}
         <meter min={0} max={1} value={state.level} aria-label="Microphone level" />
-        <button className="wz-button" disabled={state.phase !== 'recording'} onClick={() => { void identifyControl.stop() }}>{state.elapsed < 5 ? 'Find it now · early' : 'Find it'}</button>
+        <div className="identify-actions"><button className="wz-button" disabled={!['recording', 'ready'].includes(state.phase)} onClick={() => { flushSync(() => { void identifyControl.stop() }) }}>{state.elapsed < 5 ? 'Find it now · early' : 'Find it'}</button><button className="wz-button secondary" disabled={state.phase === 'saving'} onClick={() => identifyControl.cancel()}>Cancel</button></div>
+        <p className="identify-muted">You can send early. Recording stops at {IDENTIFY_LIMIT_SECONDS} seconds and sends it for identification.</p>
         <p className="identify-muted">Your audio is kept even when there's no match.</p>
       </section> : <button className="wz-button" onClick={() => { flushSync(() => { void identifyControl.start() }) }}>{state.needsTap ? 'Tap to start listening' : '◉ Identify a song'}</button>}
       {state.error && <p role="alert" className="identify-error">{state.error}</p>}
-      {state.phase === 'idle' && <div className="identify-manual"><input className="wz-input" aria-label="Note for next recording" placeholder="Optional note · venue, DJ, moment" value={state.note} onChange={e => identifyControl.configure(e.target.value, state.geoEnabled)} /><label><input type="checkbox" checked={state.geoEnabled} onChange={e => identifyControl.configure(state.note, e.target.checked)} /> Save approximate location for the next hunt</label></div>}
-      <h3>Your hunts</h3>
-      {queued.map(c => <button className="identify-hunt" key={c.id} onClick={() => { void identifyControl.detail(c.id) }}><span className="identify-hunt-copy"><strong>Unknown song</strong><span>{time(c.client_ts)} · Saved on this device · {state.sendErrors[c.id] || 'waiting for connection'}</span></span><span>›</span></button>)}
-      {state.hunts.map(c => <button className="identify-hunt" key={c.id} onClick={() => { void identifyControl.detail(c.id) }}><span className="identify-hunt-copy"><strong>{c.status === 'resolved' ? '✓ ' : ''}{c.best_title || 'Unknown song'}</strong><span>{c.best_artist ? c.best_artist + ' · ' : ''}{time(c.created_at)} · {label(c.status)}</span></span><span>›</span></button>)}
-      {!state.hunts.length && !queued.length && <p className="wz-empty">{state.loading ? 'Loading hunts…' : 'Hear something? Tap Identify. Every clip is kept.'}</p>}
-      <div className="identify-footer"><button className="wz-button secondary" onClick={() => { void act('retry-all', () => identifyControl.retryUnsolved()) }} disabled={!!pending}>{pending === 'retry-all' ? 'Queued…' : 'Re-hunt all unsolved'}</button><button className="wz-button secondary" onClick={() => { void act('retention', async () => { const result = await identifyJson<{ to_archive: string[]; to_delete_audio: string[] }>('retention/dry-run'); notify(`Retention dry-run only · ${result.to_archive?.length || 0} eligible for archive · no audio deleted`) }) }}>Retention dry-run</button></div>
+      {state.phase === 'idle' && <div className="identify-manual"><input className="wz-input" aria-label="Note for next recording" placeholder="Optional note · venue, DJ, moment" value={state.note} onChange={e => identifyControl.configure(e.target.value, state.geoEnabled)} /><label><input type="checkbox" checked={state.geoEnabled} onChange={e => identifyControl.configure(state.note, e.target.checked)} /> Save approximate location for the next identification</label></div>}
+      <h3>Your identifications</h3>
+      {queued.map(c => <button className={'identify-hunt' + (state.freshId === c.id ? ' identify-fresh' : '')} key={c.id} onClick={() => { void identifyControl.detail(c.id) }}><span className="identify-hunt-copy"><strong>Unknown song</strong><span>{time(c.client_ts)} · Saved on this device · {c.sendRequested === false ? 'Not sent · tap to review' : state.sendErrors[c.id] || 'waiting for connection'}</span></span><span>{state.freshId === c.id && <small className="identify-new">New</small>} ›</span></button>)}
+      {state.hunts.map(c => <button className={'identify-hunt' + (state.freshId === c.id ? ' identify-fresh' : '')} key={c.id} onClick={() => { void identifyControl.detail(c.id) }}><span className="identify-hunt-copy"><strong>{c.status === 'resolved' ? '✓ ' : ''}{c.best_title || 'Unknown song'}</strong><span>{c.best_artist ? c.best_artist + ' · ' : ''}{time(c.created_at)} · {label(c.status)}</span></span><span>{state.freshId === c.id && <small className="identify-new">New</small>} ›</span></button>)}
+      {!state.hunts.length && !queued.length && <p className="wz-empty">{state.loading ? 'Loading identifications…' : 'Hear something? Tap Identify. Every clip is kept.'}</p>}
+      <div className="identify-footer"><button className="wz-button secondary" onClick={() => { void act('retry-all', () => identifyControl.retryUnsolved()) }} disabled={!!pending}>{pending === 'retry-all' ? 'Queued…' : 'Retry all unsolved'}</button><button className="wz-button secondary" onClick={() => { void act('retention', async () => { const result = await identifyJson<{ to_archive: string[]; to_delete_audio: string[] }>('retention/dry-run'); notify(`Retention dry-run only · ${result.to_archive?.length || 0} eligible for archive · no audio deleted`) }) }}>Retention dry-run</button></div>
     </section>}
-    {state.selected && createPortal(<dialog ref={dialog} className="wz-sheet identify-sheet" aria-label="Hunt details">
-      <h2>Hunt{detail ? ' · ' + time(detail.created_at) : ''}</h2>
+    {state.selected && createPortal(<dialog ref={dialog} className="wz-sheet identify-sheet" aria-label="Identification details">
+      <h2>Identification{detail ? ' · ' + time(detail.created_at) : ''}</h2>
       {state.error && <p role="alert">{state.error}</p>}
       <div className="identify-live-status" role="status" aria-live="polite">
-        {state.phase === 'saving' ? <><strong>Saving your clip…</strong><p>Keeping the audio on this device first.</p></> : local ? <><strong>{state.sendErrors[local.id] ? 'Saved on this device' : 'Sending your clip…'}</strong><p>{state.sendErrors[local.id] || 'Your audio is safe here while it uploads.'}</p>{state.sendErrors[local.id] && <button className="wz-button" onClick={() => { void identifyControl.drain() }}>Try again</button>}</> : !detail || ['pending', 'uploaded', 'hunting'].includes(detail.status) ? <><span className="music-wheel" aria-hidden="true" /><strong>Finding your track…</strong><p>About 6 seconds in our last check. Noisy clips can take longer.</p></> : <><strong>{detail.status === 'no_match' ? 'No match this time · audio kept' : detail.status === 'error' ? 'Couldn’t finish this hunt · audio kept' : label(detail.status)}</strong></>}
+        {state.phase === 'saving' ? <><strong>Saving your clip…</strong><p>Keeping the audio on this device first.</p></> : local ? <><strong>{local.sendRequested === false || state.sendErrors[local.id] ? 'Saved on this device' : 'Sending your clip…'}</strong><p>{local.sendRequested === false ? 'Not sent. You can review or send it below.' : state.sendErrors[local.id] || 'Your audio is safe here while it uploads.'}</p>{state.sendErrors[local.id] && <button className="wz-button" onClick={() => { void identifyControl.drain() }}>Try again</button>}</> : !detail || ['pending', 'uploaded', 'hunting'].includes(detail.status) ? <><span className="music-wheel" aria-hidden="true" /><strong>Finding your track…</strong><p>About 6 seconds in our last check. Noisy clips can take longer.</p></> : <strong>{detail.status === 'no_match' ? 'No match this time · audio kept' : detail.status === 'error' ? 'Couldn’t finish this identification · audio kept' : label(detail.status)}</strong>}
       </div>
       {(detail || local) && <>
         <h3>Your audio</h3><Clip src={localUrl || detail?.audio_url || ''} />
-        {local && <p className="identify-muted">Saved on this device. We'll keep trying if the connection drops.</p>}
+        {local && <><p className="identify-muted" role="status">{local.sendRequested === false ? 'Saved on this device · not sent.' : state.sendErrors[local.id] || 'Saved · sending for identification…'}</p>{local.sendRequested === false && <button className="wz-button" disabled={state.phase === 'saving'} onClick={() => { void identifyControl.submit(local.id) }}>Send for identification</button>}</>}
         {detail && <><p className="identify-muted">{label(detail.status)}{detail.note ? ' · ' + detail.note : ''}</p>{detail.last_error && <p role="alert">{detail.last_error}</p>}
           <details><summary>Capture details</summary><p className="identify-muted">SHA-256: <code style={{overflowWrap:'anywhere'}}>{detail.raw_sha256}</code></p></details>
           <details><summary>Original recording</summary><Clip src={detail.original_url || ''} /></details>

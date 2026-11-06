@@ -10,8 +10,12 @@
 .identify-ring circle{fill:none;stroke-width:7}.identify-ring-track{stroke:var(--wz-border,var(--line))}.identify-ring-fill{stroke:currentColor;stroke-linecap:round;transition:stroke-dashoffset .2s linear}
 .identify-ring strong{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;font-size:48px;font-variant-numeric:tabular-nums;color:var(--wz-text,var(--text))}
 .identify-ring small{font-size:13px;font-weight:400;color:var(--wz-text-muted,var(--text-dim))}
-.identify-encouragement{text-align:center;max-width:340px;margin:8px 0;line-height:1.5}.identify-live-status{padding:16px 0;color:var(--wz-text,var(--text))}.identify-live-status p{color:var(--wz-text-muted,var(--text-dim));line-height:1.5}.identify-live-status .music-wheel{width:22px;height:22px;color:var(--wz-accent,var(--wiz));margin:0 0 12px}
-.identify-recording meter{width:min(100%,280px);height:12px;accent-color:var(--wz-accent,var(--wiz))}
+.identify-live-status{padding:16px 0;color:var(--wz-text,var(--text))}.identify-live-status p{color:var(--wz-text-muted,var(--text-dim));line-height:1.5}.identify-live-status .music-wheel{width:22px;height:22px;color:var(--wz-accent,var(--wiz));margin:0 0 12px}
+.identify-recording meter,.identify-recording progress{width:min(100%,280px);height:12px;accent-color:var(--wz-accent,var(--wiz))}
+.identify-guidance{margin:0;font-weight:600;text-align:center}
+.identify-recording{background:linear-gradient(var(--wz-surface,var(--bg-raised)),var(--wz-surface,var(--bg-raised))),var(--wz-base,var(--bg,#0d0d12))}
+.identify-fresh{border-radius:8px;padding-inline:10px;background:color-mix(in srgb,var(--wz-accent,var(--wiz)) 12%,transparent)}
+.identify-new{font-size:11px;font-weight:600;padding:4px 7px;border-radius:999px;background:var(--wz-accent,var(--wiz));color:var(--wz-on-accent,#fff)}
 .identify-muted,.identify-hunt-copy>span,.identify-candidate-title p{color:var(--wz-text-muted,var(--text-dim));font-size:13px;line-height:1.5}
 .identify-error{color:var(--wz-danger,var(--text));padding:12px;border:1px solid currentColor;border-radius:10px}
 .identify-hunt{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:64px;width:100%;text-align:left;padding:12px 4px;background:transparent;border:0;border-bottom:1px solid var(--wz-border,var(--line));color:inherit;font:inherit;cursor:pointer}

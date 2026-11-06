@@ -1,0 +1,8 @@
+label:Hunt details => Identification details | test=qa/identify-browser.mjs | token=Identifications
+label:Hunts => Identifications | test=qa/identify-browser.mjs | token=Identifications
+label:Loading hunts… => Loading identifications… | test=qa/identify-browser.mjs | token=Identifications
+label:Loading hunt… => Loading identification… | test=qa/identify-browser.mjs | token=Identifications
+label:Re-hunt all unsolved => Retry all unsolved | test=qa/identify-browser.mjs | token=Identifications
+label:Save approximate location for the next hunt => Save approximate location for the next identification | test=qa/identify-browser.mjs | token=Identifications
+label:Stop and identify => Send for identification | test=qa/identify-browser.mjs | token=Send for identification
+label:Your hunts => Your identifications | test=qa/identify-browser.mjs | token=Identifications

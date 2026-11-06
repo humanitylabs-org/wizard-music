@@ -115,7 +115,7 @@ function App() {
     let was = visible(), awaySince = 0, phoneAwaySince = 0, phoneWas = !document.hidden
     const check = () => {
       const now = visible()
-      if (!now && was) awaySince = Date.now()
+      if (!now && was) { awaySince = Date.now(); identifyControl.leftView() }
       // Only really leaving the Wizard app (the phone page hidden, not a shell sheet or desk switch, not a
       // blip while dragging) lifts a swipe-down and may bring the player back full screen.
       const phoneNow = !document.hidden
