@@ -87,7 +87,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   if(!window.WosAppVoice.execute(cmd,'music',{}))throw Error('Identify claim was not admitted')
   return cmd.action
  })
- const visible=page.locator('iframe.appframe:not([data-voice-service])[src*="/wizard-music/"]').last()
+ const visible=page.locator('iframe:not([data-voice-service])[src*="/wizard-music/"]:visible').last()
  await visible.waitFor({state:'visible'})
  const frame=await (await visible.elementHandle()).contentFrame()
  await frame.getByRole('button',{name:'Stop and identify',exact:true}).waitFor({state:'visible'})
