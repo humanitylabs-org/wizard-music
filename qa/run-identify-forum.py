@@ -34,7 +34,7 @@ def ready(url):
 
 def main():
     if not PY.exists():run(['python3','-m','venv',ROOT/'.venv'])
-    run([PY,'-m','pip','install','-r','hub/requirements.txt','pytest==8.4.2'])
+    run([PY,'-m','pip','install','--only-binary=:all:','-r','hub/requirements.txt','pytest==8.4.2'])
     run(['npm','ci','--no-audit','--no-fund'])
     run(['npx','playwright','install','chromium'])
     run(['npm','run','build'])
