@@ -37,6 +37,8 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   }
   if(u.pathname.endsWith('/data.js'))return route.fulfill({contentType:'application/javascript',body:'window.WIZ_DATA={threads:[],projects:{}};'})
   if(u.pathname.endsWith('/summaries.js'))return route.fulfill({contentType:'application/javascript',body:'window.WIZ_SUMMARIES={};'})
+  // The shell only reads the box app list through bootstrap's advertised endpoint (core/config.js).
+  if(u.pathname==='/wizard/v1/bootstrap')return route.fulfill({json:{bootstrap:1,endpoints:{apps:'/wizard/v1/apps'},capabilities:{voice:true},settings:{}}})
   if(u.pathname==='/wizard/v1/apps')return route.fulfill({json:{apps:[{id:'wizard-music',name:'Music',url:'/wizard-music/',view:{mode:'original',url:'/wizard-music/'},source:'apps.json',type:'service',provides:['music','voice-commands'],voice_names:['Music','Wizard Music']}]}})
   if(u.pathname.startsWith('/wizard/') || u.pathname.startsWith('/api/') || u.pathname.startsWith('/notifications/') || u.pathname.startsWith('/pages/')){
    if(req.method()!=='GET')return route.fulfill({status:403,json:{error:'No owner writes in isolated QA'}})
