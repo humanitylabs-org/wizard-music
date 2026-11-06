@@ -162,6 +162,8 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const listImage=path.join(out,`${shell}-${skin}-identify-hunts.png`)
  await page.screenshot({path:listImage})
  rows.push({shell,skin,priority_bare_music:command,legacy_audio_decoded:true,back_sheet_list_home:true,held_permission_same_frame:true,offline_saved_reconnected:true,screenshots:[sheetImage,listImage,recordingImage],pageerrors:errors})
+ fs.writeFileSync(path.join(out,'browser-progress.json'),JSON.stringify({complete:false,rows},null,2))
+ await context.unrouteAll({behavior:'ignoreErrors'})
  await context.close()
 }
 } finally {await browser.close()}
