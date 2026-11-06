@@ -43,12 +43,14 @@ def main():
     run([PY,'-m','pytest','hub/tests/test_identify.py','-q'])
     # Use real recognizer network only in its isolated scratch home, not the owner's hub.
     env={**os.environ,'WIZARD_MUSIC_HUB_HOME':str(OUT/'recognizer-home'),'IDENTIFY_KNOWN_PREVIEW':'https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview221/v4/f5/0c/cb/f50ccb25-c1fd-8940-1f8a-e42495300745/mzaf_15922365127289521089.plus.aac.p.m4a','IDENTIFY_KNOWN_TITLE':'Nevada'}
-    with (OUT/'recognizer.log').open('w') as f:run([PY,'hub/qa_identify_network.py'],env=env,stdout=f,stderr=subprocess.STDOUT)
+    if not os.environ.get('IDENTIFY_SKIP_RECOGNIZER'):
+        with (OUT/'recognizer.log').open('w') as f:run([PY,'hub/qa_identify_network.py'],env=env,stdout=f,stderr=subprocess.STDOUT)
+    else: print('Unchanged provider-network check explicitly skipped for recording-only UX', flush=True)
     home=OUT/'hub-home'
     if home.exists():raise RuntimeError('Refusing to reuse an already-mutated fixture home')
     shutil.copytree(INPUT/'hub-home',home)
     with (OUT/'migration.log').open('w') as f:run([PY,'hub/import_trackhunt.py',INPUT/'trackhunt',home,'--backup',OUT/'migration-backup'],stdout=f,stderr=subprocess.STDOUT)
-    env={**os.environ,'WIZARD_MUSIC_HUB_HOME':str(home),'WIZARD_MUSIC_LIBRARY':str(OUT/'library'),'WIZARD_MUSIC_HUB_TOKEN':'identify-fixture-only','WIZARD_MUSIC_HUB_PORT':'19401','WIZARD_MUSIC_APP_PORT':'19305','WIZARD_MUSIC_HUB_ORIGIN':'http://127.0.0.1:19401','WIZARD_MUSIC_ONLINE':'0','WIZARD_MUSIC_RELEASE':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()}
+    env={**os.environ,'WIZARD_MUSIC_HUB_HOME':str(home),'WIZARD_MUSIC_LIBRARY':str(OUT/'library'),'WIZARD_MUSIC_HUB_TOKEN':'identify-fixture-only','WIZARD_MUSIC_HUB_PORT':'19401','WIZARD_MUSIC_APP_PORT':'19305','WIZARD_MUSIC_HUB_ORIGIN':'http://127.0.0.1:19401','WIZARD_MUSIC_ONLINE':'0','WIZARD_MUSIC_RELEASE':os.environ.get('WIZARD_MUSIC_RELEASE') or subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()}
     code="import sys;sys.path.insert(0,'hub');import hub,identify;identify.shazam_lookup=lambda p:{'ok':True,'raw':{'matches':[]}};identify.start();hub.ThreadingHTTPServer((hub.HOST,hub.PORT),hub.Handler).serve_forever()"
     logs=[(OUT/'hub.log').open('w'),(OUT/'node.log').open('w')]
     children=[]

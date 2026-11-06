@@ -5,7 +5,7 @@ import { identifyControl } from '../src/music/identify'
 import { installIdentifyClaims, parseMusicCommand, runMusicCommand } from '../src/music/voice'
 
 const flush = async () => { for (let n=0;n<8;n++) await Promise.resolve() }
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); identifyControl.back() })
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); localStorage.clear(); identifyControl.back() })
 
 describe('song identification phrases', () => {
   it.each(['music', 'Music.', 'shazam', "what's this song?", 'what is this song', 'identify this'])('whole utterance %s starts Identify', said => {
@@ -67,7 +67,7 @@ describe('held microphone and app-owned shell claims', () => {
 })
 
 function fakeIndexedDB(rows: Map<string, unknown>) {
-  const tx = () => { const t: Record<string, unknown> = {}; queueMicrotask(() => (t.oncomplete as () => void)?.()); t.objectStore = () => ({
+  const tx = () => { const t: Record<string, unknown> = {}; queueMicrotask(() => queueMicrotask(() => (t.oncomplete as () => void)?.())); t.objectStore = () => ({
     put: (v: {id: string}) => { rows.set(v.id, v) }, delete: (id: string) => { rows.delete(id) },
     getAll: () => { const q: Record<string, unknown> = { result: [...rows.values()] }; queueMicrotask(() => (q.onsuccess as () => void)?.()); return q } }); return t }
   return { open: () => { const r: Record<string, unknown> = { result: { transaction: tx, close: () => undefined, createObjectStore: () => undefined } }; queueMicrotask(() => (r.onsuccess as () => void)?.()); return r } }
@@ -119,6 +119,89 @@ describe('sending a saved clip', () => {
     expect(start).not.toHaveBeenCalled()
     cleanup()
     Object.defineProperty(window, 'frameElement', { configurable: true, value: null })
+  })
+})
+
+describe('recording duration, explicit send and result focus', () => {
+  const id = '11111111-2222-4333-8444-555555555555'
+  const bytes = new Uint8Array([1, 2, 3, 4])
+  const blob = { size: 4, type: 'audio/wav', arrayBuffer: async () => bytes.buffer }
+  let rows: Map<string, any>, result: any, stop: ReturnType<typeof vi.fn>, uploads: number, visible: boolean
+  beforeEach(() => {
+    rows = new Map(); uploads = 0; visible = true
+    result = { id, blob, mime: 'audio/wav', startedAt: Date.now(), durationMs: 30000, meta: { task: 'music-identify', manualSubmit: true } }
+    stop = vi.fn(async () => result)
+    vi.stubGlobal('indexedDB', fakeIndexedDB(rows))
+    vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (_alg, data) => { const h = createHash('sha256').update(new Uint8Array(data as ArrayBuffer)).digest(); return h.buffer.slice(h.byteOffset, h.byteOffset + h.byteLength) })
+    vi.stubGlobal('WizardApp', { view: { isVisible: () => visible }, capture: { start: vi.fn(async () => ({ id, stop, onLevel: () => () => undefined })), pending: async () => [], ack: vi.fn(async () => true) } })
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, options?: RequestInit) => {
+      if (options?.method === 'POST') { uploads++; return { ok: true, json: async () => ({ id, raw_sha256: createHash('sha256').update(bytes).digest('hex') }) } }
+      return { ok: true, json: async () => ({ id, status: 'identified', candidates: [], captures: [] }) }
+    }))
+  })
+  afterEach(async () => { if (identifyControl.snapshot().phase !== 'idle') identifyControl.cancel(); await flush(); await identifyControl.drain() })
+  it('uses elapsed duration, reaches the practical 15s target, then stops at 30s without sending', async () => {
+    vi.useFakeTimers()
+    await identifyControl.start()
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(identifyControl.snapshot().phase).toBe('recording')
+    expect(identifyControl.snapshot().elapsed).toBe(15)
+    expect(stop).not.toHaveBeenCalled(); expect(uploads).toBe(0)
+    await vi.advanceTimersByTimeAsync(15000)
+    await flush()
+    expect(identifyControl.snapshot().phase).toBe('ready')
+    expect(rows.get(id).sendRequested).toBe(false)
+    expect(uploads).toBe(0); expect(identifyControl.snapshot().selected).toBeNull()
+    await identifyControl.drain(); expect(uploads).toBe(0)
+    await identifyControl.stop(); await identifyControl.drain()
+    expect(uploads).toBe(1); expect(identifyControl.snapshot().selected).toBe(id)
+  })
+  it('sends early, paints saving before held I/O and opens the new submission while waiting', async () => {
+    let resolve!: (value: any) => void
+    stop.mockImplementation(() => new Promise(r => { resolve = r }))
+    await identifyControl.start()
+    const saved = identifyControl.stop()
+    expect(identifyControl.snapshot().phase).toBe('saving')
+    await identifyControl.stop(); expect(stop).toHaveBeenCalledTimes(1)
+    resolve({ ...result, durationMs: 2500 }); await saved
+    expect(identifyControl.snapshot().selected).toBe(id)
+    await identifyControl.drain(); expect(uploads).toBe(1)
+  })
+  it('does not reopen when the owner navigates away during saving, including after the result completes', async () => {
+    let resolve!: (value: any) => void
+    stop.mockImplementation(() => new Promise(r => { resolve = r }))
+    await identifyControl.start(); const saved = identifyControl.stop()
+    identifyControl.back(); resolve(result); await saved; await identifyControl.drain()
+    expect(identifyControl.snapshot().open).toBe(false)
+    expect(identifyControl.snapshot().selected).toBeNull()
+    expect(identifyControl.snapshot().freshId).toBe(id)
+    expect(uploads).toBe(1)
+  })
+  it('does not steal focus from a different shell app', async () => {
+    await identifyControl.start(); visible = false
+    await identifyControl.stop(); await identifyControl.drain()
+    expect(identifyControl.snapshot().selected).toBeNull()
+    expect(identifyControl.snapshot().freshId).toBe(id)
+  })
+  it('keeps cancelled audio as an unsent draft and never opens or uploads it', async () => {
+    await identifyControl.start(); identifyControl.cancel(); await flush(); await identifyControl.drain()
+    expect(rows.get(id).sendRequested).toBe(false)
+    expect(uploads).toBe(0); expect(identifyControl.snapshot().selected).toBeNull()
+  })
+  it('cancels held permission without resurrecting or submitting the eventual recording', async () => {
+    let resolve!: (value: any) => void
+    ;((window as any).WizardApp.capture.start as ReturnType<typeof vi.fn>).mockImplementation(() => new Promise(r => { resolve = r }))
+    const starting = identifyControl.start(); identifyControl.cancel()
+    expect(identifyControl.snapshot().phase).toBe('starting')
+    resolve({ id, stop, onLevel: () => () => undefined }); await starting; await identifyControl.drain()
+    expect(identifyControl.snapshot().phase).toBe('idle')
+    expect(rows.get(id).sendRequested).toBe(false)
+    expect(uploads).toBe(0); expect(identifyControl.snapshot().selected).toBeNull()
+  })
+  it('does not upload an unsent shared draft after restart recovery', async () => {
+    ;((window as any).WizardApp.capture.pending as any) = async () => [result]
+    await identifyControl.drain(); await identifyControl.drain()
+    expect(rows.get(id).sendRequested).toBe(false); expect(uploads).toBe(0)
   })
 })
 
