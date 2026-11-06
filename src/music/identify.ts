@@ -168,7 +168,12 @@ async function refresh() {
   const gen = ++refreshGeneration
   try {
     const [value, locals] = await Promise.all([identifyJson<{ captures: Hunt[] }>('captures'), localStore('all')])
-    if (gen === refreshGeneration) paint({ hunts: activeHunts(value.captures), locals, loading: false })
+    if (gen === refreshGeneration) {
+      paint({ hunts: activeHunts(value.captures), locals, loading: false })
+      // Once a settled restore/reverted failure is visible on the server list,
+      // stop overlaying it so later edits from another device remain authoritative.
+      for (const h of value.captures) if (h.retention_state !== 'discarded' && captureOverlay.get(h.id) && !discardOperations.has(h.id)) captureOverlay.delete(h.id)
+    }
     if (state.selected) await detail(state.selected, false)
   } catch (e) { if (gen === refreshGeneration) paint({ locals: await localStore('all').catch(() => state.locals), loading: false, error: (e as Error).message }) }
 }
