@@ -2,7 +2,7 @@ import { StrictMode, useCallback, useEffect, useLayoutEffect, useRef, useState }
 import { createRoot } from 'react-dom/client'
 import { lastViewWasNowPlaying, MiniPlayer, MusicApp, musicControl, NowPlaying, rememberView, restoreMusicSession, whenTrackLoaded } from './music/MusicApp'
 import { installMusicVoice, installIdentifyClaims, installPendingIdentify } from './music/voice'
-import { IdentifyButtons, IdentifyView } from './music/IdentifyView'
+import { IdentifyEntry, IdentifyView } from './music/IdentifyView'
 import { identifyControl, type CapturePort } from './music/identify'
 import { useSyncExternalStore } from 'react'
 
@@ -169,8 +169,7 @@ function App() {
 
   return <div className="music-shell">
     <header className="music-shell-head"><h1>Music</h1></header>
-    <IdentifyButtons />
-    <main className="music-shell-main"><div hidden={identify.open}><MusicApp onOpenNowPlaying={openNowPlaying} notify={notify} /></div><IdentifyView notify={notify} /></main>
+    <main className="music-shell-main"><div hidden={identify.open}><MusicApp lead={<IdentifyEntry />} onOpenNowPlaying={openNowPlaying} notify={notify} /></div><IdentifyView notify={notify} /></main>
     <MiniPlayer onOpen={openNowPlaying} notify={notify} />
     {nowPlayingOpen && <NowPlaying onClose={dismissNowPlaying} notify={notify} />}
     {toast && <div className="music-toast" role="status">{toast}</div>}

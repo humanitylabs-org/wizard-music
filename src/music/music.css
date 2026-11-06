@@ -1,6 +1,6 @@
 /* Wizard Music — dark, quiet, thumb-first. Uses Wizard tokens from index.css. */
-.music-workspace { display: grid; gap: 18px; padding-bottom: 28px; }
-.music-search { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px; min-height: 46px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 14px; background: var(--bg-input); color: var(--text-2, #a9abb6); }
+.music-workspace { display: grid; gap: 26px; padding: 8px 0 32px; }
+.music-search { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 8px 0 16px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-input); color: var(--text-2, #a9abb6); }
 .music-search input { flex: 1; min-width: 0; height: 44px; border: 0; outline: 0; background: transparent; color: var(--text); font: 500 16px/1 var(--font); }
 .music-search input::-webkit-search-cancel-button { display: none; }
 .music-clear { width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; color: var(--text-2, #a9abb6); font-size: 22px; line-height: 1; }
@@ -9,22 +9,34 @@
 .music-card { padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--bg-raised); }
 .music-error p { margin: 0 0 10px; color: var(--text); }
 
-.music-sources { display: flex; gap: 8px; overflow-x: auto; scrollbar-width: none; }
-.music-sources::-webkit-scrollbar { display: none; }
-.music-source { flex: none; display: grid; gap: 2px; padding: 8px 11px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg-raised); }
+/* Sources and taste live in a quiet disclosure at the foot of Home: there when you look, never ahead of the music. */
+.music-about { border-top: 1px solid var(--line); color: var(--text-2, #a9abb6); }
+.music-about summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; cursor: pointer; list-style: none; font-size: 14px; font-weight: 600; }
+.music-about summary::-webkit-details-marker { display: none; }
+.music-about summary::after { content: ''; width: 8px; height: 8px; margin: 0 6px 4px 0; border: solid currentColor; border-width: 0 1.8px 1.8px 0; transform: rotate(45deg); transition: transform .18s ease; }
+.music-about[open] summary::after { transform: rotate(-135deg); margin-bottom: -4px; }
+.music-about summary small { margin-left: auto; color: var(--text-dim); font-size: 13px; font-weight: 500; }
+.music-sources { display: grid; gap: 8px; padding-bottom: 10px; }
+.music-source { display: grid; gap: 2px; padding: 10px 12px; border-radius: 14px; background: color-mix(in srgb, var(--text) 5%, transparent); }
 .music-source b { font-size: 13px; color: var(--text); }
 .music-source small { font-size: 12px; color: var(--text-dim); }
 .music-source.ok b::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: var(--ok); vertical-align: 1px; }
 
-.music-section { display: grid; gap: 6px; }
-.music-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 34px; }
-.music-section-head h3 { margin: 0; font-size: 17px; font-weight: 650; color: var(--text); }
+.music-section { display: grid; gap: 8px; }
+.music-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 36px; }
+.music-section-head h3 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -.01em; color: var(--text); }
 .music-section-head small { color: var(--text-dim); font-size: 12px; }
+/* A section's own action is a quiet text button in the accent, never a second heavy control. */
+.music-section-action { flex: none; min-height: 40px; margin-right: -10px; padding: 0 12px; border: 0; border-radius: 999px; background: none; color: var(--wz-accent, var(--wiz)); font: 650 14px/1 var(--font); }
+.music-section-action:active { background: color-mix(in srgb, var(--wz-accent, var(--wiz)) 14%, transparent); }
 
-.music-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.music-chip { min-height: 38px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 19px; background: var(--bg-raised); color: var(--text); font: 550 14px/1 var(--font); }
-.music-chip:active { background: var(--line-strong); }
+/* Stations: one horizontal two-row scroller of light chips instead of a wall of pills. */
+.music-stations { display: grid; grid-auto-flow: column; grid-template-rows: repeat(2, auto); grid-auto-columns: max-content; gap: 8px; margin: 0 -16px; padding: 2px 16px 4px; overflow-x: auto; overscroll-behavior-x: contain; scroll-padding-inline: 16px; scroll-snap-type: x proximity; scrollbar-width: none; }
+.music-stations::-webkit-scrollbar { display: none; }
+.music-chip { min-height: 40px; padding: 0 16px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--text) 8%, transparent); color: var(--text); font: 600 14px/1 var(--font); white-space: nowrap; scroll-snap-align: start; }
+.music-chip:active { background: color-mix(in srgb, var(--text) 15%, transparent); }
 .music-chip:disabled { opacity: .5; }
+@media (hover: hover) { .music-chip:hover, .music-section-action:hover { background: color-mix(in srgb, var(--text) 8%, transparent); } }
 
 .music-shelf { display: grid; grid-auto-flow: column; grid-auto-columns: 132px; gap: 12px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; scroll-snap-type: x proximity; }
 .music-shelf::-webkit-scrollbar { display: none; }
@@ -50,7 +62,7 @@
 .music-like.on { color: var(--wiz); }
 .music-thumb { width: 50px; height: 50px; color: var(--text); }
 .music-thumb-down:active { color: var(--danger, #ff6b6b); }
-.music-taste { margin: -6px 0 0; color: var(--text-dim); font-size: 13px; }
+.music-taste { margin: 0 0 12px; color: var(--text-dim); font-size: 13px; line-height: 1.45; }
 
 .music-art { flex: none; display: block; overflow: hidden; background: var(--line); }
 .music-art img { display: block; width: 100%; height: 100%; object-fit: cover; }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { browserSessionStore, EMPTY_SNAPSHOT, musicEngine, NativeEngine, playedTracks, readSession, WebEngine, type MusicEngine, type MusicSnapshot, type MusicStation, type MusicTrack } from './engine'
 import { hostedAudioBridge } from './backgroundAudio'
 if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNativeMusic = hostedAudioBridge()
@@ -213,7 +213,8 @@ export function usePendingStart(): MusicTrack | null {
 }
 const LoadingWheel = ({ label }: { label: string }) => <span className="music-wheel" role="progressbar" aria-label={label} />
 
-export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () => void; notify: (message: string) => void }) {
+/** `lead` is the one Identify entry, first on the home page (kept out of this module so Identify stays its own). */
+export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying: () => void; notify: (message: string) => void; lead?: ReactNode }) {
   const snapshot = useMusicSnapshot()
   useFeedbackReporter(snapshot)
   const [home, setHome] = useState<MusicHome | null>(null)
@@ -291,24 +292,12 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
     {starting && <p className="music-status" role="status">Starting your station…</p>}
 
     {results !== null ? <div className="music-results">
-      <div className="music-section-head"><h3>{searching ? 'Searching…' : `Results for “${query.trim()}”`}</h3>{query.trim() && <button type="button" className="music-chip" onClick={() => void startStation({ query: query.trim(), label: query.trim() }, 'vibe:query')}>Station from this</button>}</div>
+      <div className="music-section-head"><h3>{searching ? 'Searching…' : `Results for “${query.trim()}”`}</h3>{query.trim() && <button type="button" className="music-section-action" onClick={() => void startStation({ query: query.trim(), label: query.trim() }, 'vibe:query')}>Station from this</button>}</div>
       {!searching && !results.length && <p className="music-empty">Nothing matched. Try an artist, a song, or a mood.</p>}
       {results.map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}
     </div> : <>
+      {lead}
       {homeError && <div className="music-card music-error"><p>{homeError}</p><button type="button" className="secondary-action" onClick={loadHome}>Try again</button></div>}
-
-      {home && <div className="music-sources" aria-label="Music sources">
-        {home.sources.map((source) => <span key={source.id} className={`music-source${source.ok ? ' ok' : ''}`}><b>{source.name}</b><small>{source.detail}</small></span>)}
-      </div>}
-
-      {home && Boolean(home.taste?.avoid.length) && <p className="music-taste" aria-label="Music you turned down">Playing less: {home.taste!.avoid.join(' · ')}</p>}
-
-      {home && home.vibes.length > 0 && <section className="music-section" aria-label="Start a station">
-        <div className="music-section-head"><h3>Start a station</h3></div>
-        <div className="music-chips">
-          {home.vibes.map((vibe) => <button key={vibe.id} type="button" className="music-chip" disabled={Boolean(starting)} onClick={() => void startStation({ query: vibe.label, label: vibe.label }, `vibe:${vibe.id}`)}>{vibe.label}</button>)}
-        </div>
-      </section>}
 
       {home && home.recent.length > 0 && <section className="music-section" aria-label="Recently played">
         <div className="music-section-head"><h3>Recently played</h3></div>
@@ -317,18 +306,34 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
         </div>
       </section>}
 
+      {home && home.vibes.length > 0 && <section className="music-section" aria-label="Start a station">
+        <div className="music-section-head"><h3>Start a station</h3></div>
+        <div className="music-stations">
+          {home.vibes.map((vibe) => <button key={vibe.id} type="button" className="music-chip" disabled={Boolean(starting)} onClick={() => void startStation({ query: vibe.label, label: vibe.label }, `vibe:${vibe.id}`)}>{vibe.label}</button>)}
+        </div>
+      </section>}
+
       {home && home.liked.length > 0 && <section className="music-section" aria-label="Liked songs">
-        <div className="music-section-head"><h3>Liked</h3><button type="button" className="music-chip" onClick={async () => { const station: MusicStation | null = null; await startEngine().load(home.liked, 0, station); noteEngineStarted(); onOpenNowPlaying() }}>Play all</button></div>
+        <div className="music-section-head"><h3>Liked</h3><button type="button" className="music-section-action" onClick={async () => { const station: MusicStation | null = null; await startEngine().load(home.liked, 0, station); noteEngineStarted(); onOpenNowPlaying() }}>Play all</button></div>
         {home.liked.slice(0, 8).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}
       </section>}
 
       {home && home.library.length > 0 && <section className="music-section" aria-label="Your library">
-        <div className="music-section-head"><h3>On your Wizard</h3><button type="button" className="music-chip" onClick={async () => { await startEngine().load([...home.library].sort(() => Math.random() - 0.5), 0, null); noteEngineStarted(); onOpenNowPlaying() }}>Shuffle</button></div>
+        <div className="music-section-head"><h3>On your Wizard</h3><button type="button" className="music-section-action" onClick={async () => { await startEngine().load([...home.library].sort(() => Math.random() - 0.5), 0, null); noteEngineStarted(); onOpenNowPlaying() }}>Shuffle</button></div>
         {home.library.slice(0, 12).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}
       </section>}
 
       {home && home.library.length === 0 && home.liked.length === 0 && <p className="music-empty">Your library is empty. Ask your agent to follow SETUP.md and connect your own music folder. No music or account is bundled.</p>}
       {!home && !homeError && <p className="music-status">Loading your music…</p>}
+
+      {/* Where the music comes from and what you turned down: there when you look, never ahead of the music. */}
+      {home && (home.sources.length > 0 || Boolean(home.taste?.avoid.length)) && <details className="music-about">
+        <summary><span>Sources{home.taste?.avoid.length ? ' & taste' : ''}</span><small>{home.sources.filter((source) => source.ok).length} of {home.sources.length} connected</small></summary>
+        <div className="music-sources" aria-label="Music sources">
+          {home.sources.map((source) => <span key={source.id} className={`music-source${source.ok ? ' ok' : ''}`}><b>{source.name}</b><small>{source.detail}</small></span>)}
+        </div>
+        {Boolean(home.taste?.avoid.length) && <p className="music-taste" aria-label="Music you turned down">Playing less: {home.taste!.avoid.join(' · ')}</p>}
+      </details>}
     </>}
   </section>
 }

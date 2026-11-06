@@ -114,12 +114,18 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  if(!stopped)throw Error('Stop and identify did not take effect: '+JSON.stringify({welcome:await page.evaluate(()=>({active:window.WosWelcome?.active,log:window.WosWelcome?.log}))})+' '+await dump(frame,'stop-click'))
  await frame.locator('dialog[open]').waitFor()
  await frame.getByRole('heading',{name:/Identification/,exact:false}).last().waitFor()
+ await frame.waitForTimeout(400) // let the sheet's open animation finish before judging it
+ const waitingImage=path.join(out,`${shell}-${skin}-identify-waiting.png`)
+ await page.screenshot({path:waitingImage})
  await waitAcks(frame,1,'Upload after Send')
  // The submitted result opened while waiting, not only after recognition finished.
  await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
  await frame.waitForFunction(()=>!document.querySelector('dialog[open]'))
- // Open imported hunt and verify media really decodes.
- await frame.getByRole('button',{name:'Identifications',exact:true}).click()
+ // Open imported hunt and verify media really decodes. History sits under the Identify stage (James's Shazam-like redesign).
+ await frame.getByRole('heading',{name:'Identifications',exact:true}).waitFor()
+ assert.ok(await frame.getByRole('button',{name:'Identify song',exact:true}).isVisible(),'one large Identify control on the idle stage')
+ const idleImage=path.join(out,`${shell}-${skin}-identify-idle.png`)
+ await page.screenshot({path:idleImage})
  const row=frame.locator('.identify-hunt').filter({hasText:hunt.best_title}).first()
  await row.click()
  await frame.locator('dialog[open]').waitFor()
@@ -141,6 +147,11 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const listClosed=await frame.waitForFunction(()=>!document.querySelector('.identify-view'),null,{timeout:5000}).then(()=>true,()=>false)
  if(!listClosed)throw Error('Second Back did not leave the Hunts list: '+JSON.stringify({back1,back2,dialogs:await frame.evaluate(()=>document.querySelectorAll('dialog').length)})+' '+await dump(frame,'back-list'))
  assert.ok(await visible.isVisible())
+ // Music home: one Identify entry with Identifications beside it, no duplicated top button row.
+ await frame.locator('.identify-entry').waitFor({state:'visible'})
+ assert.equal(await frame.getByRole('button',{name:/^Identifications/}).count(),1,'one Identifications link on home')
+ const homeImage=path.join(out,`${shell}-${skin}-music-home.png`)
+ await page.screenshot({path:homeImage})
  // Held permission paints starting immediately, then offline stop persists without ack.
  await frame.evaluate(()=>{window.__qaHold=true})
  await frame.getByRole('button',{name:'Identify song',exact:true}).click()
@@ -158,10 +169,10 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await waitAcks(frame,2,'Reconnect upload')
  await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
  await frame.waitForFunction(()=>!document.querySelector('dialog[open]'))
- await frame.getByRole('button',{name:'Identifications',exact:true}).click()
+ await frame.getByRole('heading',{name:'Identifications',exact:true}).waitFor()
  const listImage=path.join(out,`${shell}-${skin}-identify-hunts.png`)
  await page.screenshot({path:listImage})
- rows.push({shell,skin,priority_bare_music:command,legacy_audio_decoded:true,back_sheet_list_home:true,held_permission_same_frame:true,offline_saved_reconnected:true,screenshots:[sheetImage,listImage,recordingImage],pageerrors:errors})
+ rows.push({shell,skin,priority_bare_music:command,legacy_audio_decoded:true,back_sheet_list_home:true,held_permission_same_frame:true,offline_saved_reconnected:true,screenshots:[homeImage,idleImage,recordingImage,waitingImage,sheetImage,listImage],pageerrors:errors})
  fs.writeFileSync(path.join(out,'browser-progress.json'),JSON.stringify({complete:false,rows},null,2))
  await context.unrouteAll({behavior:'ignoreErrors'})
  await context.close()

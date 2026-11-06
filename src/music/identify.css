@@ -1,26 +1,162 @@
-/* Identify is domain UI; system kit supplies buttons, sheet and skin. */
-.identify-header{display:flex;justify-content:flex-end;gap:8px;padding:8px 16px;flex-wrap:wrap}
-.identify-view{max-width:760px;margin:auto;padding:0 16px 100px;color:var(--wz-text,var(--text));font:inherit}
-.identify-top{display:flex;align-items:center;gap:12px;justify-content:space-between}
-.identify-top h2{font-size:20px}
-.identify-recording{display:grid;gap:12px;justify-items:center;padding:24px 16px;border:1px solid var(--wz-border,var(--line));border-radius:var(--wz-radius,16px);background:var(--wz-surface,var(--bg-raised));margin:12px 0 24px}
-.identify-timer{font-size:clamp(38px,8vw,58px);font-variant-numeric:tabular-nums}.identify-timer small{font-size:18px;color:var(--wz-text-muted,var(--text-dim))}
-.identify-recording meter,.identify-recording progress{width:min(100%,280px);height:12px;accent-color:var(--wz-accent,var(--wiz))}
-.identify-guidance{margin:0;font-weight:600;text-align:center}
-.identify-recording{background:linear-gradient(var(--wz-surface,var(--bg-raised)),var(--wz-surface,var(--bg-raised))),var(--wz-base,var(--bg,#0d0d12))}
-.identify-fresh{border-radius:8px;padding-inline:10px;background:color-mix(in srgb,var(--wz-accent,var(--wiz)) 12%,transparent)}
-.identify-new{font-size:11px;font-weight:600;padding:4px 7px;border-radius:999px;background:var(--wz-accent,var(--wiz));color:var(--wz-on-accent,#fff)}
-.identify-muted,.identify-hunt-copy>span,.identify-candidate-title p{color:var(--wz-text-muted,var(--text-dim));font-size:13px;line-height:1.5}
-.identify-error{color:var(--wz-danger,var(--text));padding:12px;border:1px solid currentColor;border-radius:10px}
-.identify-hunt{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:64px;width:100%;text-align:left;padding:12px 4px;background:transparent;border:0;border-bottom:1px solid var(--wz-border,var(--line));color:inherit;font:inherit;cursor:pointer}
-.identify-hunt-copy{display:grid;gap:4px;min-width:0}.identify-hunt strong{font-weight:600;font-size:15px}
-.identify-footer,.identify-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0}
-.identify-sheet{background:linear-gradient(var(--wz-surface-raised,var(--bg-raised)),var(--wz-surface-raised,var(--bg-raised))),var(--wz-base,var(--bg,#0d0d12));background-color:var(--wz-base,var(--bg,#0d0d12));color:var(--wz-text,var(--text));isolation:isolate;max-height:88dvh;overflow:auto}
-.identify-sheet h2{padding-right:38px}.identify-sheet h3{font-size:15px;margin:24px 0 10px}
-.identify-sheet audio{width:100%;height:44px;margin:8px 0}.identify-sheet summary{cursor:pointer;padding:12px 0;font-size:13px}
-.identify-candidate{padding:16px 0;border-bottom:1px solid var(--wz-border,var(--line))}
-.identify-candidate-title{display:flex;align-items:center;gap:12px}.identify-candidate-title>div{min-width:0;overflow-wrap:anywhere}.identify-candidate-title p{margin:4px 0}
-.identify-candidate-title img{width:48px;height:48px;object-fit:cover;border-radius:8px}.identify-rejected .identify-candidate-title{text-decoration:line-through;color:var(--wz-text-muted,var(--text-dim))}
-.identify-search{display:flex;gap:8px}.identify-search input{min-width:0;flex:1}.identify-manual{display:grid;gap:8px}
-.identify-header .wz-button,.identify-view .wz-button,.identify-sheet .wz-button{min-height:44px}
-@media(max-width:360px){.identify-header button[aria-label] span{display:none}}
+/* Identify is domain UI; the system kit supplies the sheet, inputs and skin roles (Appearance v1 --wz-*).
+ * One calm stage: a single round listen control, the live ring while recording, history underneath. */
+.identify-entry, .identify-view, .identify-sheet {
+  --id-accent: var(--wz-accent, var(--wiz));
+  --id-on-accent: var(--wz-on-accent, #fff);
+  --id-ink: var(--wz-text, var(--text));
+  --id-ink-2: var(--wz-text-secondary, var(--text-2));
+  --id-ink-3: var(--wz-text-muted, var(--text-dim));
+  --id-fill: var(--wz-surface, var(--bg-raised));
+  --id-tint: color-mix(in srgb, var(--id-accent) 14%, transparent);
+  --id-line: color-mix(in srgb, var(--wz-border, var(--line-strong)) 70%, transparent);
+  --id-ease: var(--wz-ease, cubic-bezier(.32, .72, 0, 1));
+  /* The orb: the skin's accent as a lit sphere (highlight from on-accent, depth from shade only). */
+  --id-orb: radial-gradient(circle at 34% 26%, color-mix(in srgb, var(--id-on-accent) 34%, transparent) 0%, transparent 44%),
+            radial-gradient(circle at 50% 46%, var(--id-accent) 30%, color-mix(in oklab, var(--id-accent) 74%, black) 100%);
+}
+
+/* ---------- home entry: one way in, history beside it ---------- */
+.identify-entry { display: flex; align-items: center; gap: 8px; padding: 10px 10px 10px 10px; border-radius: 24px; background: color-mix(in srgb, var(--id-accent) 9%, var(--id-fill)); border: 1px solid color-mix(in srgb, var(--id-accent) 16%, transparent); }
+.identify-entry-main { flex: 1; min-width: 0; display: flex; align-items: center; gap: 14px; min-height: 56px; padding: 0; border: 0; background: none; color: var(--id-ink); text-align: left; font: inherit; }
+.identify-entry-orb { position: relative; isolation: isolate; flex: none; display: grid; place-items: center; width: 56px; height: 56px; border-radius: 50%; color: var(--id-on-accent); background: var(--id-orb); box-shadow: 0 10px 24px -10px color-mix(in srgb, var(--id-accent) 80%, transparent); transition: transform 160ms var(--id-ease); }
+.identify-entry-orb .identify-glyph { width: 28px; height: 28px; }
+.identify-entry-main:active .identify-entry-orb { transform: scale(.94); }
+.identify-entry-orb.live::after { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--id-accent) 60%, transparent); transform: scale(1.18); opacity: .4; animation: identify-ripple 2s cubic-bezier(.2, .6, .3, 1) infinite; }
+.identify-entry-copy { min-width: 0; display: grid; gap: 3px; }
+.identify-entry-copy strong { font-size: 16px; font-weight: 700; letter-spacing: -.01em; }
+.identify-entry-copy small { font-size: 13px; line-height: 1.3; color: var(--id-ink-2); }
+.identify-entry-history { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--id-ink) 8%, transparent); color: var(--id-ink); font-size: 13.5px; font-weight: 600; line-height: 1; }
+.identify-entry-history:active { background: color-mix(in srgb, var(--id-ink) 14%, transparent); }
+
+/* ---------- the Identify screen ---------- */
+.identify-view { max-width: 560px; margin: 0 auto; padding: 0 0 40px; color: var(--wz-text, var(--text)); font: inherit; }
+.identify-bar { display: flex; align-items: center; min-height: 48px; margin: 4px -10px 0; }
+.identify-icon { display: grid; place-items: center; width: 44px; height: 44px; padding: 0; border: 0; border-radius: 50%; background: none; color: var(--id-ink); }
+.identify-icon:active { background: color-mix(in srgb, var(--id-ink) 10%, transparent); }
+@media (hover: hover) { .identify-icon:hover, .identify-quiet:hover:not(:disabled), .identify-hunt:hover { background: color-mix(in srgb, var(--id-ink) 7%, transparent); } }
+
+.identify-stage { --orb: max(132px, min(46vw, 30vh, 212px)); display: grid; justify-items: center; align-content: center; gap: 8px; min-height: min(500px, 62dvh); padding: 0 0 22px; overflow-x: clip; text-align: center; }
+.identify-stage.active { min-height: min(620px, 76dvh); }
+.identify-phase { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -.015em; color: var(--id-ink); }
+.identify-caption { margin: 0; max-width: 36ch; font-size: 13px; line-height: 1.45; color: var(--id-ink-3); }
+
+.identify-orb-wrap { position: relative; isolation: isolate; display: grid; place-items: center; width: var(--orb); height: var(--orb); margin: 26px 0 22px; }
+.identify-orb { position: relative; display: grid; place-items: center; width: 100%; height: 100%; padding: 0; border: 0; border-radius: 50%; color: var(--id-on-accent); background: var(--id-orb); box-shadow: 0 22px 56px -16px color-mix(in srgb, var(--id-accent) 70%, transparent), inset 0 1px 0 color-mix(in srgb, var(--id-on-accent) 26%, transparent); transition: transform 180ms var(--id-ease), opacity 180ms; -webkit-tap-highlight-color: transparent; }
+.identify-orb .identify-glyph { width: 44%; height: 44%; }
+button.identify-orb { cursor: pointer; }
+button.identify-orb:active { transform: scale(.95); }
+@media (hover: hover) { button.identify-orb:hover { transform: scale(1.025); } }
+/* Idle: a slow breath behind the orb invites the tap. */
+button.identify-orb::before { content: ''; position: absolute; inset: -16px; z-index: -1; border-radius: 50%; background: radial-gradient(circle, color-mix(in srgb, var(--id-accent) 38%, transparent) 52%, transparent 71%); opacity: .4; animation: identify-breathe 3.4s ease-in-out infinite; }
+/* Listening: ripples leave the orb and the bars follow the microphone. */
+.identify-orb.phase-starting, .identify-orb.phase-saving { opacity: .82; }
+.identify-orb.phase-recording::before, .identify-orb.phase-recording::after { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--id-accent) 55%, transparent); transform: scale(1.14); opacity: .35; animation: identify-ripple 2.4s cubic-bezier(.2, .6, .3, 1) infinite; }
+.identify-orb.phase-recording::after { animation-delay: 1.2s; }
+.identify-glyph { fill: currentColor; overflow: visible; }
+.identify-orb.phase-recording .identify-glyph rect { transform-box: fill-box; transform-origin: center; scale: 1 calc(.55 + var(--level, .3) * .8); transition: scale 120ms linear; animation: identify-bar .9s ease-in-out infinite alternate; }
+.identify-orb.phase-recording .identify-glyph rect:nth-child(2n) { animation-delay: -.45s; }
+.identify-orb.phase-recording .identify-glyph rect:nth-child(3) { animation-duration: .7s; }
+/* The ring fills toward the 15-second target; it is guidance, never an automatic send. */
+.identify-ring { position: absolute; inset: -14px; width: calc(100% + 28px); height: calc(100% + 28px); transform: rotate(-90deg); pointer-events: none; }
+.identify-ring circle { fill: none; stroke: color-mix(in srgb, var(--id-ink) 12%, transparent); stroke-width: 1.4; }
+.identify-ring .identify-ring-value { stroke: var(--id-accent); stroke-linecap: round; stroke-dasharray: 100; transition: stroke-dashoffset 220ms linear, stroke-width 220ms; }
+.identify-orb-wrap.reached .identify-ring-value { stroke-width: 2; }
+
+.identify-timer { font-size: 34px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--id-ink); }
+.identify-timer small { font-size: 14px; font-weight: 500; letter-spacing: 0; color: var(--id-ink-3); }
+.identify-guidance { margin: 0 0 12px; font-size: 16px; font-weight: 600; color: var(--id-ink-2); }
+.identify-stage-actions { display: grid; justify-items: center; gap: 4px; width: min(100%, 320px); margin-bottom: 10px; }
+.identify-recording { display: contents; }
+.identify-recording .wz-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ---------- buttons: one filled action per moment, tonal pills for the rest, text for quiet choices ---------- */
+.identify-send { display: inline-flex; align-items: center; justify-content: center; width: 100%; min-height: 52px; padding: 0 24px; border: 0; border-radius: 999px; background: var(--id-accent); color: var(--id-on-accent); font-size: 16px; font-weight: 650; line-height: 1; box-shadow: 0 12px 28px -14px color-mix(in srgb, var(--id-accent) 80%, transparent); transition: transform 140ms var(--id-ease), opacity 140ms; }
+.identify-send:not(:disabled):active { transform: scale(.97); }
+.identify-send:disabled { opacity: .45; cursor: default; box-shadow: none; }
+.identify-quiet { display: inline-flex; align-items: center; justify-content: center; min-height: 44px; padding: 0 14px; border: 0; border-radius: 999px; background: none; color: var(--id-ink-2); font-size: 14px; font-weight: 600; line-height: 1; }
+.identify-quiet:disabled { opacity: .45; cursor: default; }
+.identify-pill { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 44px; padding: 0 16px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--id-ink) 8%, transparent); color: var(--id-ink); font-size: 14px; font-weight: 600; line-height: 1; text-decoration: none; cursor: pointer; }
+.identify-pill.primary { background: var(--id-accent); color: var(--id-on-accent); }
+.identify-pill:not(:disabled):active, .identify-quiet:not(:disabled):active { background: color-mix(in srgb, var(--id-ink) 14%, transparent); }
+.identify-pill.primary:not(:disabled):active { background: color-mix(in oklab, var(--id-accent) 86%, black); }
+.identify-pill:disabled { opacity: .45; cursor: default; }
+
+/* ---------- optional note and location: one quiet control, values kept ---------- */
+.identify-options { display: grid; justify-items: center; gap: 10px; width: 100%; margin-top: 14px; }
+.identify-option-toggle { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; min-height: 44px; padding: 0 16px; border: 1px solid var(--id-line); border-radius: 999px; background: none; color: var(--id-ink-2); font-size: 14px; font-weight: 600; line-height: 1.2; }
+.identify-option-toggle span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.identify-option-toggle[aria-expanded="true"] { background: color-mix(in srgb, var(--id-ink) 7%, transparent); color: var(--id-ink); }
+.identify-options-panel { display: grid; gap: 12px; width: min(100%, 420px); padding: 14px; border-radius: 20px; background: var(--id-fill); text-align: left; }
+.identify-geo { display: flex; align-items: flex-start; gap: 10px; font-size: 14px; line-height: 1.35; color: var(--id-ink-2); }
+.identify-geo input { flex: none; width: 20px; height: 20px; margin: 0; accent-color: var(--id-accent); }
+
+/* ---------- history: secondary, underneath the stage ---------- */
+.identify-history { display: grid; gap: 2px; padding-top: 6px; }
+.identify-history-head { display: flex; align-items: center; justify-content: space-between; min-height: 48px; margin-right: -10px; }
+.identify-history-head h2 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: -.01em; color: var(--id-ink); }
+.identify-hunt { display: flex; align-items: center; justify-content: space-between; gap: 14px; width: 100%; min-height: 68px; padding: 10px 8px; margin: 0; border: 0; border-radius: 16px; background: transparent; color: inherit; text-align: left; font: inherit; cursor: pointer; transition: background 140ms; }
+.identify-hunt:active { background: color-mix(in srgb, var(--id-ink) 9%, transparent); }
+.identify-hunt-tile { flex: none; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: color-mix(in srgb, var(--id-ink) 8%, transparent); color: var(--id-ink-2); }
+.identify-hunt-tile .identify-glyph { width: 24px; height: 24px; }
+.identify-hunt-tile.resolved { background: var(--id-orb); color: var(--id-on-accent); }
+.identify-hunt-tile.leads { background: var(--id-tint); color: var(--id-accent); }
+.identify-hunt-tile.quiet { color: var(--id-ink-3); }
+.identify-hunt-copy { flex: 1; display: grid; gap: 3px; min-width: 0; }
+.identify-hunt-copy strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 650; color: var(--id-ink); }
+.identify-hunt-copy > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.identify-hunt-end { flex: none; display: flex; align-items: center; gap: 6px; color: var(--id-ink-3); }
+.identify-fresh { background: var(--id-tint); }
+.identify-new { font-size: 11px; font-weight: 700; padding: 4px 8px; border-radius: 999px; background: var(--id-accent); color: var(--id-on-accent); line-height: 1; }
+.identify-muted, .identify-hunt-copy > span, .identify-candidate-title p { color: var(--id-ink-3); font-size: 13px; line-height: 1.45; }
+.identify-error { margin: 0 0 12px; padding: 12px 14px; border-radius: 14px; background: color-mix(in srgb, var(--wz-danger, var(--text)) 12%, transparent); color: var(--wz-danger, var(--text)); font-size: 14px; }
+.identify-footer { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 14px 0 0; }
+.identify-history .identify-footer { justify-content: center; gap: 2px; }
+.identify-history .wz-empty { padding: 20px 12px; }
+
+/* ---------- waiting / result sheet (shared WzSheet; opaque panel over the skin base) ---------- */
+dialog.identify-sheet { background: linear-gradient(var(--wz-panel, var(--bg-raised)), var(--wz-panel, var(--bg-raised))), var(--wz-base, var(--bg, #0d0d12)); background-color: var(--wz-base, var(--bg, #0d0d12)); color: var(--wz-text, var(--text)); isolation: isolate; max-height: 88dvh; overflow: auto; }
+dialog.identify-sheet > h2 { margin: 2px 0 0; padding-right: 40px; font-size: 13px; font-weight: 650; letter-spacing: .01em; color: var(--id-ink-3); }
+.identify-sheet h3 { margin: 24px 0 8px; font-size: 12px; font-weight: 750; letter-spacing: .09em; text-transform: uppercase; color: var(--id-ink-3); }
+.identify-result { display: grid; justify-items: center; gap: 4px; padding: 18px 6px 8px; text-align: center; }
+.identify-result-art { width: min(52vw, 196px); aspect-ratio: 1; margin-bottom: 14px; border-radius: 22px; object-fit: cover; box-shadow: 0 24px 48px -20px color-mix(in srgb, var(--wz-base, var(--bg)) 85%, transparent); }
+.identify-result-orb { position: relative; isolation: isolate; display: grid; place-items: center; width: 112px; height: 112px; margin: 6px 0 18px; border-radius: 50%; color: var(--id-on-accent); background: var(--id-orb); box-shadow: 0 18px 44px -16px color-mix(in srgb, var(--id-accent) 70%, transparent); }
+.identify-result-orb .identify-glyph { width: 46%; height: 46%; }
+.identify-result-orb svg:not(.identify-glyph) { width: 44px; height: 44px; }
+.identify-result-orb.live::before, .identify-result-orb.live::after { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: 50%; border: 2px solid color-mix(in srgb, var(--id-accent) 50%, transparent); transform: scale(1.14); opacity: .3; animation: identify-ripple 2.6s cubic-bezier(.2, .6, .3, 1) infinite; }
+.identify-result-orb.live::after { animation-delay: 1.3s; }
+.identify-result-copy { display: grid; gap: 4px; justify-items: center; }
+.identify-sheet .identify-result-title { margin: 0; font-size: 24px; font-weight: 750; line-height: 1.2; letter-spacing: -.015em; text-transform: none; color: var(--id-ink); overflow-wrap: anywhere; }
+.identify-result-artist { margin: 0; font-size: 17px; color: var(--id-ink-2); }
+.identify-result-status { margin: 6px 0 0; padding: 5px 12px; border-radius: 999px; background: color-mix(in srgb, var(--id-ink) 7%, transparent); font-size: 13px; font-weight: 600; color: var(--id-ink-2); }
+.identify-result .identify-muted { margin: 6px 0 0; }
+.identify-result .identify-send { width: min(100%, 300px); margin-top: 14px; }
+.identify-sheet audio { width: 100%; height: 44px; margin: 2px 0; }
+.identify-candidate { margin: 0 0 10px; padding: 14px; border-radius: 18px; background: color-mix(in srgb, var(--id-ink) 5%, transparent); }
+.identify-candidate-title { display: flex; align-items: center; gap: 12px; }
+.identify-candidate-title > div { min-width: 0; overflow-wrap: anywhere; }
+.identify-candidate-title strong { font-size: 16px; font-weight: 650; }
+.identify-candidate-title p { margin: 3px 0 0; }
+.identify-candidate-title img, .identify-candidate-art { flex: none; width: 56px; height: 56px; border-radius: 12px; object-fit: cover; }
+.identify-candidate-art { display: grid; place-items: center; background: var(--id-tint); color: var(--id-accent); }
+.identify-rejected { opacity: .62; }
+.identify-rejected .identify-candidate-title strong { text-decoration: line-through; }
+.identify-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 12px; }
+.identify-sheet details { border-top: 1px solid var(--id-line); }
+.identify-candidate details { margin-top: 10px; }
+.identify-sheet summary { display: flex; align-items: center; min-height: 44px; cursor: pointer; font-size: 14px; font-weight: 600; color: var(--id-ink-2); }
+.identify-more { margin-top: 12px; padding-bottom: 6px; }
+.identify-more .identify-hunt { min-height: 52px; }
+.identify-details { margin-top: 18px; }
+.identify-details details:last-child { border-bottom: 1px solid var(--id-line); }
+.identify-search { display: flex; gap: 8px; margin: 2px 0 8px; }
+.identify-search input { flex: 1; min-width: 0; }
+.identify-manual { display: grid; gap: 8px; margin: 6px 0; }
+
+@keyframes identify-breathe { 0%, 100% { transform: scale(.96); opacity: .3; } 50% { transform: scale(1.06); opacity: .55; } }
+@keyframes identify-ripple { from { transform: scale(1); opacity: .5; } to { transform: scale(1.6); opacity: 0; } }
+@keyframes identify-bar { from { transform: scaleY(.6); } to { transform: scaleY(1); } }
+/* Reduced motion: still visibly listening (a steady ring), nothing moving. */
+@media (prefers-reduced-motion: reduce) {
+  .identify-orb::before, .identify-orb::after, .identify-orb .identify-glyph rect, .identify-entry-orb::after, .identify-result-orb::before, .identify-result-orb::after { animation: none !important; }
+  .identify-ring-value, .identify-orb, .identify-send { transition: none; }
+}
