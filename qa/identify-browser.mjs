@@ -39,6 +39,9 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   if(u.pathname.endsWith('/summaries.js'))return route.fulfill({contentType:'application/javascript',body:'window.WIZ_SUMMARIES={};'})
   // The shell only reads the box app list through bootstrap's advertised endpoint (core/config.js).
   if(u.pathname==='/wizard/v1/bootstrap')return route.fulfill({json:{bootstrap:1,endpoints:{apps:'/wizard/v1/apps'},capabilities:{voice:true},settings:{}}})
+  // A real owner box has an AI signed in and setup finished, so the first-run Welcome never covers the app.
+  if(u.pathname==='/wizard/hermes/api/model/options')return route.fulfill({json:{provider:'anthropic',providers:[{slug:'anthropic',authenticated:true}]}})
+  if(u.pathname==='/wizard/v1/setup')return route.fulfill({json:{first_run:false,state:'done'}})
   if(u.pathname==='/wizard/v1/apps')return route.fulfill({json:{apps:[{id:'wizard-music',name:'Music',url:'/wizard-music/',view:{mode:'original',url:'/wizard-music/'},source:'apps.json',type:'service',provides:['music','voice-commands'],voice_names:['Music','Wizard Music']}]}})
   if(u.pathname.startsWith('/wizard/') || u.pathname.startsWith('/api/') || u.pathname.startsWith('/notifications/') || u.pathname.startsWith('/pages/')){
    if(req.method()!=='GET')return route.fulfill({status:403,json:{error:'No owner writes in isolated QA'}})
@@ -65,6 +68,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const waitAcks=async(f,n,label)=>{const end=Date.now()+30000;while(Date.now()<end){if(await acks(f).catch(()=>0)>=n)return;await new Promise(r=>setTimeout(r,250))}
   const replay=await f.evaluate(async()=>{const out={href:location.href,frameAcks:window.__qaAcks,shared:localStorage.getItem('qa.acks')};try{const d=await new Promise((res,rej)=>{const r=indexedDB.open('trackhunt-offline-v1',1);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});const rows=await new Promise(res=>{const q=d.transaction('captures').objectStore('captures').getAll();q.onsuccess=()=>res(q.result)});out.locals=[];for(const it of rows){const dig=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await it.blob.arrayBuffer())),n=>n.toString(16).padStart(2,'0')).join('');const r=await fetch('/wizard-music/api/identify/captures/'+it.id,{credentials:'include'});let j=null;try{j=await r.json()}catch(e){j={parse:e.message}};out.locals.push({id:it.id,shared:it.sharedId,size:it.blob.size,digest:dig,status:r.status,server:{id:j?.id,raw_sha256:j?.raw_sha256,status:j?.status,error:j?.error}})}}catch(e){out.replayError=e.message}return out}).catch(e=>({evalError:e.message}))
   throw Error(label+' never confirmed: '+JSON.stringify({replay,frames:page.frames().map(x=>x.url()).filter(u=>u.includes('wizard-music'))})+' '+await dump(f,label))}
+ await page.addInitScript(()=>{try{if(location.pathname.startsWith('/wizard-os-home/'))localStorage.setItem('wos.welcome.v1','done')}catch{}})
  await page.goto(ORIGIN+'/wizard-os-home/'+(shell==='phone'?'?shell=phone':'desktop.html'),{waitUntil:'load'})
  await page.waitForFunction(([sh,sk])=>document.documentElement.dataset.shell===sh&&document.documentElement.dataset.skin===sk,[shell,skin])
  await page.waitForFunction(()=>window.WizAppServices?.inspect().some(x=>x.appId==='wizard-music'&&x.ready))
@@ -90,6 +94,9 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  netLines.push(ts()+' CLICK Stop and identify; starts='+JSON.stringify(await frame.evaluate(()=>window.__qaStarts.length)))
  await frame.getByRole('button',{name:'Stop and identify',exact:true}).click()
  netLines.push(ts()+' CLICKED')
+ // Stop must take effect at once (the recording panel leaves Listening); a covered or swallowed tap fails here, not 30 s later.
+ const stopped=await frame.waitForFunction(()=>!/Listening…/.test(document.querySelector('.identify-recording')?.textContent||''),null,{timeout:5000}).then(()=>true,()=>false)
+ if(!stopped)throw Error('Stop and identify did not take effect: '+JSON.stringify({welcome:await page.evaluate(()=>({active:window.WosWelcome?.active,log:window.WosWelcome?.log}))})+' '+await dump(frame,'stop-click'))
  await waitAcks(frame,1,'Upload after Stop')
  // Open imported hunt and verify media really decodes.
  await frame.getByRole('button',{name:'Hunts',exact:true}).click()
