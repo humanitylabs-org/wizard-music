@@ -19,6 +19,8 @@ export function musicRoute(method, sub) {
   if ((method === 'GET' || method === 'HEAD') && /^\/api\/identify\/(captures\/[a-f0-9-]{36}\/audio|candidates\/[0-9]+\/media)$/.test(sub)) return 'media'
   if ((method === 'GET' || method === 'HEAD') && /^\/api\/identify\/(captures(?:\/[a-f0-9-]{36})?|search|retention\/dry-run)$/.test(sub)) return 'api'
   if (method === 'POST' && /^\/api\/identify\/(captures(?:\/[a-f0-9-]{36}\/(retry|candidates|discard|restore))?|candidates\/[0-9]+\/(verdict|resolve|download))$/.test(sub)) return 'api'
+  if ((method === 'GET' || method === 'HEAD') && sub === '/api/playlists') return 'api'
+  if (method === 'POST' && (sub === '/api/playlists' || /^\/api\/playlists\/[a-f0-9]{24}\/play$/.test(sub))) return 'api'
   if ((method === 'GET' || method === 'HEAD') && API_GET.test(sub)) return 'api'
   if (method === 'POST' && API_POST.test(sub)) return 'api'
   if ((method === 'GET' || method === 'HEAD') && MEDIA.test(sub)) return 'media'

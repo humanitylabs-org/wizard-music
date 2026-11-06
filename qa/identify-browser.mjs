@@ -3,11 +3,13 @@
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import path from 'node:path'
+import { checkPlaylists } from './playlist-check.mjs'
 import { chromium } from 'playwright'
 const web = path.resolve(process.env.QA_SHELL_WEB)
 const out = path.resolve(process.env.OUT || 'evidence/identify')
 fs.mkdirSync(out,{recursive:true})
-const ORIGIN='http://127.0.0.1:19371', APP='http://127.0.0.1:19305'
+const ORIGIN=process.env.QA_SHELL_ORIGIN||'http://127.0.0.1:19371', APP=process.env.QA_APP_ORIGIN||'http://127.0.0.1:19305'
+const playlistOnly=process.env.MUSIC_PLAYLIST_ONLY==='1'
 const types={'.js':'application/javascript','.css':'text/css','.html':'text/html','.png':'image/png','.svg':'image/svg+xml','.jpg':'image/jpeg','.webp':'image/webp','.json':'application/json','.woff2':'font/woff2'}
 const data=await (await fetch(APP+'/wizard-music/api/identify/captures')).json()
 const discardOnly=process.env.IDENTIFY_DISCARD_ONLY==='1'
@@ -115,7 +117,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await page.goto(ORIGIN+'/wizard-os-home/'+(shell==='phone'?'?shell=phone':'desktop.html'),{waitUntil:'load'})
  await page.waitForFunction(([sh,sk])=>document.documentElement.dataset.shell===sh&&document.documentElement.dataset.skin===sk,[shell,skin])
  await page.waitForFunction(sh=>window.WizCore.apps(sh).APP['wizard-music']?.voice_routes?.length,shell)
- const command=localOnly?await page.evaluate(()=>{if(!window.WizOpenApp('wizard-music','/wizard-music/?view=identify'))throw Error('Music did not open');return 'persisted-unsent'}):await page.evaluate(sh=>{
+ const command=playlistOnly?await page.evaluate(()=>{if(!window.WizOpenApp('wizard-music','/wizard-music/'))throw Error('Music did not open');return 'playlists'}):localOnly?await page.evaluate(()=>{if(!window.WizOpenApp('wizard-music','/wizard-music/?view=identify'))throw Error('Music did not open');return 'persisted-unsent'}):await page.evaluate(sh=>{
   const registry=window.WizCore.apps(sh)
   const grammar=window.WosCommands.create({CHATS:{},...registry,quickSearch:()=>null,sendSnap:()=>({view:{kind:'thread list'}})})
   const cmd=grammar.parse('music',{view:{kind:'thread list'}},'command')
@@ -130,6 +132,12 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const visible=page.locator('iframe:not([data-voice-service])[src*="/wizard-music/"]:visible').last()
  await visible.waitFor({state:'visible'})
  const frame=await (await visible.elementHandle()).contentFrame()
+ if(playlistOnly){
+  rows.push(await checkPlaylists({page,frame,shell,skin,out,settle,APP}))
+  assert.deepEqual(errors,[]);assert.deepEqual(routeErrors,[])
+  fs.writeFileSync(path.join(out,'browser-progress.json'),JSON.stringify({complete:false,rows},null,2))
+  await closeContext(context);continue
+ }
  if(localOnly){
   const id=await frame.evaluate(()=>localStorage.getItem('qa.local.id'))
   const read=()=>frame.evaluate(async id=>{const d=await new Promise((res,rej)=>{const r=indexedDB.open('trackhunt-offline-v1',1);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});const row=await new Promise(res=>{const q=d.transaction('captures').objectStore('captures').get(id);q.onsuccess=()=>res(q.result)});d.close();if(!row)return null;return {...row,blob:undefined,size:row.blob.size,hash:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await row.blob.arrayBuffer())),n=>n.toString(16).padStart(2,'0')).join('')}},id)

@@ -1,0 +1,16 @@
+/* App-domain playlist extension: existing Music hierarchy and Appearance v1 roles. */
+.music-playlists-heading { display: flex; align-items: center; gap: 9px; min-height: 44px; padding: 0; border: 0; background: none; color: var(--wz-text, var(--text)); text-align: left; }
+.music-playlists-heading h3 { color: inherit; }
+.music-playlists-heading small { color: var(--wz-text-muted, var(--text-dim)); }
+.music-playlists-list { display: grid; gap: 2px; }
+.music-playlist-row a { text-decoration: none; }
+.music-playlist-row .music-row-text strong { white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.music-playlist-mark { display: grid; place-items: center; color: var(--wiz); font-size: 23px; }
+.music-playlist-pending { color: var(--wz-text-secondary, var(--text-2)); font-size: 14px; }
+.music-playlist-error { display: flex; align-items: center; gap: 12px; color: var(--wz-text, var(--text)); }
+.music-playlist-error p { flex: 1; margin: 0; }
+.music-playlist-sheet { background: linear-gradient(var(--wz-overlay, var(--bg-raised)), var(--wz-overlay, var(--bg-raised))), var(--wz-base, var(--bg)); color: var(--wz-text, var(--text)); }
+.music-playlist-sheet p { color: var(--wz-text-secondary, var(--text-2)); }
+.music-playlist-sheet form, .music-playlist-sheet label { display: grid; gap: 8px; }
+.music-playlist-sheet form { gap: 18px; }
+.music-playlist-sheet input { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--wz-border, var(--line)); border-radius: 10px; background: var(--wz-surface, var(--bg-input)); color: var(--wz-text, var(--text)); font: inherit; }

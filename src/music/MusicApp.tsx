@@ -4,6 +4,7 @@ import { hostedAudioBridge } from './backgroundAudio'
 if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNativeMusic = hostedAudioBridge()
 import { shareSong } from './share'
 import { SwipeDeck, type SwipeDirection } from './swipe'
+import { Playlists } from './Playlists'
 import './music.css'
 
 const BASE = new URL('./', document.baseURI).pathname
@@ -320,6 +321,8 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
           {home.recent.map((track) => <button type="button" key={track.id} className="music-tile" onClick={() => playRow(track)}><Art track={track} size="card" /><strong>{track.title}</strong><small>{track.artist}</small></button>)}
         </div>
       </section>}
+
+      <Playlists notify={notify} onPlay={async (track) => { await musicControl.play([track], null); onOpenNowPlaying() }} />
 
       {home && home.vibes.length > 0 && <section className="music-section" aria-label="Start a station">
         <div className="music-section-head"><h3>Start a station</h3></div>

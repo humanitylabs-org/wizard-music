@@ -17,6 +17,9 @@ INPUT=Path(os.environ.get('IDENTIFY_INPUT','/srv/work/music-identify-input'))
 OUT=Path(os.environ.get('IDENTIFY_OUT',str(ROOT/'evidence/identify')))
 OUT.mkdir(parents=True,exist_ok=True)
 PY=ROOT/'.venv/bin/python'
+APP_PORT=os.environ.get('QA_APP_PORT','19305')
+HUB_PORT=os.environ.get('QA_HUB_PORT','19401')
+APP_ORIGIN='http://127.0.0.1:'+APP_PORT
 
 
 def run(args,**kw):
@@ -35,7 +38,8 @@ def ready(url):
 
 
 def main():
-    discard_only=os.environ.get('IDENTIFY_DISCARD_ONLY')=='1'
+    playlist_only=os.environ.get('MUSIC_PLAYLIST_ONLY')=='1'
+    discard_only=os.environ.get('IDENTIFY_DISCARD_ONLY')=='1' or playlist_only
     browser_only=os.environ.get('IDENTIFY_BROWSER_ONLY')=='1'
     if browser_only:
         # Reuse successful unchanged build/tests; fresh output keeps failed evidence intact.
@@ -50,7 +54,7 @@ def main():
         run(['npm','run','build'])
         run(['npm','test'])
         run(['node','--test','qa/identify-transport.mjs'])
-        run([PY,'-m','pytest','hub/tests/test_identify.py','-q'])
+        run([PY,'-m','pytest','hub/tests/test_identify.py','hub/tests/test_playlists.py','-q'])
     # Use real recognizer network only in its isolated scratch home, not the owner's hub.
     env={**os.environ,'WIZARD_MUSIC_HUB_HOME':str(OUT/'recognizer-home'),'IDENTIFY_KNOWN_PREVIEW':'https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview221/v4/f5/0c/cb/f50ccb25-c1fd-8940-1f8a-e42495300745/mzaf_15922365127289521089.plus.aac.p.m4a','IDENTIFY_KNOWN_TITLE':'Nevada'}
     if not browser_only and not os.environ.get('IDENTIFY_SKIP_RECOGNIZER'):
@@ -66,16 +70,16 @@ def main():
     else:
         shutil.copytree(INPUT/'hub-home',home)
         with (OUT/'migration.log').open('w') as f:run([PY,'hub/import_trackhunt.py',INPUT/'trackhunt',home,'--backup',OUT/'migration-backup'],stdout=f,stderr=subprocess.STDOUT)
-    env={**os.environ,'WIZARD_MUSIC_HUB_HOME':str(home),'WIZARD_MUSIC_LIBRARY':str(OUT/'library'),'WIZARD_MUSIC_HUB_TOKEN':'identify-fixture-only','WIZARD_MUSIC_HUB_PORT':'19401','WIZARD_MUSIC_APP_PORT':'19305','WIZARD_MUSIC_HUB_ORIGIN':'http://127.0.0.1:19401','WIZARD_MUSIC_ONLINE':'0','WIZARD_MUSIC_RELEASE':os.environ.get('WIZARD_MUSIC_RELEASE') or subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()}
+    env={**os.environ,'WIZARD_MUSIC_HUB_HOME':str(home),'WIZARD_MUSIC_LIBRARY':str(OUT/'library'),'WIZARD_MUSIC_HUB_TOKEN':'identify-fixture-only','WIZARD_MUSIC_HUB_PORT':HUB_PORT,'WIZARD_MUSIC_APP_PORT':APP_PORT,'WIZARD_MUSIC_HUB_ORIGIN':'http://127.0.0.1:'+HUB_PORT,'WIZARD_MUSIC_ONLINE':'0','WIZARD_MUSIC_RELEASE':os.environ.get('WIZARD_MUSIC_RELEASE') or subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip()}
     code="import sys;sys.path.insert(0,'hub');import hub,identify;identify.shazam_lookup=lambda p:{'ok':True,'raw':{'matches':[]}};identify.start();hub.ThreadingHTTPServer((hub.HOST,hub.PORT),hub.Handler).serve_forever()"
     logs=[(OUT/'hub.log').open('w'),(OUT/'node.log').open('w')]
     children=[]
     try:
         children.append(subprocess.Popen([str(PY),'-u','-c',code],cwd=ROOT,env=env,stdout=logs[0],stderr=subprocess.STDOUT))
         children.append(subprocess.Popen(['node','server/index.mjs'],cwd=ROOT,env=env,stdout=logs[1],stderr=subprocess.STDOUT))
-        ready('http://127.0.0.1:19305/wizard-music/api/identify/captures')
+        ready(APP_ORIGIN+'/wizard-music/api/identify/captures')
         def get(path):
-            with urllib.request.urlopen('http://127.0.0.1:19305'+path,timeout=20) as r:return r.read(),r.headers,r.status
+            with urllib.request.urlopen(APP_ORIGIN+path,timeout=20) as r:return r.read(),r.headers,r.status
         status=json.loads(get('/wizard-music/api/status')[0]); assert status['configured'] is True and status['version']=='0.2.0-identify'
         captures=json.loads(get('/wizard-music/api/identify/captures')[0])['captures']
         assert len(captures)==(0 if discard_only else 5)
@@ -86,7 +90,7 @@ def main():
             assert status==200 and len(audio)>44 and headers['Content-Type'].startswith('audio/')
             rows.append({'id':cap['id'],'bytes':len(audio),'content_type':headers['Content-Type'],'sha256':d['raw_sha256']})
         (OUT/'five-captures.json').write_text(json.dumps({'ok':True,'count':len(rows),'rows':rows},indent=2))
-        if discard_only:
+        if discard_only and not playlist_only:
             # Real proxy + hub status codes, UUID validation, persistence and MCP routes.
             import uuid
             base='http://127.0.0.1:19305/wizard-music/api/identify/'
@@ -120,7 +124,7 @@ def main():
                 with urllib.request.urlopen(req) as r:result=json.load(r)['result']
                 assert not result['isError'];assert json.loads(result['content'][0]['text'])['id']==cid
             (OUT/'discard-api.json').write_text(json.dumps({'ok':True,'synthetic_only':True,'proxy_hub_mcp':True,'idempotent':True,'preserved':True},indent=2))
-        qaenv={**env,'QA_SHELL_WEB':str(INPUT/'shell-web'),'OUT':str(OUT),'QA_AUDIO':str(OUT/'synthetic.wav') if discard_only else str(next((INPUT/'trackhunt/audio').glob('*/normalized.wav')))}
+        qaenv={**env,'QA_APP_ORIGIN':APP_ORIGIN,'QA_SHELL_WEB':str(INPUT/'shell-web'),'OUT':str(OUT),'QA_AUDIO':str(OUT/'synthetic.wav') if discard_only else str(next((INPUT/'trackhunt/audio').glob('*/normalized.wav')))}
         run(['node','qa/identify-browser.mjs'],env=qaenv)
     finally:
         for p in children:p.terminate()
