@@ -25,12 +25,12 @@ const browser=await chromium.launch({headless:true,args:['--disable-gpu']})
 try {
 for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const context=await browser.newContext(shell==='phone'?{viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1}:{viewport:{width:1440,height:900}})
- let offline=false
+ let offline=false,refusedPosts=0
  await context.route('**/*',async route=>{
   const req=route.request(),u=new URL(req.url())
   if(u.origin!==ORIGIN)return route.abort()
   if(u.pathname.startsWith('/wizard-music/')){
-   if(offline && req.method()==='POST')return route.abort('internetdisconnected')
+   if(offline && req.method()==='POST'){refusedPosts++;return route.abort('internetdisconnected')}
    const response=await context.request.fetch(APP+u.pathname+u.search,{method:req.method(),headers:{...(req.headers()['content-type']?{'content-type':req.headers()['content-type']}:{})},data:req.postDataBuffer()||undefined})
    const headers={...response.headers()};delete headers['content-security-policy']
    return route.fulfill({status:response.status(),headers,body:await response.body()})
@@ -163,6 +163,9 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await frame.getByRole('button',{name:'Send for identification',exact:true}).click()
  await frame.locator('dialog[open]').waitFor()
  await frame.locator('dialog[open] [role=status]').filter({hasText:/Saved|Not sent|Retrying/}).first().waitFor()
+ // "Saved · sending…" paints before the upload is tried; reconnect only once an offline upload was really refused.
+ for(const end=Date.now()+10000;!refusedPosts&&Date.now()<end;)await new Promise(r=>setTimeout(r,100))
+ assert.ok(refusedPosts>=1,'the offline Send really attempted an upload and was refused')
  assert.equal(await acks(frame),1)
  offline=false
  await frame.evaluate(()=>dispatchEvent(new Event('online')))

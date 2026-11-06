@@ -198,6 +198,28 @@ describe('recording duration, explicit send and result focus', () => {
     expect(rows.get(id).sendRequested).toBe(false)
     expect(uploads).toBe(0); expect(identifyControl.snapshot().selected).toBeNull()
   })
+  it('sends on reconnect when the online event lands during the refresh after a failed offline send', async () => {
+    // Forum browser run, 6 Nov 2026: the offline POST failed, 'online' fired while that pass was refreshing the list,
+    // and the coalesced wake-up was dropped along with the cleared retry timer, so the clip never sent.
+    const dispose = await identifyControl.init(() => undefined)
+    rows.set(id, { id, sharedId: 'shared-1', blob, mime: 'audio/wav', client_ts: '2026-11-06T00:00:00Z', duration_s: 4, sendRequested: true })
+    let offline = true, posts = 0, releaseRefresh: (() => void) | undefined
+    vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
+      if (options?.method === 'POST') { posts++; if (offline) throw new TypeError('Failed to fetch'); return { ok: true, json: async () => ({ id, raw_sha256: createHash('sha256').update(bytes).digest('hex') }) } }
+      if (url.endsWith('/captures') && offline) await new Promise<void>(r => { releaseRefresh = r })
+      return { ok: true, json: async () => ({ captures: [] }) }
+    }))
+    const pass = identifyControl.drain()
+    for (let n = 0; n < 50 && !releaseRefresh; n++) await flush()
+    expect(posts).toBe(1); expect(identifyControl.snapshot().sendErrors[id]).toBe('Failed to fetch'); expect(rows.has(id)).toBe(true)
+    offline = false
+    window.dispatchEvent(new Event('online'))
+    releaseRefresh!(); await pass
+    expect(posts).toBe(2)
+    expect((window as any).WizardApp.capture.ack).toHaveBeenCalledWith('shared-1')
+    expect(rows.has(id)).toBe(false); expect(identifyControl.snapshot().sendErrors[id]).toBeUndefined()
+    dispose()
+  })
   it('does not upload an unsent shared draft after restart recovery', async () => {
     ;((window as any).WizardApp.capture.pending as any) = async () => [result]
     await identifyControl.drain(); await identifyControl.drain()

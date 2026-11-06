@@ -114,9 +114,11 @@ async function drain(): Promise<void> {
   // A clip saved while a drain is running gets its own pass; it is never left waiting for the next trigger.
   if (draining) { drainAgain = true; return draining }
   draining = (async () => {
-    try {
-      do {
-        drainAgain = false
+    // The closing refresh is part of the pass: a trigger that lands during it (the 'online' event right after
+    // a failed offline send, which also clears the retry timer) still gets its own pass.
+    do {
+      drainAgain = false
+      try {
         const known = await localStore('all')
         for (const r of await window.WizardApp.capture.pending()) {
           if (r.blob?.size && r.meta?.task === 'music-identify' && r.id !== handle?.id && !known.some(c => c.sharedId === r.id)) await persist(r)
@@ -130,8 +132,8 @@ async function drain(): Promise<void> {
           } catch (e) { failed = true; paint({ sendErrors: { ...state.sendErrors, [item.id]: (e as Error).message || 'Not sent yet. Retrying.' } }); break }
         }
         if (failed) scheduleRetry(); else retryDelay = 5000
-      } while (drainAgain)
-    } finally { await refresh() }
+      } finally { await refresh() }
+    } while (drainAgain)
   })().finally(() => { draining = null })
   return draining
 }
