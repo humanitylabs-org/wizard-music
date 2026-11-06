@@ -1,0 +1,173 @@
+import { musicApi, musicControl } from './MusicApp'
+import type { MusicTrack } from './engine'
+
+export type Candidate = { id: number; title: string; artist: string; provider: string; verdict?: string; art_url?: string; compare_url?: string; preview_url?: string; artwork_url?: string }
+export type Hunt = { id: string; created_at: string; status: string; best_title?: string; best_artist?: string; note?: string; last_error?: string; raw_sha256?: string; audio_url?: string; original_url?: string; export_url?: string; candidates?: Candidate[]; attempts?: { id: number; provider: string; outcome: string; preprocess?: string; error?: string }[] }
+export type CaptureResult = { id: string; blob: Blob; mime: string; startedAt: number; durationMs: number; partial?: boolean; meta?: { task?: string; geo?: Record<string, number>; note?: string } }
+export type CaptureHandle = { id: string; stop(): Promise<CaptureResult>; onLevel(fn: (value: number | { me?: number; them?: number }) => void): () => void }
+export type CapturePort = { start(options: Record<string, unknown>): Promise<CaptureHandle>; pending(): Promise<CaptureResult[]>; ack(id: string): Promise<unknown> }
+type LocalClip = { id: string; sharedId?: string; blob: Blob; mime: string; client_ts: string; duration_s: number; geo?: Record<string, number>; partial?: boolean; note?: string }
+type State = { open: boolean; selected: string | null; detail: Hunt | null; hunts: Hunt[]; locals: LocalClip[]; phase: 'idle' | 'starting' | 'recording' | 'saving'; elapsed: number; level: number; error: string; loading: boolean; note: string; geoEnabled: boolean }
+const BASE = '/wizard-music/api/identify/'
+const ACTIVE = 'wizard-music.identify.active.v1'
+let state: State = { open: false, selected: null, detail: null, hunts: [], locals: [], phase: 'idle', elapsed: 0, level: 0, error: '', loading: false, note: '', geoEnabled: false }
+const listeners = new Set<() => void>()
+function paint(patch: Partial<State>) { state = { ...state, ...patch }; listeners.forEach(fn => fn()) }
+let handle: CaptureHandle | null = null, startedAt = 0, tick = 0, autoStop = 0, offLevel: (() => void) | undefined
+let releaseHold: (() => void) | undefined
+let draining: Promise<void> | null = null
+let detailGeneration = 0, refreshGeneration = 0
+let closePlayer: (() => void) | undefined
+
+export async function identifyJson<T>(path: string, body?: unknown): Promise<T> {
+  const response = await fetch(BASE + path, { method: body === undefined ? 'GET' : 'POST', credentials: 'include', headers: body === undefined ? {} : { 'Content-Type': 'application/json' }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
+  const value = await response.json()
+  if (!response.ok) throw new Error(value.error || 'Your hunt is saved. Try again when connected.')
+  return value as T
+}
+function db(): Promise<IDBDatabase> {
+  // The old app's same-origin outbox is deliberately reused, so an offline clip is not stranded.
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open('trackhunt-offline-v1', 1)
+    r.onupgradeneeded = () => { r.result.createObjectStore('captures', { keyPath: 'id' }) }
+    r.onsuccess = () => resolve(r.result); r.onerror = () => reject(r.error)
+  })
+}
+async function localStore(op: 'put' | 'delete' | 'all', value?: LocalClip | string): Promise<LocalClip[]> {
+  const d = await db()
+  return new Promise((resolve, reject) => {
+    const tx = d.transaction('captures', op === 'all' ? 'readonly' : 'readwrite'), store = tx.objectStore('captures')
+    let rows: LocalClip[] = []
+    if (op === 'all') { const q = store.getAll(); q.onsuccess = () => { rows = q.result } }
+    else if (op === 'put') store.put(value)
+    else store.delete(value as string)
+    tx.oncomplete = () => { d.close(); resolve(rows) }; tx.onerror = () => { d.close(); reject(tx.error) }; tx.onabort = tx.onerror
+  })
+}
+export async function backendCaptureId(id: string): Promise<string> {
+  if (/^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(id)) return id.toLowerCase()
+  const b = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(id))).slice(0, 16)
+  b[6] = (b[6] & 15) | 80; b[8] = (b[8] & 63) | 128
+  const h = Array.from(b, n => n.toString(16).padStart(2, '0')).join('')
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+}
+async function persist(result: CaptureResult): Promise<LocalClip> {
+  if (!result.blob?.size) throw new Error('No audio returned. Recovery remains in shared capture.')
+  const item: LocalClip = { id: await backendCaptureId(result.id), sharedId: result.id, blob: result.blob, mime: result.mime, client_ts: new Date(result.startedAt).toISOString(), duration_s: result.durationMs / 1000, partial: result.partial, geo: result.meta?.geo, note: result.meta?.note }
+  await localStore('put', item)
+  paint({ locals: await localStore('all') })
+  return item
+}
+export async function uploadClip(item: LocalClip) {
+  const q = new URLSearchParams({ id: item.id, client_ts: item.client_ts, note: item.note || '' })
+  if (item.geo) for (const k of ['lat', 'lon', 'accuracy_m']) if (item.geo[k] != null) q.set(k, String(item.geo[k]))
+  const response = await fetch(BASE + 'captures?' + q, { method: 'POST', credentials: 'include', headers: { 'Content-Type': item.mime || item.blob.type || 'audio/webm' }, body: item.blob })
+  if (!response.ok) throw new Error('Saved on this device. Upload not confirmed yet.')
+  const saved = await identifyJson<Hunt>('captures/' + item.id)
+  const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await item.blob.arrayBuffer())), n => n.toString(16).padStart(2, '0')).join('')
+  if (saved.id !== item.id || saved.raw_sha256 !== digest) throw new Error('Saved audio bytes were not confirmed. Keeping your local clip.')
+  if (item.sharedId) await window.WizardApp.capture.ack(item.sharedId)
+  await localStore('delete', item.id)
+}
+async function refresh() {
+  const gen = ++refreshGeneration
+  try {
+    const [value, locals] = await Promise.all([identifyJson<{ captures: Hunt[] }>('captures'), localStore('all')])
+    if (gen === refreshGeneration) paint({ hunts: value.captures, locals, loading: false })
+    if (state.selected) await detail(state.selected, false)
+  } catch (e) { if (gen === refreshGeneration) paint({ locals: await localStore('all').catch(() => state.locals), loading: false, error: (e as Error).message }) }
+}
+async function detail(id: string, selecting = true) {
+  const gen = ++detailGeneration
+  if (selecting) paint({ selected: id, detail: null, error: '' })
+  const local = state.locals.find(c => c.id === id)
+  if (local) return
+  try {
+    const value = await identifyJson<Hunt>('captures/' + id)
+    if (gen === detailGeneration && state.selected === id) paint({ detail: value })
+  } catch (e) { if (gen === detailGeneration && state.selected === id) paint({ error: (e as Error).message }) }
+}
+async function drain() {
+  if (draining) return draining
+  draining = (async () => {
+    try {
+      for (const r of await window.WizardApp.capture.pending()) if (r.blob?.size && r.meta?.task === 'music-identify') await persist(r)
+      for (const item of await localStore('all')) {
+        if (!item.blob?.size || (item.partial && !item.sharedId)) continue
+        try { await uploadClip(item) } catch (e) { paint({ error: (e as Error).message }); break }
+      }
+    } finally { await refresh() }
+  })().finally(() => { draining = null })
+  return draining
+}
+async function start(resume?: { id: string; startedAt: number }) {
+  if (state.phase !== 'idle') { paint({ open: true }); return }
+  // This is before capture/permissions, storage, geolocation or any network request.
+  paint({ open: true, phase: 'starting', elapsed: 0, error: '' })
+  closePlayer?.()
+  const hold = window.WizardApp.update?.hold('Saving a song identification clip')
+  releaseHold = () => hold?.release()
+  musicControl.engine()?.pause()
+  let geo: Record<string, number> | undefined
+  if (state.geoEnabled) navigator.geolocation?.getCurrentPosition(p => { geo = { lat: p.coords.latitude, lon: p.coords.longitude, accuracy_m: p.coords.accuracy } }, () => undefined, { timeout: 10000, maximumAge: 60000 })
+  try {
+    startedAt = resume?.startedAt || Date.now()
+    const captured = await window.WizardApp.capture.start({ kind: 'audio', resumeId: resume?.id, chunkMs: 1000, maxMs: Math.max(1000, 30000 - (Date.now() - startedAt)), audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, meta: { task: 'music-identify', geo, note: state.note } })
+    handle = { id: captured.id, onLevel: fn => captured.onLevel(fn), stop: async () => { const result = await captured.stop(); return { ...result, meta: { ...result.meta, geo: geo || result.meta?.geo } } } }
+    localStorage.setItem(ACTIVE, JSON.stringify({ id: handle.id, startedAt }))
+    offLevel = handle.onLevel(v => paint({ level: Math.max(0, Math.min(1, typeof v === 'number' ? v : Math.max(v.me || 0, v.them || 0))) }))
+    paint({ phase: 'recording' })
+    tick = window.setInterval(() => paint({ elapsed: Math.min(30, (Date.now() - startedAt) / 1000) }), 200)
+    autoStop = window.setTimeout(() => { void stop() }, Math.max(0, 30000 - (Date.now() - startedAt)))
+  } catch (e) {
+    paint({ phase: 'idle', error: (e as Error).message || 'Microphone unavailable. Try Identify again.' })
+    releaseHold?.(); releaseHold = undefined
+    if ((e as { code?: string }).code === 'not_recoverable') localStorage.removeItem(ACTIVE)
+  }
+}
+async function stop() {
+  if (!handle || state.phase === 'saving') return
+  paint({ phase: 'saving' })
+  window.clearInterval(tick); window.clearTimeout(autoStop); offLevel?.()
+  try {
+    const result = await handle.stop()
+    await persist(result)
+    handle = null; localStorage.removeItem(ACTIVE)
+    paint({ phase: 'idle', level: 0 })
+    releaseHold?.(); releaseHold = undefined
+    void drain()
+  } catch (e) { paint({ phase: 'idle', error: (e as Error).message || 'Audio remains recoverable in shared capture.' }); handle = null; releaseHold?.(); releaseHold = undefined }
+}
+export const identifyControl = {
+  snapshot: () => state,
+  subscribe(fn: () => void) { listeners.add(fn); return () => { listeners.delete(fn) } },
+  start, stop, refresh, drain, detail,
+  configure(note: string, geoEnabled: boolean) { paint({ note, geoEnabled }) },
+  open() { paint({ open: true, error: '', loading: !state.hunts.length }); closePlayer?.(); void refresh() },
+  closeDetail() { ++detailGeneration; paint({ selected: null, detail: null, error: '' }) },
+  back() {
+    if (state.selected) { this.closeDetail(); return true }
+    if (state.open) { paint({ open: false }); return true }
+    return false
+  },
+  busy: () => state.phase !== 'idle',
+  async retry(id: string) { paint({ error: '' }); await identifyJson('captures/' + id + '/retry', {}); await refresh() },
+  async retryUnsolved() { for (const h of state.hunts.filter(h => ['no_match', 'error', 'uploaded'].includes(h.status))) await this.retry(h.id) },
+  async play(c: Candidate) { const { track } = await identifyJson<{ track: MusicTrack }>(`candidates/${c.id}/resolve`, {}); const station = await musicApi.station({ trackId: track.id }); await musicControl.play(station.tracks, station.station) },
+  async verdict(c: Candidate, verdict: string) { const result = await identifyJson<{ track?: MusicTrack }>(`candidates/${c.id}/verdict`, { verdict }); if (verdict === 'confirmed') { this.closeDetail() }; await refresh(); return result },
+  async add(id: string, c: unknown) { await identifyJson(`captures/${id}/candidates`, c); await detail(id, false) },
+  async init(onIdentify: () => void) {
+    closePlayer = onIdentify
+    const online = () => { void drain() }
+    window.addEventListener('online', online)
+    const poll = window.setInterval(() => { if (state.open && !this.busy()) void refresh() }, 5000)
+    try {
+      const active = JSON.parse(localStorage.getItem(ACTIVE) || 'null')
+      const pending = await window.WizardApp.capture.pending()
+      if (active?.id && !pending.some(r => r.id === active.id && r.blob?.size && !r.partial)) await start(active)
+      else if (active?.id) localStorage.removeItem(ACTIVE)
+      await drain()
+    } catch (e) { paint({ error: (e as Error).message }) }
+    return () => { window.removeEventListener('online', online); window.clearInterval(poll) }
+  },
+}

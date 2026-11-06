@@ -1,0 +1,66 @@
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { identifyControl } from '../src/music/identify'
+import { installIdentifyClaims, parseMusicCommand, runMusicCommand } from '../src/music/voice'
+
+const flush = async () => { for (let n=0;n<8;n++) await Promise.resolve() }
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); identifyControl.back() })
+
+describe('song identification phrases', () => {
+  it.each(['music', 'Music.', 'shazam', "what's this song?", 'what is this song', 'identify this'])('whole utterance %s starts Identify', said => {
+    expect(parseMusicCommand(said)).toEqual({op:'identify'})
+  })
+  it.each(['I like music', 'music please', 'music is important', 'what is this music like', 'identify this problem'])('does not steal ordinary speech: %s', said => {
+    expect(parseMusicCommand(said)?.op).not.toBe('identify')
+  })
+  it('keeps existing music searches and now-playing question', () => {
+    expect(parseMusicCommand('music search Home Tides')?.op).toBe('search')
+    expect(parseMusicCommand("what's playing")?.op).toBe('what')
+  })
+})
+
+describe('held microphone and app-owned shell claims', () => {
+  it('paints starting before permission settles, ignores double-tap, and reports denial after navigation', async () => {
+    let reject!: (reason: Error) => void
+    const capture = vi.fn(() => new Promise((_r, fail) => { reject=fail }))
+    const release=vi.fn()
+    vi.stubGlobal('WizardApp', { capture:{start:capture}, update:{hold:()=>({release})} })
+    const a=identifyControl.start()
+    expect(identifyControl.snapshot().open).toBe(true)
+    expect(identifyControl.snapshot().phase).toBe('starting')
+    expect(capture).toHaveBeenCalledTimes(1)
+    await identifyControl.start()
+    expect(capture).toHaveBeenCalledTimes(1)
+    identifyControl.back()
+    reject(new Error('Microphone unavailable'))
+    await a
+    expect(identifyControl.snapshot().open).toBe(false)
+    expect(identifyControl.snapshot().phase).toBe('idle')
+    expect(identifyControl.snapshot().error).toBe('Microphone unavailable')
+    expect(release).toHaveBeenCalledTimes(1)
+  })
+  it('claims priority before app names; taps remain messages and larger utterances are not stolen', async () => {
+    let handler: {claims(s:string,c:{kind:string;stage:string}):boolean; receive(s:string):Promise<boolean>} | undefined
+    const unregister=vi.fn()
+    const focusApp=vi.fn(async()=>true)
+    vi.stubGlobal('WizardApp', {voice:{commands:{register:vi.fn(h=>{handler=h;return unregister})}},view:{isVisible:()=>false},shell:{focusApp}})
+    const cleanup=installIdentifyClaims(()=>undefined)
+    for(const s of ['music','shazam',"what's this song",'identify this']) expect(handler!.claims(s,{kind:'command',stage:'priority'})).toBe(true)
+    expect(handler!.claims('music',{kind:'message',stage:'priority'})).toBe(false)
+    expect(handler!.claims('I listen to music',{kind:'command',stage:'priority'})).toBe(false)
+    expect(handler!.claims('music',{kind:'command',stage:'app'})).toBe(false)
+    expect(await handler!.receive('music')).toBe(true)
+    expect(focusApp).toHaveBeenCalledTimes(1)
+    expect(JSON.parse(localStorage.getItem('wizard-music.identify.command.v1')!).at).toBeGreaterThan(0)
+    cleanup();expect(unregister).toHaveBeenCalledTimes(1)
+  })
+  it('voice returns on same frame while capture permission is held', async () => {
+    let reject!: (reason: Error) => void
+    vi.stubGlobal('WizardApp', {capture:{start:vi.fn(()=>new Promise((_r,fail)=>{reject=fail}))}})
+    expect(await runMusicCommand({op:'identify'},()=>undefined)).toEqual({ok:true,text:'Listening for a song · your clip will be kept'})
+    expect(identifyControl.snapshot().phase).toBe('starting')
+    reject(new Error('Test permission denial'))
+    await flush()
+    expect(identifyControl.snapshot().phase).toBe('idle')
+  })
+})

@@ -16,6 +16,9 @@ const FORWARD_HEADERS = ['content-type', 'content-length', 'content-range', 'acc
 
 /** Path inside the app (after BASE), or null when the request is not a music API/media path. */
 export function musicRoute(method, sub) {
+  if ((method === 'GET' || method === 'HEAD') && /^\/api\/identify\/(captures\/[a-f0-9-]{36}\/audio|candidates\/[0-9]+\/media)$/.test(sub)) return 'media'
+  if ((method === 'GET' || method === 'HEAD') && /^\/api\/identify\/(captures(?:\/[a-f0-9-]{36})?|search|retention\/dry-run)$/.test(sub)) return 'api'
+  if (method === 'POST' && /^\/api\/identify\/(captures(?:\/[a-f0-9-]{36}\/(retry|candidates))?|candidates\/[0-9]+\/(verdict|resolve|download))$/.test(sub)) return 'api'
   if ((method === 'GET' || method === 'HEAD') && API_GET.test(sub)) return 'api'
   if (method === 'POST' && API_POST.test(sub)) return 'api'
   if ((method === 'GET' || method === 'HEAD') && MEDIA.test(sub)) return 'media'
@@ -39,19 +42,20 @@ export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000,
     const sub = url.pathname.slice(appBase.length)
     const route = musicRoute(request.method ?? 'GET', sub)
     if (!route) { sendJson(response, 404, { error: 'not_found' }); return }
-    const upstreamPath = sub + (sub === '/api/search' || sub.endsWith('/more') ? url.search : '')
+    const upstreamPath = sub + (sub === '/api/search' || sub.startsWith('/api/identify/') || sub.endsWith('/more') ? url.search : '')
     const headers = { Authorization: `Bearer ${token}`, Accept: route === 'api' ? 'application/json' : '*/*' }
     if (request.headers.range && route === 'media') headers.Range = String(request.headers.range).slice(0, 100)
     let body = null
     if (request.method === 'POST') {
       const type = String(request.headers['content-type'] ?? '').toLowerCase()
-      if (!type.startsWith('application/json')) { sendJson(response, 415, { error: 'json_required' }); return }
-      headers['Content-Type'] = 'application/json'
+      const upload = sub === '/api/identify/captures'
+      if (!upload && !type.startsWith('application/json')) { sendJson(response, 415, { error: 'json_required' }); return }
+      headers['Content-Type'] = upload ? type : 'application/json'
       const chunks = []
       let size = 0
       for await (const chunk of request) {
         size += chunk.length
-        if (size > 65_536) { sendJson(response, 413, { error: 'body_too_large' }); return }
+        if (size > (upload ? 15 * 1024 * 1024 : 65_536)) { sendJson(response, 413, { error: 'body_too_large' }); return }
         chunks.push(chunk)
       }
       body = Buffer.concat(chunks)

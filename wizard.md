@@ -2,7 +2,7 @@
 wizard: 0.2
 id: wizard-music
 name: Music
-version: 0.1.0
+version: 0.2.0
 type: service
 category: app
 summary: Your own music library, with an embedded player and optional online sources.
@@ -30,7 +30,8 @@ view:
     build: npm ci && npm run build
     dist: dist
 health: /health
-provides: [music]
+provides: [music, voice-commands]
+voice_names: [Music, Wizard Music]
 needs: []
 uses: []
 ---

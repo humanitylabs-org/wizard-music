@@ -6,11 +6,13 @@
 // orb can say what happened ("Playing Trap · Gui Boratto"). A plain {type:'wizard-os:voice', text}
 // (a view-routed utterance) is parsed here with the same grammar.
 import { musicApi, musicControl, thumbsDown } from './MusicApp'
+import { identifyControl } from './identify'
+import { flushSync } from 'react-dom'
 
 export type MusicCommand =
   | { op: 'play'; said: string }
   | { op: 'search'; query: string }
-  | { op: 'pause' | 'resume' | 'toggle' | 'next' | 'previous' | 'like' | 'dislike' | 'what' }
+  | { op: 'pause' | 'resume' | 'toggle' | 'next' | 'previous' | 'like' | 'dislike' | 'what' | 'identify' }
   | { op: 'volume'; dir: 'up' | 'down' | 'mute' | 'unmute' | 'set'; level?: number }
 export type MusicResult = { ok: boolean; text: string; volume?: number }
 
@@ -46,6 +48,7 @@ export function parseMusicSearch(text: string, inMusic = false): string | null {
 export function parseMusicCommand(text: string, inMusic = false): MusicCommand | null {
   const s = norm(text).replace(/^(?:hey |ok |okay )?(?:wizard|archimedes)\s*/, '').replace(/ (?:please|for me|now)$/, '').replace(/^(?:(?:can|could|would|will) you |please |maybe |just |go ahead and )+/, '')
   if (!s) return null
+  if (/^(?:music|shazam|what s this song|what is this song|whats this song|identify this)$/.test(norm(text))) return { op: 'identify' }
   const query = parseMusicSearch(text, inMusic)
   if (query) return { op: 'search', query }
   if (new RegExp(`^(?:pause|stop|hold)${MUSIC}$|^(?:shut up|silence)$`).test(s)) return { op: 'pause' }
@@ -74,6 +77,9 @@ export async function runMusicCommand(cmd: MusicCommand, notify: (message: strin
   const engine = musicControl.engine()
   const current = nowTrack()
   switch (cmd.op) {
+    case 'identify':
+      flushSync(() => { void identifyControl.start() })
+      return { ok: true, text: 'Listening for a song · your clip will be kept' }
     case 'play': {
       // "play" / "play music" with something already loaded carries on; anything named is searched.
       if (current && !norm(cmd.said).replace(/^(?:play|put on|resume)\b/, '').replace(/\b(?:the |some |my )?(?:music|songs?|tunes?)\b/g, '').trim()) {
@@ -138,7 +144,44 @@ export async function runMusicCommand(cmd: MusicCommand, notify: (message: strin
 type Incoming = { type?: string; id?: string; cmd?: MusicCommand; text?: string }
 
 /** Listen for orb commands from the Wizard OS shell (same origin only). */
-export function installMusicVoice(notify: (message: string) => void): () => void {
+const IDENTIFY_COMMAND = 'wizard-music.identify.command.v1'
+export function installIdentifyClaims(notify: (message: string) => void): () => void {
+  const receive = async (text: string) => {
+    const cmd = parseMusicCommand(text)
+    if (cmd?.op !== 'identify') return false
+    if (window.WizardApp.view?.isVisible()) { await runMusicCommand(cmd, notify); return true }
+    localStorage.setItem(IDENTIFY_COMMAND, JSON.stringify({ id: crypto.randomUUID(), at: Date.now() }))
+    return await window.WizardApp.shell?.focusApp() === true
+  }
+  const unregister = window.WizardApp.voice?.commands.register({
+    claims(text, context) { return context.kind === 'command' && context.stage === 'priority' && parseMusicCommand(text)?.op === 'identify' },
+    receive,
+  })
+  return () => { unregister?.() }
+}
+export function installPendingIdentify(): () => void {
+  let checking = false
+  const take = async () => {
+    if (checking || !window.WizardApp.view?.isVisible()) return
+    checking = true
+    const consume = async () => {
+      let value: {id: string; at: number} | null = null
+      try { value = JSON.parse(localStorage.getItem(IDENTIFY_COMMAND) || 'null') } catch { /* ignore bad old storage */ }
+      if (!value) return
+      localStorage.removeItem(IDENTIFY_COMMAND)
+      if (Date.now() - value.at > 30000 || Date.now() < value.at) return
+      flushSync(() => { void identifyControl.start() })
+    }
+    try { if (navigator.locks) await navigator.locks.request('music-identify-command', consume); else await consume() } finally { checking = false }
+  }
+  const onStorage = () => { void take() }
+  window.addEventListener('storage', onStorage); window.addEventListener('focus', onStorage)
+  const timer = window.setInterval(onStorage, 250)
+  void take()
+  return () => { clearInterval(timer); window.removeEventListener('storage', onStorage); window.removeEventListener('focus', onStorage) }
+}
+
+export function installMusicVoice(notify: (message: string) => void) {
   if (typeof window === 'undefined' || window.parent === window) return () => undefined
   const reply = (value: Record<string, unknown>) => { try { window.parent.postMessage(value, window.location.origin) } catch { /* shell gone */ } }
   const onMessage = (event: MessageEvent<Incoming>) => {

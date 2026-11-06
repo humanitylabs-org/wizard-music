@@ -18,7 +18,7 @@ const HOSTS = new Set(['127.0.0.1', 'localhost', ...(process.env.WIZARD_TRUSTED_
 const HOST = process.env.WIZARD_MUSIC_APP_HOST || '127.0.0.1'
 const configured = Boolean(process.env.WIZARD_MUSIC_HUB_ORIGIN && process.env.WIZARD_MUSIC_HUB_TOKEN)
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' }
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 
 const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '' })
 
@@ -51,7 +51,7 @@ const server = createServer(async (request, response) => {
     const host = new URL(`http://${request.headers.host || 'invalid'}`).hostname
     if (!HOSTS.has(host)) { sendJson(response, 403, { error: 'host' }); return }
     if (request.headers.origin && !ORIGINS.has(request.headers.origin)) { sendJson(response, 403, { error: 'origin' }); return }
-    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.1.0', configured, setup: configured ? 'library-or-online-source-required' : 'hub-token-and-origin-required' }); return }
+    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-identify', release: process.env.WIZARD_MUSIC_RELEASE || 'development', configured, setup: configured ? 'library-or-online-source-required' : 'hub-token-and-origin-required' }); return }
     if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT); return }
     if (url.pathname === BASE) { response.writeHead(308, { Location: `${BASE}/` }); response.end(); return }
     if (!url.pathname.startsWith(`${BASE}/`)) { sendJson(response, 404, { error: 'not_found' }); return }

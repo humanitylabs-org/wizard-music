@@ -1,0 +1,22 @@
+/* Identify is domain UI; system kit supplies buttons, sheet and skin. */
+.identify-header{display:flex;justify-content:flex-end;gap:8px;padding:8px 16px;flex-wrap:wrap}
+.identify-view{max-width:760px;margin:auto;padding:0 16px 100px;color:var(--wz-text,var(--text));font:inherit}
+.identify-top{display:flex;align-items:center;gap:12px;justify-content:space-between}
+.identify-top h2{font-size:20px}
+.identify-recording{display:grid;gap:12px;justify-items:center;padding:24px 16px;border:1px solid var(--wz-border,var(--line));border-radius:var(--wz-radius,16px);background:var(--wz-surface,var(--bg-raised));margin:12px 0 24px}
+.identify-timer{font-size:clamp(38px,8vw,58px);font-variant-numeric:tabular-nums}.identify-timer small{font-size:18px;color:var(--wz-text-muted,var(--text-dim))}
+.identify-recording meter{width:min(100%,280px);height:12px;accent-color:var(--wz-accent,var(--wiz))}
+.identify-muted,.identify-hunt-copy>span,.identify-candidate-title p{color:var(--wz-text-muted,var(--text-dim));font-size:13px;line-height:1.5}
+.identify-error{color:var(--wz-danger,var(--text));padding:12px;border:1px solid currentColor;border-radius:10px}
+.identify-hunt{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:64px;width:100%;text-align:left;padding:12px 4px;background:transparent;border:0;border-bottom:1px solid var(--wz-border,var(--line));color:inherit;font:inherit;cursor:pointer}
+.identify-hunt-copy{display:grid;gap:4px;min-width:0}.identify-hunt strong{font-weight:600;font-size:15px}
+.identify-footer,.identify-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0}
+.identify-sheet{background:var(--wz-surface-raised,var(--bg-raised));color:var(--wz-text,var(--text));isolation:isolate;max-height:88dvh;overflow:auto}
+.identify-sheet h2{padding-right:38px}.identify-sheet h3{font-size:15px;margin:24px 0 10px}
+.identify-sheet audio{width:100%;height:44px;margin:8px 0}.identify-sheet summary{cursor:pointer;padding:12px 0;font-size:13px}
+.identify-candidate{padding:16px 0;border-bottom:1px solid var(--wz-border,var(--line))}
+.identify-candidate-title{display:flex;align-items:center;gap:12px}.identify-candidate-title>div{min-width:0;overflow-wrap:anywhere}.identify-candidate-title p{margin:4px 0}
+.identify-candidate-title img{width:48px;height:48px;object-fit:cover;border-radius:8px}.identify-rejected .identify-candidate-title{text-decoration:line-through;color:var(--wz-text-muted,var(--text-dim))}
+.identify-search{display:flex;gap:8px}.identify-search input{min-width:0;flex:1}.identify-manual{display:grid;gap:8px}
+.identify-header .wz-button,.identify-view .wz-button,.identify-sheet .wz-button{min-height:44px}
+@media(max-width:360px){.identify-header button[aria-label] span{display:none}}
