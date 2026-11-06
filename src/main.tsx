@@ -177,11 +177,12 @@ function App() {
   </div>
 }
 
-// Wizard restarted or the app updated: carry on with the song, spot, queue and station from last time.
-restoreMusicSession()
 function IdentifyVoiceService() {
   useEffect(() => { window.WizardApp.ready({ name: 'Music', version: '0.2.0-identify' }); return installIdentifyClaims(() => undefined) }, [])
   return null
 }
 const voiceService = (() => { try { return !!(window.frameElement as HTMLElement | null)?.dataset.voiceService } catch { return false } })()
+// Wizard restarted or the app updated: carry on with the song, spot, queue and station from last time.
+// The hidden voice receiver never starts a second player.
+if (!voiceService) restoreMusicSession()
 createRoot(document.getElementById('root')!).render(voiceService ? <IdentifyVoiceService /> : <App />)

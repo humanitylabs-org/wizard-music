@@ -56,9 +56,17 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await context.addInitScript(({shell,skin})=>{try{if(window.top===window){localStorage.setItem('wos.coached','true');localStorage.setItem('wos.tour.v1','true');localStorage.setItem('wos.tour','done');localStorage.setItem('wos.tour.done','1');localStorage.setItem('wux.shell',shell);localStorage.setItem('wos.skin',skin)}}catch{}},{shell,skin})
  const page=await context.newPage(),errors=[]
  page.on('pageerror',e=>errors.push(e.message))
+ const consoleLines=[];page.on('console',m=>{if(['error','warning'].includes(m.type()))consoleLines.push(m.type()+': '+m.text().slice(0,300))})
  await page.goto(ORIGIN+'/wizard-os-home/'+(shell==='phone'?'?shell=phone':'desktop.html'),{waitUntil:'load'})
  await page.waitForFunction(([sh,sk])=>document.documentElement.dataset.shell===sh&&document.documentElement.dataset.skin===sk,[shell,skin])
  await page.waitForFunction(()=>window.WizAppServices?.inspect().some(x=>x.appId==='wizard-music'&&x.ready))
+ // The shell marks a frame ready when app-client connects; the app's React claim registers a moment later.
+ // Wait for the real claim (bounded), and on failure dump what the hidden receiver actually has.
+ const claimed=await page.waitForFunction(()=>!!window.WizAppServices.voiceCommand('music',{stage:'priority',kind:'command',view:{kind:'thread list'}}),null,{timeout:20000}).then(()=>true,()=>false)
+ if(!claimed){
+  const diag=await page.evaluate(()=>{const f=document.querySelector('iframe[data-voice-service="wizard-music"]');const w=f?.contentWindow;let reg='no-frame';try{if(w){w.WizardApp.voice.commands.register({claims:()=>false,receive:async()=>false});reg='nothing-registered'}}catch(e){reg='registered:'+e.message}return {frame:!!f,src:f?.src,root:w?.document.getElementById('root')?.outerHTML?.slice(0,300),reg,inspect:window.WizAppServices.inspect()}})
+  throw Error('Music never claimed bare "music": '+JSON.stringify({diag,errors,consoleLines:consoleLines.slice(-20)}))
+ }
  // Use the shell's real priority dispatcher with a deliberately colliding bare Music app name.
  const command=await page.evaluate(()=>{
   const grammar=window.WosCommands.create({CHATS:{},APP:{},appByName:()=>({name:'Music'}),findApp:()=>null,quickSearch:()=>null,sendSnap:()=>({view:{kind:'thread list'}})})
