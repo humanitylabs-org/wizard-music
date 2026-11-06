@@ -136,7 +136,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).waitFor()
   const original=await read();assert.equal(original.sendRequested,false)
   checkpoint('local-original',{shell,skin,row:original})
-  const baselinePosts=()=>netLines.filter(s=>s.includes(' POST ')&&!s.includes(' RES ')).length
+  const baselinePosts=()=>netLines.filter(s=>s.includes(' visible POST ')).length
   const beforePosts=baselinePosts(),beforeAcks=await acks(frame)
   await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).click()
   await frame.getByText('Not sent. You can review or send it below.',{exact:true}).waitFor()
