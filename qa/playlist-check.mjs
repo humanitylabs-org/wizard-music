@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import path from 'node:path'
 export async function checkPlaylists({ page, frame, shell, skin, out, settle, APP }) {
-  const URL='https://www.youtube.com/watch?v=9TbASs-ZjHA'
+  const PLAYLIST_URL='https://www.youtube.com/watch?v=9TbASs-ZjHA'
   const TITLE='Hypnotic Progressive House & Melodic Techno 2026 | XAVRINOX - Ethereal Mix I'
   const section=frame.getByRole('region',{name:'Playlists',exact:true})
   await section.waitFor()
@@ -24,7 +24,7 @@ export async function checkPlaylists({ page, frame, shell, skin, out, settle, AP
   await page.mouse.click(box.x+3,box.y+3)
   await frame.locator('dialog').waitFor({state:'detached'})
   await section.getByRole('button',{name:'Add link'}).click()
-  await frame.getByRole('textbox',{name:'YouTube link'}).fill(URL)
+  await frame.getByRole('textbox',{name:'YouTube link'}).fill(PLAYLIST_URL)
   await frame.getByRole('textbox',{name:'Name (optional)'}).fill(TITLE)
   // Hold the actual production fetch dependency; Save must close and acknowledge before it resolves.
   await frame.evaluate(()=>{
@@ -37,13 +37,13 @@ export async function checkPlaylists({ page, frame, shell, skin, out, settle, AP
   const link=section.getByRole('link',{name:'Open on YouTube: '+TITLE,exact:true})
   await link.waitFor()
   await section.locator('.music-playlist-pending').waitFor({state:'detached'})
-  assert.equal(await link.getAttribute('href'),URL)
+  assert.equal(await link.getAttribute('href'),PLAYLIST_URL)
   assert.equal(await link.count(),1)
   assert.equal(await frame.evaluate(()=>window.__qaPlaylistPosts),1)
   // Same resource has one stable identity, despite another exact URL being supplied later.
   const first=await (await fetch(APP+'/wizard-music/api/playlists')).json()
   const duplicate=await (await fetch(APP+'/wizard-music/api/playlists',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url:'https://youtu.be/9TbASs-ZjHA?t=25'})})).json()
-  assert.equal(duplicate.id,first.playlists[0].id);assert.equal(duplicate.url,URL);assert.equal(duplicate.title,TITLE)
+  assert.equal(duplicate.id,first.playlists[0].id);assert.equal(duplicate.url,PLAYLIST_URL);assert.equal(duplicate.title,TITLE)
   await frame.goto(new URL('/wizard-music/',page.url()).href)
   await frame.getByRole('link',{name:'Open on YouTube: '+TITLE,exact:true}).waitFor()
   await frame.locator('.music-playlists').scrollIntoViewIfNeeded()
@@ -56,6 +56,6 @@ export async function checkPlaylists({ page, frame, shell, skin, out, settle, AP
   assert.equal(await frame.locator('audio[autoplay]').count(),0)
   await frame.getByRole('button',{name:'Play '+TITLE+' in Music',exact:true}).click()
   await frame.getByText(/Online playback is not connected/).waitFor()
-  assert.equal(await frame.getByRole('link',{name:'Open on YouTube: '+TITLE,exact:true}).getAttribute('href'),URL)
-  return {shell,skin,immediate,url:URL,id:duplicate.id,reload:true,deduped:true,back_and_outside:true,live_skin:true,no_autoplay_on_save:true,offline_playback_fallback:true,screenshots:[sheetImage,listImage]}
+  assert.equal(await frame.getByRole('link',{name:'Open on YouTube: '+TITLE,exact:true}).getAttribute('href'),PLAYLIST_URL)
+  return {shell,skin,immediate,url:PLAYLIST_URL,id:duplicate.id,reload:true,deduped:true,back_and_outside:true,live_skin:true,no_autoplay_on_save:true,offline_playback_fallback:true,screenshots:[sheetImage,listImage]}
 }
