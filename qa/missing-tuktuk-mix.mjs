@@ -34,6 +34,10 @@ try {
         try { return await r.fulfill({ contentType: mime[path.extname(file)] || 'application/octet-stream', body: await readFile(file) }) }
         catch { return r.fulfill({ status: 404, body: '' }) }
       }
+      // Model the real welcome.js boot predicate: done storage alone cannot
+      // suppress Connect your AI when model/options says no authenticated AI.
+      if (u.pathname === '/wizard/hermes/api/model/options') return r.fulfill({ json: { provider: 'openai', providers: [{ slug: 'openai', authenticated: true }] } })
+      if (u.pathname === '/wizard/v1/setup') return r.fulfill({ json: { first_run: false } })
       if (u.pathname === '/wizard/v1/apps') return r.fulfill({ json: { apps: [app] } })
       if (u.pathname.endsWith('/api/sessions')) return r.fulfill({ json: { data: [], has_more: false } })
       if (u.pathname === '/wizard/v1/ui-preferences') return r.fulfill({ json: { spaces: [], pinnedChats: [] } })
@@ -41,6 +45,7 @@ try {
       return r.fulfill({ json: {} })
     })
     await ctx.addInitScript(({ desktop, app }) => {
+      localStorage.setItem('wos.welcome.v1', 'done')
       localStorage.setItem('wos.coached', 'true'); localStorage.setItem('wos.voiceTipSeen', 'true')
       localStorage.setItem('wos.shell', desktop ? 'desktop' : 'phone'); localStorage.setItem('wos.skin', 'nebula')
       localStorage.setItem('wux.apps.v1', JSON.stringify([app]))
@@ -63,6 +68,22 @@ try {
     await iframe.waitFor()
     const fr = await iframe.elementHandle().then(e => e.contentFrame())
     await fr.getByRole('button', { name: 'Tea music', exact: true }).waitFor()
+    const assertVisibleMusic = async name => {
+      assert.equal(await p.evaluate(() => !!window.WosWelcome?.active), false, 'welcome must not cover Music')
+      assert.equal(await p.evaluate(desktop => desktop ? !!window.__wux && !window.__wos : !!window.__wos && !window.__wux, desktop), true)
+      assert(await fr.evaluate(() => innerWidth > 0 && innerHeight > 0), 'Music viewport must have area')
+      const button = fr.getByRole('button', { name, exact: true })
+      await button.click({ trial: true }) // Playwright checks visibility, hitbox and overlay interception; no playback/write.
+      const box = await button.boundingBox(), frameBox = await iframe.boundingBox()
+      assert(box && box.width > 0 && box.height > 0)
+      assert(frameBox && frameBox.width > 0 && frameBox.height > 0)
+      const viewport = p.viewportSize()
+      const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+      assert(center.x > 0 && center.x < viewport.width && center.y > 0 && center.y < viewport.height)
+      assert.equal(await iframe.evaluate((el, pt) => document.elementFromPoint(pt.x, pt.y) === el, center), true, 'Music iframe must be topmost at button')
+      return { box, frameBox, viewport }
+    }
+    await assertVisibleMusic('Tea music')
     assert.equal(await fr.getByRole('button', { name: 'Tuktuk music', exact: true }).count(), 0)
     await fr.evaluate(() => { window.__musicDocument = 'unchanged' })
     const start = Date.now(); added = true
@@ -73,6 +94,7 @@ try {
     assert(appearedMs <= 18000)
     await fr.waitForFunction(() => document.documentElement.dataset.skin === 'nebula')
     await p.waitForTimeout(600)
+    const nebulaVisibility = await assertVisibleMusic('Tuktuk music')
     await p.screenshot({ path: path.join(out, profile + '-nebula.png'), animations: 'disabled' })
     await fr.getByRole('searchbox').fill('keep this draft')
     // Actual shared palette application, isolated origin only; never owner look state.
@@ -81,6 +103,7 @@ try {
     assert.equal(await fr.getByRole('searchbox').inputValue(), 'keep this draft')
     assert.equal(await fr.evaluate(() => window.__musicDocument), 'unchanged')
     await p.waitForTimeout(600)
+    const groveVisibility = await assertVisibleMusic('Tuktuk music')
     await p.screenshot({ path: path.join(out, profile + '-grove.png'), animations: 'disabled' })
     const panels = await fr.locator('.music-search').evaluate(el => ({ background: getComputedStyle(el).backgroundColor, image: getComputedStyle(el).backgroundImage, opacity: getComputedStyle(el).opacity }))
     assert.equal(panels.opacity, '1')
@@ -90,7 +113,7 @@ try {
     // Some shell bootstrap preference writes may be refused. They never hit a backend.
     assert(!writes.some(u => /\/v1\/runs$|\/api\/station$|\/api\/feedback$/.test(u)))
     assert.deepEqual(errors, [])
-    results.push({ profile, appearedMs, reads, info, panels, refusedWrites: writes, screenshots: ['nebula', 'grove'].map(s => path.join(out, profile + '-' + s + '.png')) })
+    results.push({ profile, appearedMs, reads, info, panels, visibility: { nebula: nebulaVisibility, grove: groveVisibility }, refusedWrites: writes, screenshots: ['nebula', 'grove'].map(s => path.join(out, profile + '-' + s + '.png')) })
     await ctx.close()
   }
 } finally { await browser.close() }
