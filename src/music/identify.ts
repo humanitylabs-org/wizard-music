@@ -167,7 +167,9 @@ export const identifyControl = {
   open() { paint({ open: true, error: '', loading: !state.hunts.length }); closePlayer?.(); void refresh() },
   closeDetail() { ++detailGeneration; paint({ selected: null, detail: null, error: '' }) },
   back() {
-    if (state.selected) { this.closeDetail(); return true }
+    // The sheet's own Back step may already have closed the dialog while its async 'close' event is still pending;
+    // then this Back belongs to the list, not to a sheet the owner can no longer see.
+    if (state.selected) { const visible = !!document.querySelector('dialog.identify-sheet[open]'); this.closeDetail(); if (visible) return true }
     if (state.open) { paint({ open: false }); return true }
     return false
   },

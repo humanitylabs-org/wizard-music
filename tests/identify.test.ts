@@ -121,3 +121,16 @@ describe('sending a saved clip', () => {
     Object.defineProperty(window, 'frameElement', { configurable: true, value: null })
   })
 })
+
+describe('Back after the sheet already closed', () => {
+  it('leaves the Hunts list instead of spending a press on an invisible sheet', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ captures: [] }) })))
+    vi.stubGlobal('indexedDB', fakeIndexedDB(new Map()))
+    identifyControl.open()
+    await identifyControl.detail('11111111-2222-4333-8444-555555555555')
+    expect(identifyControl.snapshot().selected).toBeTruthy()
+    expect(identifyControl.back()).toBe(true)
+    expect(identifyControl.snapshot().selected).toBeNull()
+    expect(identifyControl.snapshot().open).toBe(false)
+  })
+})
