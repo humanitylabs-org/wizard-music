@@ -272,8 +272,12 @@ def enqueue(cid: str) -> None:
     cid = safe_uuid(cid)
     with _pending_lock:
         if cid in _pending: return False
+        with DB_LOCK, connect() as con:
+            row = con.execute('SELECT retention_state FROM captures WHERE id=?',(cid,)).fetchone()
+            if not row: raise LookupError('Unknown hunt')
+            if row['retention_state']=='discarded': raise HTTPException(409,'Restore this identification before retrying')
+            con.execute("UPDATE captures SET status='pending',last_error=NULL,updated_at=? WHERE id=?",(utcnow(),cid))
         _pending.add(cid)
-        update_capture(cid, status='pending', last_error=None)
         JOBS.put_nowait(cid)
         return True
 
@@ -294,9 +298,28 @@ def get_capture(cid: str) -> dict[str,Any] | None:
             except Exception: pass
     return cap
 
+def set_discarded(cid: str, discarded: bool) -> dict[str,Any]:
+    # A separate state, never generic 'archived': archived audio can be eligible
+    # for future retention deletion. Explicit discard preserves every audio byte.
+    if not UUID_RE.fullmatch(cid): raise HTTPException(400,'capture id must be a UUID')
+    with _pending_lock, DB_LOCK, connect() as con:
+        con.execute('BEGIN IMMEDIATE')
+        row=con.execute('SELECT * FROM captures WHERE id=?',(cid,)).fetchone()
+        if not row: raise LookupError('Unknown hunt')
+        if cid in _pending or row['status']!='no_match' or row['confirmed_candidate_id'] is not None:
+            raise HTTPException(409,'Only finished unmatched identifications can be discarded or restored')
+        if row['retention_state'] not in ('active','discarded'):
+            raise HTTPException(409,'This identification is not eligible for discard')
+        target='discarded' if discarded else 'active'
+        if row['retention_state']!=target:
+            con.execute('UPDATE captures SET retention_state=?,updated_at=? WHERE id=?',(target,utcnow(),cid))
+    capture=get_capture(cid)
+    assert capture is not None
+    return capture
+
 def list_captures() -> list[dict[str,Any]]:
     with connect() as con:
-        rows=con.execute('''SELECT c.*, (SELECT COUNT(*) FROM candidates ca WHERE ca.capture_id=c.id) candidate_count, (SELECT title FROM candidates ca WHERE ca.capture_id=c.id AND COALESCE(verdict,'')!='rejected' ORDER BY CASE WHEN verdict='confirmed' THEN 0 ELSE 1 END, COALESCE(confidence,0) DESC,id LIMIT 1) best_title, (SELECT artist FROM candidates ca WHERE ca.capture_id=c.id AND COALESCE(verdict,'')!='rejected' ORDER BY CASE WHEN verdict='confirmed' THEN 0 ELSE 1 END, COALESCE(confidence,0) DESC,id LIMIT 1) best_artist, (SELECT COUNT(*) FROM attempts at WHERE at.capture_id=c.id) attempt_count FROM captures c ORDER BY created_at DESC LIMIT 300''').fetchall()
+        rows=con.execute('''SELECT c.*, (SELECT COUNT(*) FROM candidates ca WHERE ca.capture_id=c.id) candidate_count, (SELECT title FROM candidates ca WHERE ca.capture_id=c.id AND COALESCE(verdict,'')!='rejected' ORDER BY CASE WHEN verdict='confirmed' THEN 0 ELSE 1 END, COALESCE(confidence,0) DESC,id LIMIT 1) best_title, (SELECT artist FROM candidates ca WHERE ca.capture_id=c.id AND COALESCE(verdict,'')!='rejected' ORDER BY CASE WHEN verdict='confirmed' THEN 0 ELSE 1 END, COALESCE(confidence,0) DESC,id LIMIT 1) best_artist, (SELECT COUNT(*) FROM attempts at WHERE at.capture_id=c.id) attempt_count FROM captures c WHERE c.retention_state!='discarded' ORDER BY created_at DESC LIMIT 300''').fetchall()
     return [rowdict(r) for r in rows]
 
 def retention_dry_run(days_archive=60, days_delete_after_archive=30, size_cap_mb=2048):
@@ -500,6 +523,9 @@ def handle(handler, path, qs, hub, body=None):
                 for k in ('lat','lon','accuracy_m'):
                     if qs.get(k): meta[k]=float(qs[k][0])
                 handler._json(200,public_capture(accept(cid,raw,handler.headers.get('Content-Type','audio/webm'),meta)))
+            elif re.fullmatch(r'captures/[^/]+/(discard|restore)',sub):
+                cid,action=sub.split('/')[1:]
+                handler._json(200,public_capture(set_discarded(cid,action=='discard')))
             elif re.fullmatch(r'captures/[a-f0-9-]{36}/retry',sub):
                 cid = sub.split('/')[1]
                 if not get_capture(cid): raise LookupError('Unknown hunt')

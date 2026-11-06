@@ -10,9 +10,10 @@ fs.mkdirSync(out,{recursive:true})
 const ORIGIN='http://127.0.0.1:19371', APP='http://127.0.0.1:19305'
 const types={'.js':'application/javascript','.css':'text/css','.html':'text/html','.png':'image/png','.svg':'image/svg+xml','.jpg':'image/jpeg','.webp':'image/webp','.json':'application/json','.woff2':'font/woff2'}
 const data=await (await fetch(APP+'/wizard-music/api/identify/captures')).json()
-assert.equal(data.captures.length,5,'all five original hunts are imported before browser exercise')
+const discardOnly=process.env.IDENTIFY_DISCARD_ONLY==='1'
+if(!discardOnly)assert.equal(data.captures.length,5,'all five original hunts are imported before browser exercise')
 const hunt=data.captures.find(h=>h.status==='has_leads')
-assert.ok(hunt)
+if(!discardOnly)assert.ok(hunt)
 const wav=fs.readFileSync(process.env.QA_AUDIO).toString('base64')
 const fakeCapture=`
 window.__qaStarts=[];window.__qaAcks=[];
@@ -131,6 +132,55 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const waitingImage=path.join(out,`${shell}-${skin}-identify-waiting.png`)
  await page.screenshot({path:waitingImage})
  await waitAcks(frame,1,'Upload after Find it')
+ if(discardOnly){
+  await frame.getByRole('button',{name:'Discard',exact:true}).waitFor({timeout:20000})
+  const cid=await frame.locator('dialog audio').first().evaluate(a=>new URL(a.src).pathname.split('/').at(-2))
+  const target=`${APP}/wizard-music/api/identify/captures/${cid}`
+  const original=await (await fetch(target)).json()
+  assert.equal(original.status,'no_match')
+  const beforeCount=await frame.locator('.identify-history .identify-hunt').count()
+  await frame.getByRole('button',{name:'Discard',exact:true}).scrollIntoViewIfNeeded()
+  await settle(frame,'dialog[open]')
+  const sheetImage=path.join(out,`${shell}-${skin}-discard-action.png`);await page.screenshot({path:sheetImage})
+  let release, posts=0, held=true
+  const gate=new Promise(r=>{release=r})
+  await context.route(`**/wizard-music/api/identify/captures/${cid}/discard`,async route=>{
+   posts++;if(held)await gate
+   const r=await context.request.fetch(target+'/discard',{method:'POST',headers:{'content-type':'application/json'},data:'{}'})
+   await route.fulfill({status:r.status(),headers:r.headers(),body:await r.body()})
+  })
+  const immediate=await frame.getByRole('button',{name:'Discard',exact:true}).evaluate(async button=>{
+   const before=performance.now();button.click();button.click()
+   const syncClosed=!document.querySelector('dialog[open]')
+   await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)))
+   return {syncClosed,ms:performance.now()-before,rows:document.querySelectorAll('.identify-history .identify-hunt').length,undo:!!document.querySelector('.identify-notice')}
+  })
+  assert.ok(immediate.syncClosed&&immediate.undo);assert.ok(immediate.ms<100,JSON.stringify(immediate));assert.equal(immediate.rows,beforeCount-1)
+  const noticeImage=path.join(out,`${shell}-${skin}-discard-undo.png`);await page.screenshot({path:noticeImage})
+  held=false;release()
+  await frame.waitForFunction(async id=>(await (await fetch('/wizard-music/api/identify/captures/'+id)).json()).retention_state==='discarded',cid)
+  assert.equal(posts,1,'double tap is one discard request')
+  await frame.getByRole('button',{name:'Undo',exact:true}).click()
+  await frame.getByText('Identification restored',{exact:true}).waitFor()
+  const restored=await (await fetch(target)).json()
+  assert.equal(restored.retention_state,'active');assert.equal(restored.id,cid)
+  assert.deepEqual(restored.attempts,original.attempts);assert.deepEqual(restored.candidates,original.candidates);assert.equal(restored.raw_sha256,original.raw_sha256)
+  assert.equal(await frame.locator('.identify-history .identify-hunt').count(),beforeCount)
+  // Discard once more then cold-reload this app, without restarting its listen route.
+  const targetRow=frame.locator('.identify-history .identify-hunt').filter({hasText:'Unknown song'}).first()
+  // This capture is newest; the API list uses that same creation-time ordering.
+  await targetRow.click();await frame.getByRole('button',{name:'Discard',exact:true}).click()
+  await frame.waitForFunction(async id=>(await (await fetch('/wizard-music/api/identify/captures/'+id)).json()).retention_state==='discarded',cid)
+  await frame.goto(ORIGIN+'/wizard-music/?view=identify')
+  await frame.getByRole('heading',{name:'Identifications',exact:true}).waitFor()
+  await frame.waitForFunction(n=>document.querySelectorAll('.identify-history .identify-hunt').length===n,beforeCount-1)
+  const listed=await (await fetch(APP+'/wizard-music/api/identify/captures')).json()
+  assert.ok(!listed.captures.some(c=>c.id===cid))
+  assert.equal((await (await fetch(target)).json()).raw_sha256,original.raw_sha256)
+  rows.push({shell,skin,discard_same_frame:immediate,undo_real_readback:true,reload_hidden:true,audio_attempts_candidates_preserved:true,pageerrors:errors,screenshots:[sheetImage,noticeImage]})
+  fs.writeFileSync(path.join(out,'browser-progress.json'),JSON.stringify({complete:false,rows},null,2))
+  await context.unrouteAll({behavior:'ignoreErrors'});await context.close();continue
+ }
  settles.results=await settle(frame,'dialog[open]')
  const resultsImage=path.join(out,`${shell}-${skin}-identify-results.png`)
  await page.screenshot({path:resultsImage})

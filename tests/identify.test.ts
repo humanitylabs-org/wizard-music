@@ -5,6 +5,67 @@ import { identifyControl } from '../src/music/identify'
 import { installMusicRoute, parseMusicCommand, runMusicCommand } from '../src/music/voice'
 
 const flush = async () => { for (let n=0;n<8;n++) await Promise.resolve() }
+
+describe('explicit reversible no-match discard', () => {
+  const id='c40a2a22-c187-4791-ae34-90c00628b089'
+  const record={id,created_at:'2026-11-06T00:00:00Z',status:'no_match',retention_state:'active',candidates:[],attempts:[{id:1,provider:'fixture',outcome:'no_match'}]}
+  let control: typeof identifyControl, server: typeof record, post: ReturnType<typeof vi.fn>, held: (()=>void) | undefined, fail: boolean, visible: boolean, toast: ReturnType<typeof vi.fn>
+  beforeEach(async()=>{
+    vi.resetModules(); server={...record}; held=undefined; fail=false; visible=true; toast=vi.fn()
+    vi.stubGlobal('indexedDB',fakeIndexedDB(new Map()))
+    vi.stubGlobal('WizardApp',{view:{isVisible:()=>visible},shell:{toast},update:{hold:()=>({release:vi.fn()})}})
+    post=vi.fn(async(url:string)=>{
+      await new Promise<void>(r=>{held=r})
+      if(fail)return {ok:false,json:async()=>({error:'fixture refusal'})}
+      server={...server,retention_state:url.endsWith('/discard')?'discarded':'active'}
+      return {ok:true,json:async()=>server}
+    })
+    vi.stubGlobal('fetch',vi.fn(async(url:string,opts?:RequestInit)=>opts?.method==='POST'?post(url):{ok:true,json:async()=>url.endsWith('/captures')?{captures:[record]}:server}))
+    control=(await import('../src/music/identify')).identifyControl
+    await control.refresh(); control.open(); await control.detail(id)
+  })
+  it('closes and removes synchronously before I/O; deduplicates and masks stale polls and retry-all',async()=>{
+    const first=control.discard(id),second=control.discard(id)
+    expect(first).toBe(second)
+    expect(control.snapshot()).toMatchObject({selected:null,detail:null,open:true,hunts:[],discardNotice:{action:'undo'}})
+    await control.refresh() // deliberately stale active list
+    expect(control.snapshot().hunts).toEqual([])
+    await control.retryUnsolved(); expect(post).toHaveBeenCalledTimes(1)
+    held!(); await first
+    expect(server.retention_state).toBe('discarded')
+    await control.refresh(); expect(control.snapshot().hunts).toEqual([])
+    const undo=control.restore(id),undo2=control.restore(id)
+    expect(undo).toBe(undo2); expect(control.snapshot().hunts.map(h=>h.id)).toEqual([id])
+    await flush(); held!(); await undo
+    expect(server.retention_state).toBe('active')
+    expect(control.snapshot().discardNotice?.message).toBe('Identification restored')
+    expect(control.snapshot().hunts.filter(h=>h.id===id)).toHaveLength(1)
+    expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/captures/'+id),expect.objectContaining({method:'GET'}))
+  })
+  it('failure restores the same clip and exposes retry after navigating home or hiding Music',async()=>{
+    fail=true
+    const request=control.discard(id); control.back(); visible=false
+    held!(); await request
+    expect(control.snapshot()).toMatchObject({open:false,discardNotice:{action:'discard',error:true}})
+    expect(control.snapshot().hunts.map(h=>h.id)).toEqual([id]); expect(toast).toHaveBeenCalledTimes(1)
+    fail=false; const retry=control.discard(id); held!(); await retry
+    expect(server.retention_state).toBe('discarded')
+    fail=true; const undo=control.restore(id); held!(); await undo
+    expect(control.snapshot()).toMatchObject({hunts:[],discardNotice:{action:'restore',error:true}})
+    fail=false; const retryUndo=control.restore(id); held!(); await retryUndo
+    expect(control.snapshot().hunts.map(h=>h.id)).toEqual([id])
+  })
+  it.each(['pending','uploaded','hunting','has_leads','resolved','identified','error'])('does not discard %s captures',async status=>{
+    server={...server,status}; await control.detail(id)
+    await control.discard(id); expect(post).not.toHaveBeenCalled(); expect(control.snapshot().selected).toBe(id)
+  })
+  it('Undo while discard is pending serializes one restore after real discard',async()=>{
+    const request=control.discard(id),undo=control.restore(id)
+    expect(post).toHaveBeenCalledTimes(1); held!(); await request; await flush()
+    expect(post).toHaveBeenCalledTimes(2); held!(); await undo
+    expect(server.retention_state).toBe('active')
+  })
+})
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); vi.useRealTimers(); localStorage.clear(); identifyControl.back() })
 
 describe('song identification phrases', () => {

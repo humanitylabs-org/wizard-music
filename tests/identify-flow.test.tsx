@@ -4,6 +4,31 @@ import { createRoot, type Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 let root: Root | undefined
+it('the no-match Discard closes the sheet and removes its row in the click before the held write',async()=>{
+  let finish!: (r: unknown)=>void
+  const id='c40a2a22-c187-4791-ae34-90c00628b089'
+  const record={id,created_at:'2026-11-06T00:00:00Z',status:'no_match',retention_state:'active',candidates:[],attempts:[]}
+  vi.stubGlobal('WizardApp',{})
+  vi.stubGlobal('WzSheet',{open:(d:HTMLDialogElement)=>d.setAttribute('open',''),close:(d:HTMLDialogElement)=>d.removeAttribute('open')})
+  const fetchMock=vi.fn(async(url:string,opts?:RequestInit)=>opts?.method==='POST'?new Promise(r=>{finish=r}):{ok:true,json:async()=>url.endsWith('/captures')?{captures:[record]}:record})
+  vi.stubGlobal('fetch',fetchMock)
+  const {identifyControl:control}=await import('../src/music/identify')
+  const {IdentifyView}=await import('../src/music/IdentifyView')
+  await control.refresh(); control.open(); await control.detail(id)
+  const host=document.createElement('div');document.body.append(host);root=createRoot(host)
+  await act(async()=>root!.render(<IdentifyView notify={()=>undefined}/>))
+  const button=[...document.querySelectorAll('button')].find(b=>b.textContent==='Discard')!
+  expect(button).toBeTruthy(); const before=performance.now()
+  act(()=>button.click())
+  expect(performance.now()-before).toBeLessThan(100)
+  expect(document.querySelector('dialog[open]')).toBeNull()
+  expect(document.querySelector('.identify-hunt')).toBeNull()
+  expect(document.querySelector('.identify-notice')?.textContent).toContain('Undo')
+  act(()=>control.back())
+  await act(async()=>finish({ok:false,json:async()=>({error:'fixture refusal'})}))
+  expect(document.querySelector('.identify-view')).toBeNull()
+  expect(document.querySelector('.identify-notice[role=alert]')?.textContent).toContain('Try again')
+})
 beforeEach(() => { vi.resetModules(); vi.useFakeTimers(); localStorage.clear(); (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true })
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; vi.useRealTimers(); vi.restoreAllMocks(); vi.unstubAllGlobals(); document.body.innerHTML = '' })
 it('paints the search spinner immediately, debounces, and ignores an aborted stale reply', async () => {

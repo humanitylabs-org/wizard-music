@@ -1,5 +1,5 @@
 const tools = [
- ...[ ['identify_list','List saved song hunts, including unsolved clips.',{}], ['identify_get','Read a hunt, its candidates and attempts.',{id:{type:'string'}}], ['identify_retry','Retry recognition of a saved clip; preserves its audio.',{id:{type:'string'}}], ['identify_confirm','Owner-approved: mark a candidate This is it, like its full track in Music and count it as a request.',{candidate_id:{type:'integer',minimum:1}}] ].map(([name,description,properties])=>({name,description,inputSchema:{type:'object',properties,required:Object.keys(properties),additionalProperties:false}})),
+ ...[ ['identify_list','List active saved song hunts, including unsolved clips; excludes discarded.',{}], ['identify_get','Read a hunt, its candidates and attempts.',{id:{type:'string'}}], ['identify_retry','Retry recognition of a saved clip; preserves its audio.',{id:{type:'string'}}], ['identify_discard','Owner-requested: reversibly hide a finished no-match identification. Keeps audio, attempts and candidates.',{id:{type:'string'}}], ['identify_restore','Undo discard of an unmatched identification; restores the same record.',{id:{type:'string'}}], ['identify_confirm','Owner-approved: mark a candidate This is it, like its full track in Music and count it as a request.',{candidate_id:{type:'integer',minimum:1}}] ].map(([name,description,properties])=>({name,description,inputSchema:{type:'object',properties,required:Object.keys(properties),additionalProperties:false}})),
  {name:'music_status', description:'Read app configuration status; does not prove upstream connectivity.', inputSchema:{type:'object', properties:{}, additionalProperties:false}},
  {name:'music_home', description:'Read sources, library, liked tracks and recent history.', inputSchema:{type:'object', properties:{}, additionalProperties:false}},
  {name:'music_search', description:'Search configured library and optionally enabled online catalog.', inputSchema:{type:'object', properties:{query:{type:'string',maxLength:200}}, required:['query'], additionalProperties:false}}
@@ -22,9 +22,9 @@ export async function handleMcp(req,res,send,port) {
  if(identifyTool){
   const id=typeof a.id==='string' && /^[a-f0-9]{8}-[a-f0-9]{4}-[1-5][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(a.id)?a.id:null
   const candidate=Number.isSafeInteger(a.candidate_id)&&a.candidate_id>0?a.candidate_id:null
-  const route=name==='identify_list'?'captures':name==='identify_get'&&id?'captures/'+id:name==='identify_retry'&&id?'captures/'+id+'/retry':name==='identify_confirm'&&candidate?'candidates/'+candidate+'/verdict':null
+  const route=name==='identify_list'?'captures':name==='identify_get'&&id?'captures/'+id:['identify_retry','identify_discard','identify_restore'].includes(name)&&id?'captures/'+id+'/'+name.slice(9):name==='identify_confirm'&&candidate?'candidates/'+candidate+'/verdict':null
   if(!route){send(res,200,{jsonrpc:'2.0',id:m.id,error:{code:-32602,message:'Invalid identify arguments'}});return}
-  const write=name==='identify_retry'||name==='identify_confirm'
+  const write=['identify_retry','identify_confirm','identify_discard','identify_restore'].includes(name)
   try{const r=await fetch(`http://127.0.0.1:${port}/wizard-music/api/identify/${route}`,{method:write?'POST':'GET',headers:write?{'Content-Type':'application/json'}:{},...(write?{body:JSON.stringify(name==='identify_confirm'?{verdict:'confirmed'}:{})}:{}),signal:AbortSignal.timeout(150000)});answer({content:[{type:'text',text:await r.text()}],isError:!r.ok})}catch{answer({content:[{type:'text',text:'Music backend unavailable'}],isError:true})}
   return
  }

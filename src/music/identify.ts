@@ -2,21 +2,98 @@ import { musicApi, musicControl } from './MusicApp'
 import type { MusicTrack } from './engine'
 
 export type Candidate = { id: number; title: string; artist: string; provider: string; verdict?: string; art_url?: string; compare_url?: string; preview_url?: string; artwork_url?: string }
-export type Hunt = { id: string; created_at: string; status: string; best_title?: string; best_artist?: string; note?: string; last_error?: string; raw_sha256?: string; audio_url?: string; original_url?: string; export_url?: string; candidates?: Candidate[]; attempts?: { id: number; provider: string; outcome: string; preprocess?: string; error?: string }[] }
+export type Hunt = { id: string; created_at: string; status: string; retention_state?: string; best_title?: string; best_artist?: string; note?: string; last_error?: string; raw_sha256?: string; audio_url?: string; original_url?: string; export_url?: string; candidates?: Candidate[]; attempts?: { id: number; provider: string; outcome: string; preprocess?: string; error?: string }[] }
 export type CaptureResult = { id: string; blob: Blob; mime: string; startedAt: number; durationMs: number; partial?: boolean; meta?: { task?: string; geo?: Record<string, number>; note?: string; manualSubmit?: boolean } }
 export type CaptureHandle = { id: string; stop(): Promise<CaptureResult>; onLevel(fn: (value: number | { me?: number; them?: number }) => void): () => void }
 export type CapturePort = { start(options: Record<string, unknown>): Promise<CaptureHandle>; pending(): Promise<CaptureResult[]>; ack(id: string): Promise<unknown> }
 type LocalClip = { id: string; sharedId?: string; blob: Blob; mime: string; client_ts: string; duration_s: number; geo?: Record<string, number>; partial?: boolean; note?: string; sendRequested?: boolean }
-type State = { open: boolean; selected: string | null; detail: Hunt | null; hunts: Hunt[]; locals: LocalClip[]; phase: 'idle' | 'starting' | 'recording' | 'saving' | 'ready'; freshId: string | null; elapsed: number; level: number; error: string; loading: boolean; note: string; geoEnabled: boolean; sendErrors: Record<string, string>; needsTap: boolean }
+type DiscardNotice = { id: string; message: string; action: 'undo' | 'discard' | 'restore' | null; error?: boolean }
+type State = { discardNotice: DiscardNotice | null; open: boolean; selected: string | null; detail: Hunt | null; hunts: Hunt[]; locals: LocalClip[]; phase: 'idle' | 'starting' | 'recording' | 'saving' | 'ready'; freshId: string | null; elapsed: number; level: number; error: string; loading: boolean; note: string; geoEnabled: boolean; sendErrors: Record<string, string>; needsTap: boolean }
 const BASE = '/wizard-music/api/identify/'
 const ACTIVE = 'wizard-music.identify.active.v1'
-let state: State = { open: false, selected: null, detail: null, hunts: [], locals: [], phase: 'idle', freshId: null, elapsed: 0, level: 0, error: '', loading: false, note: '', geoEnabled: false, sendErrors: {}, needsTap: false }
+let state: State = { discardNotice: null, open: false, selected: null, detail: null, hunts: [], locals: [], phase: 'idle', freshId: null, elapsed: 0, level: 0, error: '', loading: false, note: '', geoEnabled: false, sendErrors: {}, needsTap: false }
 const listeners = new Set<() => void>()
 function paint(patch: Partial<State>) { state = { ...state, ...patch }; listeners.forEach(fn => fn()) }
 let handle: CaptureHandle | null = null, startedAt = 0, tick = 0, autoStop = 0, offLevel: (() => void) | undefined
 let releaseHold: (() => void) | undefined
 let draining: Promise<void> | null = null
 let detailGeneration = 0, refreshGeneration = 0
+// Domain overlay survives navigation and stale reads, not just the detail component.
+const captureOverlay = new Map<string, Hunt | null>()
+const discardOperations = new Map<string, Promise<void>>()
+const restoring = new Set<string>()
+const discardedRecords = new Map<string, Hunt>()
+function activeHunts(rows: Hunt[]) {
+  const merged = new Map(rows.filter(h => h.retention_state !== 'discarded').map(h => [h.id, h]))
+  for (const [id, record] of captureOverlay) {
+    if (record === null) merged.delete(id)
+    else if (!merged.has(id)) merged.set(id, record)
+  }
+  return [...merged.values()].sort((a, b) => b.created_at.localeCompare(a.created_at))
+}
+function discardFailure(notice: DiscardNotice) {
+  paint({ discardNotice: notice })
+  // Shared shell toast reaches the owner even if Music has been hidden meanwhile.
+  if (window.WizardApp.view?.isVisible?.() === false) {
+    const app = window.WizardApp as typeof window.WizardApp & { shell?: { toast(icon: string, message: string): unknown } }
+    app.shell?.toast('music', notice.message + ' Open Music to retry.')
+  }
+}
+function discard(id: string): Promise<void> {
+  if (discardOperations.has(id)) return discardOperations.get(id)!
+  if (captureOverlay.get(id) === null) return Promise.resolve()
+  const record = state.detail?.id === id ? state.detail : state.hunts.find(h => h.id === id)
+  if (!record || record.status !== 'no_match' || record.retention_state === 'discarded' || state.phase !== 'idle' || state.locals.some(c => c.id === id)) return Promise.resolve()
+  discardedRecords.set(id, record); captureOverlay.set(id, null)
+  leaveWaiting(); ++detailGeneration; ++refreshGeneration
+  // Close and remove before the first network/storage/bridge call; double taps see the tombstone.
+  paint({ ...(state.selected === id ? { selected: null, detail: null } : {}), hunts: activeHunts(state.hunts), freshId: state.freshId === id ? null : state.freshId, discardNotice: { id, message: 'Discarded · audio kept', action: 'undo' } })
+  const hold = window.WizardApp.update?.hold('Keeping a reversible identification discard')
+  const operation = (async () => {
+    try {
+      await identifyJson<Hunt>(`captures/${id}/discard`, {})
+      const saved = await identifyJson<Hunt>(`captures/${id}`)
+      if (saved.id !== id || saved.retention_state !== 'discarded') throw new Error('Discard not confirmed')
+    } catch {
+      captureOverlay.set(id, record)
+      paint({ hunts: activeHunts(state.hunts) })
+      discardFailure({ id, message: 'Couldn’t discard this clip. It’s back in Identifications.', action: 'discard', error: true })
+    } finally { discardOperations.delete(id); hold?.release() }
+  })()
+  discardOperations.set(id, operation)
+  return operation
+}
+function restore(id: string): Promise<void> {
+  // Undo during an outstanding discard waits for that one write, never races it.
+  const pending = discardOperations.get(id)
+  if (pending) {
+    if (restoring.has(id)) return pending
+    paint({ discardNotice: { id, message: 'Restoring identification…', action: null } })
+    return pending.then(() => restore(id))
+  }
+  const record = discardedRecords.get(id)
+  if (!record) return Promise.resolve()
+  if (captureOverlay.get(id) !== null) return Promise.resolve()
+  captureOverlay.set(id, { ...record, retention_state: 'active' }); ++refreshGeneration
+  paint({ hunts: activeHunts(state.hunts), discardNotice: { id, message: 'Restoring identification…', action: null } })
+  const hold = window.WizardApp.update?.hold('Restoring an identification')
+  restoring.add(id)
+  const operation = (async () => {
+    try {
+      await identifyJson<Hunt>(`captures/${id}/restore`, {})
+      const saved = await identifyJson<Hunt>(`captures/${id}`)
+      if (saved.id !== id || saved.retention_state !== 'active') throw new Error('Restore not confirmed')
+      captureOverlay.set(id, saved)
+      paint({ hunts: activeHunts(state.hunts), discardNotice: { id, message: 'Identification restored', action: null } })
+    } catch {
+      captureOverlay.set(id, null)
+      paint({ hunts: activeHunts(state.hunts) })
+      discardFailure({ id, message: 'Couldn’t restore this clip. Your audio is still kept.', action: 'restore', error: true })
+    } finally { discardOperations.delete(id); restoring.delete(id); hold?.release() }
+  })()
+  discardOperations.set(id, operation)
+  return operation
+}
 let closePlayer: (() => void) | undefined
 export const IDENTIFY_TARGET_SECONDS = 12
 let recordingId = ''
@@ -91,18 +168,22 @@ async function refresh() {
   const gen = ++refreshGeneration
   try {
     const [value, locals] = await Promise.all([identifyJson<{ captures: Hunt[] }>('captures'), localStore('all')])
-    if (gen === refreshGeneration) paint({ hunts: value.captures, locals, loading: false })
+    if (gen === refreshGeneration) paint({ hunts: activeHunts(value.captures), locals, loading: false })
     if (state.selected) await detail(state.selected, false)
   } catch (e) { if (gen === refreshGeneration) paint({ locals: await localStore('all').catch(() => state.locals), loading: false, error: (e as Error).message }) }
 }
 async function detail(id: string, selecting = true) {
+  if (captureOverlay.get(id) === null) return
   const gen = ++detailGeneration
   if (selecting) { leaveWaiting(); paint({ selected: id, detail: null, error: '', freshId: state.freshId === id ? null : state.freshId }) }
   const local = state.locals.find(c => c.id === id)
   if (local) return
   try {
     const value = await identifyJson<Hunt>('captures/' + id)
-    if (gen === detailGeneration && state.selected === id) paint({ detail: value })
+    if (gen === detailGeneration && state.selected === id && captureOverlay.get(id) !== null) {
+      if (value.retention_state === 'discarded') paint({ selected: null, detail: null })
+      else paint({ detail: value })
+    }
   } catch (e) { if (gen === detailGeneration && state.selected === id) paint({ error: (e as Error).message }) }
 }
 let drainAgain = false, retryTimer = 0, retryDelay = 5000
@@ -205,7 +286,8 @@ async function finish(send: boolean, atLimit = false) {
 export const identifyControl = {
   snapshot: () => state,
   subscribe(fn: () => void) { listeners.add(fn); return () => { listeners.delete(fn) } },
-  start, stop, refresh, drain, detail, submit,
+  start, stop, refresh, drain, detail, submit, discard, restore,
+  dismissDiscardNotice() { paint({ discardNotice: null }) },
   leftView: leaveWaiting,
   cancel() {
     cancelled = true; leaveWaiting()
@@ -224,7 +306,7 @@ export const identifyControl = {
     return false
   },
   busy: () => state.phase !== 'idle',
-  async retry(id: string) { paint({ error: '' }); await identifyJson('captures/' + id + '/retry', {}); await refresh() },
+  async retry(id: string) { if (captureOverlay.get(id) === null) return; paint({ error: '' }); await identifyJson('captures/' + id + '/retry', {}); await refresh() },
   async retryUnsolved() { for (const h of state.hunts.filter(h => ['no_match', 'error', 'uploaded'].includes(h.status))) await this.retry(h.id) },
   async play(c: Candidate) { const { track } = await identifyJson<{ track: MusicTrack }>(`candidates/${c.id}/resolve`, {}); const station = await musicApi.station({ trackId: track.id }); await musicControl.play(station.tracks, station.station) },
   async verdict(c: Candidate, verdict: string) { const result = await identifyJson<{ track?: MusicTrack }>(`candidates/${c.id}/verdict`, { verdict }); if (verdict === 'confirmed') { this.closeDetail() }; await refresh(); return result },

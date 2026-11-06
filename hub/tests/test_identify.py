@@ -129,3 +129,47 @@ def test_public_audio_paths_and_paid_providers_off(identify):
     assert identify.audd_lookup(Path('/unused'))['not_configured'] is True
     assert identify.audio_path(cid,'original').is_file()
     with pytest.raises(ValueError): identify.audio_path(cid,'../../hub.env')
+
+
+def test_discard_restore_is_durable_idempotent_and_preserves_all_evidence(identify):
+    cid,raw,cap=saved(identify)
+    identify.update_capture(cid,status='no_match',created_at='2000-01-01T00:00:00Z')
+    identify.insert_attempt(cid,'fixture','no_match')
+    identify.add_candidate(cid,{'title':'Synthetic lead','artist':'Fixture','provider':'manual'})
+    identify.update_capture(cid,status='no_match')
+    before=identify.get_capture(cid)
+    assert identify.set_discarded(cid,True)['retention_state']=='discarded'
+    once=identify.get_capture(cid)
+    assert identify.set_discarded(cid,True)==once
+    assert cid not in [c['id'] for c in identify.list_captures()]
+    module=importlib.reload(identify); module.init_db()
+    assert module.get_capture(cid)['retention_state']=='discarded'
+    assert cid not in [c['id'] for c in module.list_captures()]
+    with pytest.raises(module.HTTPException): module.enqueue(cid)
+    policy=module.retention_dry_run(days_archive=0,days_delete_after_archive=0)
+    assert cid not in policy['would_archive']+policy['would_delete_audio']
+    assert module.set_discarded(cid,False)['id']==cid
+    restored=module.get_capture(cid)
+    assert module.set_discarded(cid,False)==restored
+    assert [c['id'] for c in module.list_captures()].count(cid)==1
+    for key in before:
+        if key not in ('updated_at','retention_state'): assert restored[key]==before[key],key
+    assert Path(cap['raw_path']).read_bytes()==raw
+
+
+@pytest.mark.parametrize('status',['uploaded','pending','hunting','has_leads','resolved','identified','error'])
+def test_discard_rejects_non_terminal_or_matched_capture(identify,status):
+    cid,raw,cap=saved(identify)
+    identify.update_capture(cid,status=status)
+    with pytest.raises(identify.HTTPException) as error: identify.set_discarded(cid,True)
+    assert error.value.status_code==409
+    assert identify.get_capture(cid)['retention_state']=='active'
+    assert Path(cap['raw_path']).read_bytes()==raw
+
+
+def test_discard_validates_identifier_existence_and_worker_guard(identify):
+    with pytest.raises(identify.HTTPException): identify.set_discarded('not-a-uuid',True)
+    with pytest.raises(LookupError): identify.set_discarded(str(uuid.uuid4()),True)
+    cid,_,_=saved(identify); identify.update_capture(cid,status='no_match')
+    identify._pending.add(cid)
+    with pytest.raises(identify.HTTPException): identify.set_discarded(cid,True)

@@ -24,6 +24,12 @@ test('Identify allowlist, raw audio, full query, credentials boundary and media 
   assert.equal(calls[1].headers.range,'bytes=0-3')
   assert.ok(calls[1].url.endsWith('?kind=original'))
   assert.equal(musicRoute('DELETE','/api/identify/captures/'+cid),null)
+  for(const action of ['discard','restore']){
+   const r=await fetch(app.origin+`/wizard-music/api/identify/captures/${cid}/${action}`,{method:'POST',headers:{'content-type':'application/json'},body:'{}'})
+   assert.equal(r.status,200);assert.equal(calls.at(-1).url,`/api/identify/captures/${cid}/${action}`)
+   assert.equal(calls.at(-1).headers.authorization,'Bearer fixture-hub-only')
+   assert.equal(musicRoute('GET',`/api/identify/captures/${cid}/${action}`),null)
+  }
   assert.equal(musicRoute('GET','/api/identify/../../hub.env'),null)
  }finally{await app.close();await up.close()}
 })
