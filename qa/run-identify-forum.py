@@ -12,7 +12,7 @@ import urllib.request
 
 ROOT=Path(__file__).resolve().parents[1]
 INPUT=Path(os.environ.get('IDENTIFY_INPUT','/srv/work/music-identify-input'))
-OUT=ROOT/'evidence/identify'
+OUT=Path(os.environ.get('IDENTIFY_OUT',str(ROOT/'evidence/identify')))
 OUT.mkdir(parents=True,exist_ok=True)
 PY=ROOT/'.venv/bin/python'
 
@@ -33,17 +33,24 @@ def ready(url):
 
 
 def main():
-    if not PY.exists():run(['python3','-m','venv',ROOT/'.venv'])
-    run([PY,'-m','pip','install','--only-binary=:all:','-r','hub/requirements.txt','pytest==8.4.2'])
-    run(['npm','ci','--no-audit','--no-fund'])
-    run(['npx','playwright','install','chromium'])
-    run(['npm','run','build'])
-    run(['npm','test'])
-    run(['node','--test','qa/identify-transport.mjs'])
-    run([PY,'-m','pytest','hub/tests/test_identify.py','-q'])
+    browser_only=os.environ.get('IDENTIFY_BROWSER_ONLY')=='1'
+    if browser_only:
+        # Reuse successful unchanged build/tests; fresh output keeps failed evidence intact.
+        if not PY.exists() or not (ROOT/'node_modules').is_dir() or not (ROOT/'dist/index.html').is_file():
+            raise RuntimeError('Browser-only continuation requires existing dependencies and built app')
+        print('Browser-only continuation: build/tests not rerun; previous receipt remains authoritative',flush=True)
+    else:
+        if not PY.exists():run(['python3','-m','venv',ROOT/'.venv'])
+        run([PY,'-m','pip','install','--only-binary=:all:','-r','hub/requirements.txt','pytest==8.4.2'])
+        run(['npm','ci','--no-audit','--no-fund'])
+        run(['npx','playwright','install','chromium'])
+        run(['npm','run','build'])
+        run(['npm','test'])
+        run(['node','--test','qa/identify-transport.mjs'])
+        run([PY,'-m','pytest','hub/tests/test_identify.py','-q'])
     # Use real recognizer network only in its isolated scratch home, not the owner's hub.
     env={**os.environ,'WIZARD_MUSIC_HUB_HOME':str(OUT/'recognizer-home'),'IDENTIFY_KNOWN_PREVIEW':'https://audio-ssl.itunes.apple.com/itunes-assets/AudioPreview221/v4/f5/0c/cb/f50ccb25-c1fd-8940-1f8a-e42495300745/mzaf_15922365127289521089.plus.aac.p.m4a','IDENTIFY_KNOWN_TITLE':'Nevada'}
-    if not os.environ.get('IDENTIFY_SKIP_RECOGNIZER'):
+    if not browser_only and not os.environ.get('IDENTIFY_SKIP_RECOGNIZER'):
         with (OUT/'recognizer.log').open('w') as f:run([PY,'hub/qa_identify_network.py'],env=env,stdout=f,stderr=subprocess.STDOUT)
     else: print('Unchanged provider-network check explicitly skipped for recording-only UX', flush=True)
     home=OUT/'hub-home'
@@ -78,8 +85,8 @@ def main():
             try:p.wait(timeout=10)
             except subprocess.TimeoutExpired:p.kill();p.wait()
         for f in logs:f.close()
-    (OUT/'complete.json').write_text(json.dumps({'ok':True,'source':env['WIZARD_MUSIC_RELEASE'],'live_changes':False},indent=2))
-    print('Identify build and isolated acceptance complete',flush=True)
+    (OUT/'complete.json').write_text(json.dumps({'ok':True,'source':env['WIZARD_MUSIC_RELEASE'],'live_changes':False,'scope':'browser-only' if browser_only else 'full','build_tests_reused':browser_only},indent=2))
+    print('Identify isolated browser acceptance complete' if browser_only else 'Identify build and isolated acceptance complete',flush=True)
 
 
 if __name__=='__main__':main()

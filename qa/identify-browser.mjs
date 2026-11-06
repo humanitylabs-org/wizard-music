@@ -116,7 +116,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await frame.getByRole('heading',{name:/Identification/,exact:false}).last().waitFor()
  await waitAcks(frame,1,'Upload after Send')
  // The submitted result opened while waiting, not only after recognition finished.
- await frame.locator('dialog[open] .wz-sheet-close').click()
+ await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
  await frame.waitForFunction(()=>!document.querySelector('dialog[open]'))
  // Open imported hunt and verify media really decodes.
  await frame.getByRole('button',{name:'Identifications',exact:true}).click()
@@ -156,7 +156,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  offline=false
  await frame.evaluate(()=>dispatchEvent(new Event('online')))
  await waitAcks(frame,2,'Reconnect upload')
- await frame.locator('dialog[open] .wz-sheet-close').click()
+ await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
  await frame.waitForFunction(()=>!document.querySelector('dialog[open]'))
  await frame.getByRole('button',{name:'Identifications',exact:true}).click()
  const listImage=path.join(out,`${shell}-${skin}-identify-hunts.png`)
