@@ -25,7 +25,11 @@ export function IdentifyView({ notify }: { notify(message: string): void }) {
   useEffect(() => {
     setResults([]); setQuery(''); setPreparedShare(null); setPending(''); setManual(false); queryGeneration.current++
     const d = dialog.current
-    if (state.selected && d) { window.WzSheet.open(d); const close = () => identifyControl.closeDetail(); d.addEventListener('close', close); return () => { d.removeEventListener('close', close); window.WzSheet.close(d) } }
+    if (state.selected && d) { window.WzSheet.open(d); const close = () => identifyControl.closeDetail(); d.addEventListener('close', close); return () => {
+      d.removeEventListener('close', close); window.WzSheet.close(d)
+      // React removes the sheet before its async 'close' event, so release its Back step here; a stale step would swallow the next Back.
+      const sheet = d as HTMLDialogElement & { __wzBack?: { release(): void } | null }; const step = sheet.__wzBack; sheet.__wzBack = null; step?.release()
+    } }
   }, [state.selected])
   const act = async (key: string, fn: () => Promise<unknown>) => {
     if (pending) return

@@ -111,10 +111,11 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await frame.waitForFunction(()=>!document.querySelector('dialog[open]'))
  await row.click();await frame.locator('dialog[open]').waitFor()
  // Back closes detail, then list, then stays in Music (never exits the frame).
- await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
+ const back1=await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
  await frame.waitForFunction(()=>!document.querySelector('dialog[open]'))
- await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
- await frame.waitForFunction(()=>!document.querySelector('.identify-view'))
+ const back2=await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
+ const listClosed=await frame.waitForFunction(()=>!document.querySelector('.identify-view'),null,{timeout:5000}).then(()=>true,()=>false)
+ if(!listClosed)throw Error('Second Back did not leave the Hunts list: '+JSON.stringify({back1,back2,dialogs:await frame.evaluate(()=>document.querySelectorAll('dialog').length)})+' '+await dump(frame,'back-list'))
  assert.ok(await visible.isVisible())
  // Held permission paints starting immediately, then offline stop persists without ack.
  await frame.evaluate(()=>{window.__qaHold=true})
