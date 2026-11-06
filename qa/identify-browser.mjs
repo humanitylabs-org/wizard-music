@@ -17,7 +17,7 @@ const wav=fs.readFileSync(process.env.QA_AUDIO).toString('base64')
 const fakeCapture=`
 window.__qaStarts=[];window.__qaAcks=[];
 window.WizardApp=Object.freeze({...window.WizardApp,capture:{
-start:async options=>{window.__qaStarts.push(options);if(window.__qaHold)await new Promise((r,j)=>{window.__qaResolve=r;window.__qaReject=j});const id=crypto.randomUUID(),startedAt=Date.now();return {id,onLevel:fn=>{fn(.45);return()=>{}},stop:async()=>({id,startedAt,durationMs:1200,mime:'audio/wav',meta:options.meta,blob:new Blob([Uint8Array.from(atob(${JSON.stringify(wav)}),c=>c.charCodeAt(0))],{type:'audio/wav'})})}},pending:async()=>[],ack:async id=>{window.__qaAcks.push(id);return true}
+start:async options=>{window.__qaStarts.push(options);if(window.__qaHold)await new Promise((r,j)=>{window.__qaResolve=r;window.__qaReject=j});const id=crypto.randomUUID(),startedAt=Date.now();return {id,onLevel:fn=>{fn(.45);return()=>{}},stop:async()=>({id,startedAt,durationMs:1200,mime:'audio/wav',meta:options.meta,blob:new Blob([Uint8Array.from(atob(${JSON.stringify(wav)}),c=>c.charCodeAt(0))],{type:'audio/wav'})})}},pending:async()=>[],ack:async id=>{window.__qaAcks.push(id);try{const a=JSON.parse(localStorage.getItem('qa.acks')||'[]');a.push({id,href:location.href,t:Date.now()});localStorage.setItem('qa.acks',JSON.stringify(a))}catch{}return true}
 }});
 `
 const rows=[]
@@ -59,6 +59,10 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const consoleLines=[];page.on('console',m=>{if(['error','warning'].includes(m.type()))consoleLines.push(m.type()+': '+m.text().slice(0,300))})
  const netLines=[];page.on('request',r=>{if(r.url().includes('/identify/'))netLines.push(r.method()+' '+r.url().slice(0,160))});page.on('requestfailed',r=>netLines.push('FAILED '+r.method()+' '+r.url().slice(0,160)+' '+(r.failure()?.errorText||'')));page.on('response',r=>{if(r.url().includes('/identify/')&&r.request().method()==='POST')netLines.push('RESP '+r.status()+' '+r.url().slice(0,160))})
  const dump=async(frame,label)=>{const ui=await frame.evaluate(()=>({alert:document.querySelector('[role=alert]')?.textContent||'',text:document.body.innerText.slice(0,800)})).catch(e=>({err:e.message}));await page.screenshot({path:path.join(out,`${shell}-${skin}-FAIL-${label}.png`)}).catch(()=>{});return JSON.stringify({label,ui,netLines:netLines.slice(-20),consoleLines:consoleLines.slice(-20),errors})}
+ const acks=f=>f.evaluate(()=>JSON.parse(localStorage.getItem('qa.acks')||'[]').length)
+ const waitAcks=async(f,n,label)=>{const end=Date.now()+30000;while(Date.now()<end){if(await acks(f).catch(()=>0)>=n)return;await new Promise(r=>setTimeout(r,250))}
+  const replay=await f.evaluate(async()=>{const out={href:location.href,frameAcks:window.__qaAcks,shared:localStorage.getItem('qa.acks')};try{const d=await new Promise((res,rej)=>{const r=indexedDB.open('trackhunt-offline-v1',1);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});const rows=await new Promise(res=>{const q=d.transaction('captures').objectStore('captures').getAll();q.onsuccess=()=>res(q.result)});out.locals=[];for(const it of rows){const dig=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await it.blob.arrayBuffer())),n=>n.toString(16).padStart(2,'0')).join('');const r=await fetch('/wizard-music/api/identify/captures/'+it.id,{credentials:'include'});let j=null;try{j=await r.json()}catch(e){j={parse:e.message}};out.locals.push({id:it.id,shared:it.sharedId,size:it.blob.size,digest:dig,status:r.status,server:{id:j?.id,raw_sha256:j?.raw_sha256,status:j?.status,error:j?.error}})}}catch(e){out.replayError=e.message}return out}).catch(e=>({evalError:e.message}))
+  throw Error(label+' never confirmed: '+JSON.stringify({replay,frames:page.frames().map(x=>x.url()).filter(u=>u.includes('wizard-music'))})+' '+await dump(f,label))}
  await page.goto(ORIGIN+'/wizard-os-home/'+(shell==='phone'?'?shell=phone':'desktop.html'),{waitUntil:'load'})
  await page.waitForFunction(([sh,sk])=>document.documentElement.dataset.shell===sh&&document.documentElement.dataset.skin===sk,[shell,skin])
  await page.waitForFunction(()=>window.WizAppServices?.inspect().some(x=>x.appId==='wizard-music'&&x.ready))
@@ -82,7 +86,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const frame=await (await visible.elementHandle()).contentFrame()
  await frame.getByRole('button',{name:'Stop and identify',exact:true}).waitFor({state:'visible'})
  await frame.getByRole('button',{name:'Stop and identify',exact:true}).click()
- await frame.waitForFunction(()=>window.__qaAcks.length===1,null,{timeout:30000}).catch(async e=>{throw Error('Upload after Stop never confirmed: '+await dump(frame,'first-upload'))})
+ await waitAcks(frame,1,'Upload after Stop')
  // Open imported hunt and verify media really decodes.
  await frame.getByRole('button',{name:'Hunts',exact:true}).click()
  const row=frame.locator('.identify-hunt').filter({hasText:hunt.best_title}).first()
@@ -111,10 +115,10 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  offline=true
  await frame.getByRole('button',{name:'Stop and identify',exact:true}).click()
  await frame.getByText(/Saved on this device · waiting for connection/).first().waitFor()
- assert.equal(await frame.evaluate(()=>window.__qaAcks.length),1)
+ assert.equal(await acks(frame),1)
  offline=false
  await frame.evaluate(()=>dispatchEvent(new Event('online')))
- await frame.waitForFunction(()=>window.__qaAcks.length===2,null,{timeout:30000}).catch(async e=>{throw Error('Reconnect upload never confirmed: '+await dump(frame,'reconnect-upload'))})
+ await waitAcks(frame,2,'Reconnect upload')
  await frame.getByRole('button',{name:'Hunts',exact:true}).click()
  const listImage=path.join(out,`${shell}-${skin}-identify-hunts.png`)
  await page.screenshot({path:listImage})
