@@ -87,7 +87,7 @@ function App() {
     else history.replaceState({ ...(history.state || {}), wizardMusic: 'root' }, '')
   }, [])
   const dismissNowPlaying = useCallback(() => { dismissedRef.current = true; closeNowPlaying() }, [closeNowPlaying])
-  const autoOpenNowPlaying = useCallback(() => { if (!dismissedRef.current && !identifyControl.snapshot().open) openNowPlaying() }, [openNowPlaying])
+  const autoOpenNowPlaying = useCallback(() => { if (identifyControl.busy()) { musicControl.engine()?.pause(); return }; if (!dismissedRef.current && !identifyControl.snapshot().open) openNowPlaying() }, [openNowPlaying])
   useEffect(() => {
     const onPop = () => { nowPlayingRef.current = history.state?.wizardMusic === 'now'; setNowPlayingOpen(nowPlayingRef.current); rememberView(nowPlayingRef.current ? 'now' : 'home') }
     window.addEventListener('popstate', onPop)

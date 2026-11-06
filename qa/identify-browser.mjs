@@ -79,6 +79,10 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await frame.waitForFunction(()=>{const a=document.querySelector('dialog audio');return a&&a.readyState>=1&&a.duration>0})
  const sheetImage=path.join(out,`${shell}-${skin}-identify-sheet.png`)
  await page.screenshot({path:sheetImage})
+ // A physical click on the iframe backdrop closes the shared sheet.
+ const box=await visible.boundingBox();await page.mouse.click(box.x+5,box.y+5)
+ await frame.waitForFunction(()=>!document.querySelector('dialog[open]'))
+ await row.click();await frame.locator('dialog[open]').waitFor()
  // Back closes detail, then list, then stays in Music (never exits the frame).
  await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
  await frame.waitForFunction(()=>!document.querySelector('dialog[open]'))

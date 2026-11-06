@@ -42,7 +42,7 @@ def connect() -> sqlite3.Connection:
     con.row_factory = sqlite3.Row
     con.execute('PRAGMA journal_mode=WAL')
     con.execute('PRAGMA busy_timeout=5000')
-    con.execute('PRAGMA synchronous=NORMAL')
+    con.execute('PRAGMA synchronous=FULL')
     return con
 
 def init_db() -> None:
