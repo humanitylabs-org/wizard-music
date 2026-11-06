@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createHash } from 'node:crypto'
 import { identifyControl } from '../src/music/identify'
 import { installIdentifyClaims, parseMusicCommand, runMusicCommand } from '../src/music/voice'
 
@@ -75,7 +76,9 @@ function fakeIndexedDB(rows: Map<string, unknown>) {
 describe('sending a saved clip', () => {
   const bytes = new Uint8Array([1, 2, 3, 4])
   const clip = { id: '11111111-2222-4333-8444-555555555555', sharedId: 'shared-1', blob: { size: 4, type: 'audio/wav', arrayBuffer: async () => bytes.buffer }, mime: 'audio/wav', client_ts: '2026-11-06T00:00:00Z' }
-  const hex = async () => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), n => n.toString(16).padStart(2, '0')).join('')
+  // jsdom and Node keep separate ArrayBuffer realms on some Node versions; hash with Node directly so the test is portable.
+  const hex = async () => createHash('sha256').update(bytes).digest('hex')
+  beforeEach(() => { vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (_alg, data) => { const h = createHash('sha256').update(new Uint8Array(data as ArrayBuffer)).digest(); return h.buffer.slice(h.byteOffset, h.byteOffset + h.byteLength) }) })
 
   it('is confirmed from the upload reply itself, with no second read that can race the server', async () => {
     const rows = new Map<string, unknown>([[clip.id, clip]])
