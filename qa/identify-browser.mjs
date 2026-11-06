@@ -11,6 +11,7 @@ const ORIGIN='http://127.0.0.1:19371', APP='http://127.0.0.1:19305'
 const types={'.js':'application/javascript','.css':'text/css','.html':'text/html','.png':'image/png','.svg':'image/svg+xml','.jpg':'image/jpeg','.webp':'image/webp','.json':'application/json','.woff2':'font/woff2'}
 const data=await (await fetch(APP+'/wizard-music/api/identify/captures')).json()
 const discardOnly=process.env.IDENTIFY_DISCARD_ONLY==='1'
+const localOnly=process.env.IDENTIFY_LOCAL_DISCARD_ONLY==='1'
 if(!discardOnly)assert.equal(data.captures.length,5,'all five original hunts are imported before browser exercise')
 const hunt=data.captures.find(h=>h.status==='has_leads')
 if(!discardOnly)assert.ok(hunt)
@@ -18,7 +19,7 @@ const wav=fs.readFileSync(process.env.QA_AUDIO).toString('base64')
 const fakeCapture=`
 window.__qaStarts=[];window.__qaAcks=[];
 window.WizardApp=Object.freeze({...window.WizardApp,capture:{
-start:async options=>{window.__qaStarts.push(options);if(window.__qaHold)await new Promise((r,j)=>{window.__qaResolve=r;window.__qaReject=j});const id=crypto.randomUUID(),startedAt=Date.now();return {id,onLevel:fn=>{fn(.45);return()=>{}},stop:async()=>({id,startedAt,durationMs:1200,mime:'audio/wav',meta:options.meta,blob:new Blob([Uint8Array.from(atob(${JSON.stringify(wav)}),c=>c.charCodeAt(0))],{type:'audio/wav'})})}},pending:async()=>[],ack:async id=>{window.__qaAcks.push(id);try{const a=JSON.parse(localStorage.getItem('qa.acks')||'[]');a.push({id,href:location.href,t:Date.now()});localStorage.setItem('qa.acks',JSON.stringify(a))}catch{}return true}
+start:async options=>{window.__qaStarts.push(options);if(window.__qaHold)await new Promise((r,j)=>{window.__qaResolve=r;window.__qaReject=j});const id=crypto.randomUUID(),startedAt=Date.now();return {id,onLevel:fn=>{fn(.45);return()=>{}},stop:async()=>({id,startedAt,durationMs:1200,mime:'audio/wav',meta:options.meta,blob:new Blob([Uint8Array.from(atob(${JSON.stringify(wav)}),c=>c.charCodeAt(0))],{type:'audio/wav'})})}},pending:async()=>localStorage.getItem('qa.local.pending')?[{id:localStorage.getItem('qa.local.pending'),startedAt:Date.now(),durationMs:7000,mime:'audio/wav',meta:{task:'music-identify'},blob:new Blob([Uint8Array.from(atob(${JSON.stringify(wav)}),c=>c.charCodeAt(0))],{type:'audio/wav'})}]:[],ack:async id=>{if(localStorage.getItem('qa.local.pending')){const saved=await(await fetch('/wizard-music/api/identify/captures/'+id)).json();const digest=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',Uint8Array.from(atob(${JSON.stringify(wav)}),c=>c.charCodeAt(0)))),n=>n.toString(16).padStart(2,'0')).join('');if(saved.id!==id||saved.raw_sha256!==digest)throw Error('Ack before durable backend readback');localStorage.removeItem('qa.local.pending')}window.__qaAcks.push(id);try{const a=JSON.parse(localStorage.getItem('qa.acks')||'[]');a.push({id,href:location.href,t:Date.now()});localStorage.setItem('qa.acks',JSON.stringify(a))}catch{}return true}
 }});
 `
 const rows=[]
@@ -30,6 +31,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await context.route('**/*',async route=>{
   const req=route.request(),u=new URL(req.url())
   if(u.origin!==ORIGIN)return route.abort()
+  if(u.pathname==='/qa-local-seed')return route.fulfill({contentType:'text/html',body:'<!doctype html><meta charset="utf-8"><title>Disposable local fixture</title>'})
   if(u.pathname.startsWith('/wizard-music/')){
    if(offline && req.method()==='POST'){refusedPosts++;return route.abort('internetdisconnected')}
    const response=await context.request.fetch(APP+u.pathname+u.search,{method:req.method(),headers:{...(req.headers()['content-type']?{'content-type':req.headers()['content-type']}:{})},data:req.postDataBuffer()||undefined})
@@ -59,6 +61,14 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  })
  await context.addInitScript(({shell,skin})=>{try{if(window.top===window){localStorage.setItem('wos.coached','true');localStorage.setItem('wos.tour.v1','true');localStorage.setItem('wos.tour','done');localStorage.setItem('wos.tour.done','1');localStorage.setItem('wux.shell',shell);localStorage.setItem('wos.skin',skin)}}catch{}},{shell,skin})
  const page=await context.newPage(),errors=[]
+ if(localOnly){
+  await page.goto(ORIGIN+'/qa-local-seed')
+  await page.evaluate(async wav=>{
+   const id=crypto.randomUUID();localStorage.setItem('qa.local.pending',id);localStorage.setItem('qa.local.id',id)
+   const d=await new Promise((res,rej)=>{const r=indexedDB.open('trackhunt-offline-v1',1);r.onupgradeneeded=()=>r.result.createObjectStore('captures',{keyPath:'id'});r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})
+   await new Promise((res,rej)=>{const t=d.transaction('captures','readwrite');t.objectStore('captures').put({id,sharedId:id,blob:new Blob([Uint8Array.from(atob(wav),c=>c.charCodeAt(0))],{type:'audio/wav'}),mime:'audio/wav',client_ts:'2026-11-06T19:00:00Z',duration_s:7,sendRequested:false});t.oncomplete=res;t.onerror=()=>rej(t.error)});d.close()
+  },wav)
+ }
  page.on('pageerror',e=>errors.push(e.message))
  const consoleLines=[];page.on('console',m=>{if(['error','warning'].includes(m.type()))consoleLines.push(m.type()+': '+m.text().slice(0,300))})
  const T0=Date.now(),ts=()=>'+'+(Date.now()-T0)+'ms'
@@ -94,7 +104,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await page.goto(ORIGIN+'/wizard-os-home/'+(shell==='phone'?'?shell=phone':'desktop.html'),{waitUntil:'load'})
  await page.waitForFunction(([sh,sk])=>document.documentElement.dataset.shell===sh&&document.documentElement.dataset.skin===sk,[shell,skin])
  await page.waitForFunction(sh=>window.WizCore.apps(sh).APP['wizard-music']?.voice_routes?.length,shell)
- const command=await page.evaluate(sh=>{
+ const command=localOnly?await page.evaluate(()=>{if(!window.WizOpenApp('wizard-music','/wizard-music/?view=identify'))throw Error('Music did not open');return 'persisted-unsent'}):await page.evaluate(sh=>{
   const registry=window.WizCore.apps(sh)
   const grammar=window.WosCommands.create({CHATS:{},...registry,quickSearch:()=>null,sendSnap:()=>({view:{kind:'thread list'}})})
   const cmd=grammar.parse('music',{view:{kind:'thread list'}},'command')
@@ -109,6 +119,66 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const visible=page.locator('iframe:not([data-voice-service])[src*="/wizard-music/"]:visible').last()
  await visible.waitFor({state:'visible'})
  const frame=await (await visible.elementHandle()).contentFrame()
+ if(localOnly){
+  const id=await frame.evaluate(()=>localStorage.getItem('qa.local.id'))
+  const read=()=>frame.evaluate(async id=>{const d=await new Promise((res,rej)=>{const r=indexedDB.open('trackhunt-offline-v1',1);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});const row=await new Promise(res=>{const q=d.transaction('captures').objectStore('captures').get(id);q.onsuccess=()=>res(q.result)});d.close();if(!row)return null;return {...row,blob:undefined,size:row.blob.size,hash:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await row.blob.arrayBuffer())),n=>n.toString(16).padStart(2,'0')).join('')}},id)
+  await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).waitFor()
+  const original=await read();assert.equal(original.sendRequested,false)
+  const baselinePosts=()=>netLines.filter(s=>s.includes(' POST ')&&!s.includes(' RES ')).length
+  const beforePosts=baselinePosts(),beforeAcks=await acks(frame)
+  await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).click()
+  await frame.getByText('Not sent. You can review or send it below.',{exact:true}).waitFor()
+  await frame.getByRole('button',{name:'Discard',exact:true}).waitFor()
+  await frame.getByRole('button',{name:'Send for identification',exact:true}).waitFor()
+  await frame.waitForFunction(()=>document.querySelector('dialog audio')?.duration>=6.9)
+  const sheetColor=await frame.locator('dialog').evaluate(d=>getComputedStyle(d).backgroundColor)
+  assert.ok(!sheetColor.startsWith('rgba('),'opaque existing shared sheet')
+  const beforeColor=await frame.locator('dialog').evaluate(d=>getComputedStyle(d).color)
+  await page.evaluate(s=>window.WosSkin.set(s),skin==='nebula'?'grove':'nebula')
+  await frame.waitForFunction(c=>getComputedStyle(document.querySelector('dialog')).color!==c,beforeColor)
+  await page.evaluate(s=>window.WosSkin.set(s),skin)
+  await frame.waitForFunction(c=>getComputedStyle(document.querySelector('dialog')).color===c,beforeColor)
+  await settle(frame,'dialog[open]')
+  const sheetImage=path.join(out,`${shell}-${skin}-local-unsent-discard.png`);await page.screenshot({path:sheetImage})
+  // Hold the actual localStore database-open dependency, before its write transaction starts.
+  await frame.evaluate(()=>{
+   const open=indexedDB.open.bind(indexedDB);window.__qaHoldLocal=true
+   indexedDB.open=(...args)=>{const r=open(...args);return {get result(){return r.result},get error(){return r.error},set onupgradeneeded(fn){r.onupgradeneeded=fn},set onerror(fn){r.onerror=fn},set onsuccess(fn){r.onsuccess=e=>{if(window.__qaHoldLocal&&args[0]==='trackhunt-offline-v1'){window.__qaHoldLocal=false;window.__qaLocalHeld=true;window.__qaReleaseLocal=()=>{window.__qaLocalHeld=false;fn(e)}}else fn(e)}}}}
+  })
+  const beforeCount=await frame.locator('.identify-history .identify-hunt').count()
+  const immediate=await frame.getByRole('button',{name:'Discard',exact:true}).evaluate(async b=>{const t=performance.now();b.click();b.click();const syncClosed=!document.querySelector('dialog[open]');await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));return {syncClosed,ms:performance.now()-t,rows:document.querySelectorAll('.identify-history .identify-hunt').length,held:window.__qaLocalHeld,undo:document.querySelector('.identify-notice')?.textContent.includes('Undo')}})
+  assert.ok(immediate.syncClosed&&immediate.held&&immediate.undo);assert.ok(immediate.ms<100,JSON.stringify(immediate));assert.equal(immediate.rows,beforeCount-1)
+  await frame.getByRole('button',{name:'Refresh identifications'}).click()
+  await frame.waitForTimeout(300)
+  assert.equal(await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).count(),0)
+  assert.equal(baselinePosts(),beforePosts);assert.equal(await acks(frame),beforeAcks)
+  const noticeImage=path.join(out,`${shell}-${skin}-local-discard-undo.png`);await page.screenshot({path:noticeImage})
+  await frame.evaluate(()=>window.__qaReleaseLocal())
+  await frame.waitForFunction(async id=>{const d=await new Promise(res=>{const r=indexedDB.open('trackhunt-offline-v1',1);r.onsuccess=()=>res(r.result)});const row=await new Promise(res=>{const q=d.transaction('captures').objectStore('captures').get(id);q.onsuccess=()=>res(q.result)});d.close();return !!row?.discardedAt},id)
+  const removed=await read();assert.equal(removed.hash,original.hash);assert.equal(removed.id,id);assert.equal(removed.sendRequested,false)
+  await frame.goto(ORIGIN+'/wizard-music/?view=identify')
+  await frame.getByRole('button',{name:'Undo',exact:true}).waitFor()
+  await frame.evaluate(()=>dispatchEvent(new Event('online')))
+  await frame.getByRole('button',{name:'Refresh identifications'}).click()
+  await frame.waitForTimeout(12000) // six normal poll boundaries with shared pending replay
+  assert.equal(await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).count(),0)
+  assert.equal(baselinePosts(),beforePosts);assert.equal(await acks(frame),beforeAcks)
+  await frame.getByRole('button',{name:'Undo',exact:true}).click()
+  await frame.getByText('Clip restored · not sent',{exact:true}).waitFor()
+  assert.deepEqual(await read(),original)
+  await frame.getByRole('button',{name:'Refresh identifications'}).click();await frame.waitForTimeout(300)
+  assert.equal(baselinePosts(),beforePosts);assert.equal(await acks(frame),beforeAcks)
+  await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).click()
+  await frame.getByText('Not sent. You can review or send it below.',{exact:true}).waitFor()
+  await frame.getByRole('button',{name:'Send for identification',exact:true}).click()
+  await waitAcks(frame,beforeAcks+1,'Manual Send after local Undo')
+  assert.equal(baselinePosts(),beforePosts+1)
+  const stored=await(await fetch(APP+'/wizard-music/api/identify/captures/'+id)).json();assert.equal(stored.id,id);assert.equal(stored.raw_sha256,original.hash)
+  assert.equal(await read(),null)
+  rows.push({shell,skin,persisted_unsent:true,discard_same_frame:immediate,no_upload_or_ack_before_manual_send:true,shared_replay_reload_hidden:true,undo_same_uuid_blob_unsent:true,manual_send_durable_readback_before_ack:true,pageerrors:errors,screenshots:[sheetImage,noticeImage]})
+  fs.writeFileSync(path.join(out,'browser-progress.json'),JSON.stringify({complete:false,rows},null,2))
+  await context.unrouteAll({behavior:'ignoreErrors'});await context.close();continue
+ }
  await frame.getByRole('progressbar',{name:'Audio capture target'}).waitFor({state:'visible'})
  const settles={}
  // Desktop showed the shell's own screen through Music's glass: the hosted app root must be an opaque surface.

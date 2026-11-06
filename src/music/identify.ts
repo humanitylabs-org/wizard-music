@@ -6,7 +6,7 @@ export type Hunt = { id: string; created_at: string; status: string; retention_s
 export type CaptureResult = { id: string; blob: Blob; mime: string; startedAt: number; durationMs: number; partial?: boolean; meta?: { task?: string; geo?: Record<string, number>; note?: string; manualSubmit?: boolean } }
 export type CaptureHandle = { id: string; stop(): Promise<CaptureResult>; onLevel(fn: (value: number | { me?: number; them?: number }) => void): () => void }
 export type CapturePort = { start(options: Record<string, unknown>): Promise<CaptureHandle>; pending(): Promise<CaptureResult[]>; ack(id: string): Promise<unknown> }
-type LocalClip = { id: string; sharedId?: string; blob: Blob; mime: string; client_ts: string; duration_s: number; geo?: Record<string, number>; partial?: boolean; note?: string; sendRequested?: boolean }
+type LocalClip = { id: string; sharedId?: string; blob: Blob; mime: string; client_ts: string; duration_s: number; geo?: Record<string, number>; partial?: boolean; note?: string; sendRequested?: boolean; discardedAt?: number }
 type DiscardNotice = { id: string; message: string; action: 'undo' | 'discard' | 'restore' | null; error?: boolean }
 type State = { discardNotice: DiscardNotice | null; open: boolean; selected: string | null; detail: Hunt | null; hunts: Hunt[]; locals: LocalClip[]; phase: 'idle' | 'starting' | 'recording' | 'saving' | 'ready'; freshId: string | null; elapsed: number; level: number; error: string; loading: boolean; note: string; geoEnabled: boolean; sendErrors: Record<string, string>; needsTap: boolean }
 const BASE = '/wizard-music/api/identify/'
@@ -23,8 +23,73 @@ const captureOverlay = new Map<string, Hunt | null>()
 const discardOperations = new Map<string, Promise<void>>()
 const restoring = new Set<string>()
 const discardedRecords = new Map<string, Hunt>()
+// App-scoped disposition keeps custody in BOTH outboxes; never ack an unuploaded clip.
+const localOverlay = new Map<string, LocalClip>()
+const discardedLocals = new Map<string, LocalClip>()
+const uploading = new Set<string>()
+let recoveredDiscardNotice = false
+function locallyDiscarded(id: string) { return !!(localOverlay.get(id) || discardedLocals.get(id))?.discardedAt }
+function activeLocals(rows: LocalClip[]) {
+  for (const row of rows) if (row.discardedAt && !localOverlay.has(row.id)) discardedLocals.set(row.id, row)
+  const merged = new Map(rows.map(c => [c.id, c]))
+  for (const [id, row] of localOverlay) merged.set(id, row)
+  if (!recoveredDiscardNotice) {
+    recoveredDiscardNotice = true
+    const last = [...merged.values()].filter(c => c.discardedAt).sort((a, b) => b.discardedAt! - a.discardedAt!)[0]
+    if (last && !state.discardNotice) paint({ discardNotice: { id: last.id, message: 'Discarded · audio kept', action: 'undo' } })
+  }
+  return [...merged.values()].filter(c => !c.discardedAt && !locallyDiscarded(c.id))
+}
+function discardLocal(record: LocalClip): Promise<void> {
+  const id = record.id
+  if (state.phase !== 'idle' || handle || uploading.has(id)) {
+    discardFailure({ id, message: 'Wait until recording or sending has finished, then discard this clip.', action: null })
+    return Promise.resolve()
+  }
+  if (record.sendRequested !== false || locallyDiscarded(id)) return Promise.resolve()
+  const removed = { ...record, sendRequested: false, discardedAt: Date.now() }
+  discardedLocals.set(id, removed); localOverlay.set(id, removed)
+  leaveWaiting(); ++detailGeneration; ++refreshGeneration
+  paint({ ...(state.selected === id ? { selected: null, detail: null } : {}), locals: activeLocals(state.locals), hunts: activeHunts(state.hunts), freshId: state.freshId === id ? null : state.freshId, discardNotice: { id, message: 'Discarded · audio kept', action: 'undo' } })
+  const operation = (async () => {
+    await Promise.resolve()
+    const hold = window.WizardApp.update?.hold('Keeping a reversible local clip discard')
+    try {
+      await localStore('put', removed)
+    } catch {
+      discardedLocals.delete(id); localOverlay.delete(id); ++refreshGeneration
+      paint({ locals: activeLocals([...state.locals, record]) })
+      discardFailure({ id, message: 'Couldn’t discard this clip. It’s back on this device, not sent.', action: 'discard', error: true })
+    } finally { discardOperations.delete(id); hold?.release() }
+  })()
+  discardOperations.set(id, operation)
+  return operation
+}
+function restoreLocal(record: LocalClip): Promise<void> {
+  const { discardedAt: _removed, ...original } = record
+  const restored = { ...original, sendRequested: false }
+  const id = record.id
+  localOverlay.set(id, restored); ++refreshGeneration
+  paint({ locals: activeLocals(state.locals), discardNotice: { id, message: 'Restoring clip…', action: null } })
+  restoring.add(id)
+  const operation = (async () => {
+    await Promise.resolve()
+    const hold = window.WizardApp.update?.hold('Restoring a local clip')
+    try {
+      await localStore('put', restored)
+      discardedLocals.delete(id); localOverlay.delete(id)
+      paint({ discardNotice: { id, message: 'Clip restored · not sent', action: null } })
+    } catch {
+      localOverlay.set(id, record); ++refreshGeneration
+      paint({ locals: activeLocals(state.locals) })
+      discardFailure({ id, message: 'Couldn’t restore this clip. Your audio is still kept.', action: 'restore', error: true })
+    } finally { discardOperations.delete(id); restoring.delete(id); hold?.release() }
+  })()
+  discardOperations.set(id, operation)
+  return operation
+}
 function activeHunts(rows: Hunt[]) {
-  const merged = new Map(rows.filter(h => h.retention_state !== 'discarded').map(h => [h.id, h]))
+  const merged = new Map(rows.filter(h => h.retention_state !== 'discarded' && !locallyDiscarded(h.id)).map(h => [h.id, h]))
   for (const [id, record] of captureOverlay) {
     if (record === null) merged.delete(id)
     else if (!merged.has(id)) merged.set(id, record)
@@ -41,6 +106,9 @@ function discardFailure(notice: DiscardNotice) {
 }
 function discard(id: string): Promise<void> {
   if (discardOperations.has(id)) return discardOperations.get(id)!
+  const local = state.locals.find(c => c.id === id)
+  if (local) return discardLocal(local)
+  if (locallyDiscarded(id)) return Promise.resolve()
   if (captureOverlay.get(id) === null) return Promise.resolve()
   const record = state.detail?.id === id ? state.detail : state.hunts.find(h => h.id === id)
   if (!record || record.status !== 'no_match' || record.retention_state === 'discarded' || state.phase !== 'idle' || state.locals.some(c => c.id === id)) return Promise.resolve()
@@ -73,6 +141,8 @@ function restore(id: string): Promise<void> {
     paint({ discardNotice: { id, message: 'Restoring identification…', action: null } })
     return pending.then(() => restore(id))
   }
+  const local = discardedLocals.get(id)
+  if (local) return restoreLocal(local)
   const record = discardedRecords.get(id)
   if (!record) return Promise.resolve()
   if (captureOverlay.get(id) !== null) return Promise.resolve()
@@ -145,13 +215,21 @@ export async function backendCaptureId(id: string): Promise<string> {
 }
 async function persist(result: CaptureResult, sendRequested = !result.meta?.manualSubmit): Promise<LocalClip> {
   if (!result.blob?.size) throw new Error('No audio returned. Recovery remains in shared capture.')
-  const item: LocalClip = { id: await backendCaptureId(result.id), sharedId: result.id, blob: result.blob, mime: result.mime, client_ts: new Date(result.startedAt).toISOString(), duration_s: result.durationMs / 1000, partial: result.partial, geo: result.meta?.geo, note: result.meta?.note, sendRequested }
+  const id = await backendCaptureId(result.id)
+  // Recovery must not overwrite an explicit app disposition or manual unsent intent.
+  const existing = localOverlay.get(id) || (await localStore('all')).find(c => c.id === id)
+  if (existing) { paint({ locals: activeLocals(await localStore('all')) }); return existing }
+  const item: LocalClip = { id, sharedId: result.id, blob: result.blob, mime: result.mime, client_ts: new Date(result.startedAt).toISOString(), duration_s: result.durationMs / 1000, partial: result.partial, geo: result.meta?.geo, note: result.meta?.note, sendRequested }
   await localStore('put', item)
-  paint({ locals: await localStore('all') })
+  paint({ locals: activeLocals(await localStore('all')) })
   return item
 }
 const wait = (ms: number) => new Promise(r => setTimeout(r, ms))
 export async function uploadClip(item: LocalClip) {
+  const current = (await localStore('all')).find(c => c.id === item.id)
+  if (item.discardedAt || current?.discardedAt || current?.sendRequested === false || locallyDiscarded(item.id) || discardOperations.has(item.id)) return
+  uploading.add(item.id)
+  try {
   const q = new URLSearchParams({ id: item.id, client_ts: item.client_ts, note: item.note || '' })
   if (item.geo) for (const k of ['lat', 'lon', 'accuracy_m']) if (item.geo[k] != null) q.set(k, String(item.geo[k]))
   const response = await fetch(BASE + 'captures?' + q, { method: 'POST', credentials: 'include', headers: { 'Content-Type': item.mime || item.blob.type || 'audio/webm' }, body: item.blob })
@@ -166,22 +244,27 @@ export async function uploadClip(item: LocalClip) {
   if (saved?.id !== item.id || saved.raw_sha256 !== digest) throw new Error('Sent, but the server has not confirmed the audio yet. Retrying.')
   if (item.sharedId) await window.WizardApp.capture.ack(item.sharedId)
   await localStore('delete', item.id)
+  } finally { uploading.delete(item.id) }
 }
 async function refresh() {
   const gen = ++refreshGeneration
   try {
     const [value, locals] = await Promise.all([identifyJson<{ captures: Hunt[] }>('captures'), localStore('all')])
     if (gen === refreshGeneration) {
-      paint({ hunts: activeHunts(value.captures), locals, loading: false })
+      const visibleLocals = activeLocals(locals)
+      paint({ hunts: activeHunts(value.captures), locals: visibleLocals, loading: false })
       // Once a settled restore/reverted failure is visible on the server list,
       // stop overlaying it so later edits from another device remain authoritative.
       for (const h of value.captures) if (h.retention_state !== 'discarded' && captureOverlay.get(h.id) && !discardOperations.has(h.id)) captureOverlay.delete(h.id)
     }
     if (state.selected) await detail(state.selected, false)
-  } catch (e) { if (gen === refreshGeneration) paint({ locals: await localStore('all').catch(() => state.locals), loading: false, error: (e as Error).message }) }
+  } catch (e) {
+    const locals = await localStore('all').catch(() => state.locals)
+    if (gen === refreshGeneration) paint({ locals: activeLocals(locals), loading: false, error: (e as Error).message })
+  }
 }
 async function detail(id: string, selecting = true) {
-  if (captureOverlay.get(id) === null) return
+  if (captureOverlay.get(id) === null || locallyDiscarded(id)) return
   const gen = ++detailGeneration
   if (selecting) { leaveWaiting(); paint({ selected: id, detail: null, error: '', freshId: state.freshId === id ? null : state.freshId }) }
   const local = state.locals.find(c => c.id === id)
@@ -215,7 +298,7 @@ async function drain(): Promise<void> {
         }
         let failed = false
         for (const item of await localStore('all')) {
-          if (!item.blob?.size || item.sendRequested === false || (item.partial && !item.sharedId)) continue
+          if (!item.blob?.size || item.discardedAt || locallyDiscarded(item.id) || item.sendRequested === false || (item.partial && !item.sharedId)) continue
           try {
             await uploadClip(item)
             const { [item.id]: _sent, ...rest } = state.sendErrors; paint({ sendErrors: rest })
@@ -265,13 +348,14 @@ async function stop() {
   await finish(true)
 }
 async function submit(id: string) {
-  if (state.phase === 'saving') return
+  if (!['idle', 'ready'].includes(state.phase) || discardOperations.has(id) || locallyDiscarded(id)) return
   paint({ phase: 'saving', selected: id, detail: null, error: '' })
   try {
     const item = (await localStore('all')).find(c => c.id === id)
     if (!item) throw new Error('Clip unavailable on this device.')
+    if (item.discardedAt || locallyDiscarded(id)) throw new Error('Restore this clip before sending it.')
     await localStore('put', { ...item, sendRequested: true })
-    paint({ locals: await localStore('all'), phase: 'idle' }); readyClip = null
+    paint({ locals: activeLocals(await localStore('all')), phase: 'idle' }); readyClip = null
     showSubmission(item); void drain()
   } catch (e) { paint({ phase: 'idle', error: (e as Error).message }) }
 }

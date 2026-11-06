@@ -62,7 +62,7 @@ def main():
         # Empty throwaway hub and generated silence: no owner audio/names/data are used.
         home.mkdir()
         with wave.open(str(OUT/'synthetic.wav'),'wb') as f:
-            f.setparams((1,2,44100,0,'NONE','not compressed')); f.writeframes(b'\0\0'*44100)
+            f.setparams((1,2,44100,0,'NONE','not compressed')); f.writeframes(b'\0\0'*44100*7)
     else:
         shutil.copytree(INPUT/'hub-home',home)
         with (OUT/'migration.log').open('w') as f:run([PY,'hub/import_trackhunt.py',INPUT/'trackhunt',home,'--backup',OUT/'migration-backup'],stdout=f,stderr=subprocess.STDOUT)

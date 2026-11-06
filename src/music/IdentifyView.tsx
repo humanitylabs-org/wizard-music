@@ -153,7 +153,9 @@ export function IdentifyView({ notify }: { notify(message: string): void }) {
           {waiting && <p className="identify-result-hint">About 6 seconds in our last check. Noisy clips can take longer.</p>}
         </div>
         {detail?.note && <p className="identify-muted">“{detail.note}”</p>}
-        {local?.sendRequested === false && <button type="button" className="identify-send" disabled={saving} onClick={() => { void identifyControl.submit(local.id) }}>Send for identification</button>}
+        {local?.sendRequested === false && <><button type="button" className="identify-send" disabled={saving} onClick={() => { void identifyControl.submit(local.id) }}>Send for identification</button>
+          {state.phase === 'idle' && <button type="button" className="identify-quiet" onClick={() => { flushSync(() => { void identifyControl.discard(local.id) }) }}>Discard</button>}
+        </>}
         {local && sendError && <button type="button" className="identify-send" onClick={() => { void identifyControl.drain() }}>Try again</button>}
       </div>
       {(detail || local) && <>
