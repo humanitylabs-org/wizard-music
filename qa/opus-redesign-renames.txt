@@ -1,8 +1,7 @@
-# Wording/composition changes only; no feature waivers. The start label is unchanged,
-# but moved out of a JSX line into phaseText, outside the gate's line-based inventory.
+# Wording/composition changes against exact live c9e6ea8; no feature waivers.
+# Starting microphone… survives in phaseText outside the line-based label inventory.
 label:Hear something? Tap Identify. Every clip is kept. => Hear something? Tap the button above. Every clip is kept. | test=tests/shazam-redesign.test.tsx | token=Identifications
 label:Identify => Identify a song | test=tests/shazam-redesign.test.tsx | token=Identify song
-label:No match yet. The audio is safe. => No match yet | test=tests/shazam-redesign.test.tsx | token=identify-result
 label:Not listed? => Not listed? Search or add it | test=tests/shazam-redesign.test.tsx | token=Search title or artist
 label:Refresh => Refresh identifications | test=tests/shazam-redesign.test.tsx | token=Refresh identifications
 label:Starting microphone… => Starting microphone… | test=tests/shazam-redesign.test.tsx | token=starting

@@ -7,10 +7,10 @@ export type CaptureResult = { id: string; blob: Blob; mime: string; startedAt: n
 export type CaptureHandle = { id: string; stop(): Promise<CaptureResult>; onLevel(fn: (value: number | { me?: number; them?: number }) => void): () => void }
 export type CapturePort = { start(options: Record<string, unknown>): Promise<CaptureHandle>; pending(): Promise<CaptureResult[]>; ack(id: string): Promise<unknown> }
 type LocalClip = { id: string; sharedId?: string; blob: Blob; mime: string; client_ts: string; duration_s: number; geo?: Record<string, number>; partial?: boolean; note?: string; sendRequested?: boolean }
-type State = { open: boolean; selected: string | null; detail: Hunt | null; hunts: Hunt[]; locals: LocalClip[]; phase: 'idle' | 'starting' | 'recording' | 'saving' | 'ready'; freshId: string | null; elapsed: number; level: number; error: string; loading: boolean; note: string; geoEnabled: boolean; sendErrors: Record<string, string> }
+type State = { open: boolean; selected: string | null; detail: Hunt | null; hunts: Hunt[]; locals: LocalClip[]; phase: 'idle' | 'starting' | 'recording' | 'saving' | 'ready'; freshId: string | null; elapsed: number; level: number; error: string; loading: boolean; note: string; geoEnabled: boolean; sendErrors: Record<string, string>; needsTap: boolean }
 const BASE = '/wizard-music/api/identify/'
 const ACTIVE = 'wizard-music.identify.active.v1'
-let state: State = { open: false, selected: null, detail: null, hunts: [], locals: [], phase: 'idle', freshId: null, elapsed: 0, level: 0, error: '', loading: false, note: '', geoEnabled: false, sendErrors: {} }
+let state: State = { open: false, selected: null, detail: null, hunts: [], locals: [], phase: 'idle', freshId: null, elapsed: 0, level: 0, error: '', loading: false, note: '', geoEnabled: false, sendErrors: {}, needsTap: false }
 const listeners = new Set<() => void>()
 function paint(patch: Partial<State>) { state = { ...state, ...patch }; listeners.forEach(fn => fn()) }
 let handle: CaptureHandle | null = null, startedAt = 0, tick = 0, autoStop = 0, offLevel: (() => void) | undefined
@@ -18,7 +18,8 @@ let releaseHold: (() => void) | undefined
 let draining: Promise<void> | null = null
 let detailGeneration = 0, refreshGeneration = 0
 let closePlayer: (() => void) | undefined
-export const IDENTIFY_TARGET_SECONDS = 15
+export const IDENTIFY_TARGET_SECONDS = 12
+let recordingId = ''
 export const IDENTIFY_LIMIT_SECONDS = 30
 // Navigation invalidates the one opportunity to open this submission, never its audio custody.
 let navigation = 0, captureNavigation = 0, cancelled = false, readyClip: LocalClip | null = null
@@ -26,7 +27,7 @@ function stillWaiting() { return captureNavigation === navigation && state.open 
 function leaveWaiting() { ++navigation }
 function showSubmission(item: LocalClip) {
   paint({ freshId: item.id })
-  if (stillWaiting()) void detail(item.id)
+  // Selection happens in the send event, before saving. Never reopen after navigation or a late reply.
 }
 
 
@@ -141,7 +142,7 @@ async function start(resume?: { id: string; startedAt: number }) {
   if (state.phase !== 'idle') { paint({ open: true }); return }
   // This is before capture/permissions, storage, geolocation or any network request.
   captureNavigation = ++navigation; cancelled = false; readyClip = null
-  paint({ open: true, selected: null, detail: null, phase: 'starting', elapsed: 0, error: '' })
+  paint({ open: true, selected: null, detail: null, phase: 'starting', elapsed: 0, error: '', needsTap: false })
   closePlayer?.()
   const hold = window.WizardApp.update?.hold('Saving a song identification clip')
   releaseHold = () => hold?.release()
@@ -153,6 +154,7 @@ async function start(resume?: { id: string; startedAt: number }) {
     const captured = await window.WizardApp.capture.start({ kind: 'audio', resumeId: resume?.id, chunkMs: 1000, maxMs: Math.max(1000, IDENTIFY_LIMIT_SECONDS * 1000 - (resume ? Date.now() - resume.startedAt : 0)), audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, meta: { task: 'music-identify', manualSubmit: true, geo, note: state.note } })
     handle = { id: captured.id, onLevel: fn => captured.onLevel(fn), stop: async () => { const result = await captured.stop(); return { ...result, meta: { ...result.meta, geo: geo || result.meta?.geo } } } }
     startedAt = resume?.startedAt || Date.now()
+    recordingId = await backendCaptureId(handle.id)
     localStorage.setItem(ACTIVE, JSON.stringify({ id: handle.id, startedAt }))
     if (cancelled) { await finish(false); return }
     offLevel = handle.onLevel(v => paint({ level: Math.max(0, Math.min(1, typeof v === 'number' ? v : Math.max(v.me || 0, v.them || 0))) }))
@@ -161,10 +163,10 @@ async function start(resume?: { id: string; startedAt: number }) {
       if (!(window.WizardApp.view?.isVisible?.() ?? !document.hidden)) leaveWaiting()
       if (state.phase === 'recording') paint({ elapsed: Math.min(IDENTIFY_LIMIT_SECONDS, (Date.now() - startedAt) / 1000) })
     }, 200)
-    // The safety limit stops the microphone, not the owner's decision to send.
-    autoStop = window.setTimeout(() => { void finish(false, true) }, Math.max(0, IDENTIFY_LIMIT_SECONDS * 1000 - (Date.now() - startedAt)))
+    // Twelve seconds is guidance, not send. The unchanged 30 s hard cap sends when capture stops.
+    autoStop = window.setTimeout(() => { void finish(true) }, Math.max(0, IDENTIFY_LIMIT_SECONDS * 1000 - (Date.now() - startedAt)))
   } catch (e) {
-    paint({ phase: 'idle', error: (e as Error).message || 'Microphone unavailable. Try Identify again.' })
+    paint({ phase: 'idle', needsTap: true, error: (e as Error).message || 'Microphone unavailable. Tap to try again.' })
     releaseHold?.(); releaseHold = undefined
     if ((e as { code?: string }).code === 'not_recoverable') localStorage.removeItem(ACTIVE)
   }
@@ -175,7 +177,7 @@ async function stop() {
 }
 async function submit(id: string) {
   if (state.phase === 'saving') return
-  paint({ phase: 'saving', error: '' })
+  paint({ phase: 'saving', selected: id, detail: null, error: '' })
   try {
     const item = (await localStore('all')).find(c => c.id === id)
     if (!item) throw new Error('Clip unavailable on this device.')
@@ -187,7 +189,8 @@ async function submit(id: string) {
 async function finish(send: boolean, atLimit = false) {
   if (!handle || state.phase === 'saving') return
   if (!stillWaiting()) leaveWaiting()
-  paint({ phase: 'saving' })
+  // Paint this local clip immediately; saving still precedes recognition and late replies cannot reopen it.
+  paint({ phase: 'saving', ...(send && !cancelled && stillWaiting() ? { selected: recordingId, detail: null } : {}) })
   window.clearTimeout(autoStop); offLevel?.()
   try {
     const result = await handle.stop()
@@ -231,7 +234,13 @@ export const identifyControl = {
     const hidden = () => { if (!(window.WizardApp.view?.isVisible?.() ?? !document.hidden)) leaveWaiting() }; document.addEventListener('visibilitychange', hidden)
     const online = () => { retryDelay = 5000; window.clearTimeout(retryTimer); retryTimer = 0; void drain() }
     window.addEventListener('online', online)
-    const poll = window.setInterval(() => { if (!(window.WizardApp.view?.isVisible?.() ?? !document.hidden)) leaveWaiting(); if (state.open && !this.busy()) void refresh() }, 5000)
+    let polls = 0
+    const poll = window.setInterval(() => {
+      if (!(window.WizardApp.view?.isVisible?.() ?? !document.hidden)) leaveWaiting()
+      if (!state.open || this.busy()) return
+      if (state.selected && (!state.detail || ['pending', 'uploaded', 'hunting'].includes(state.detail.status))) void detail(state.selected, false)
+      if (++polls % 3 === 0) void refresh()
+    }, 2000)
     try {
       const active = JSON.parse(localStorage.getItem(ACTIVE) || 'null')
       const pending = await window.WizardApp.capture.pending()

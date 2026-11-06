@@ -20,7 +20,13 @@ Safety: save raw bytes + checksum before enqueue; idempotent UUID/digest upload;
 
 Verification: existing tests plus focused recognition/no-match/audio custody, idempotent upload/restart, confirmation persistence, voice exactness, held capture/I/O and Back/outside-tap. All builds/browser execution queued on forum. Five failed verification runs total ends repair loop.
 
-## Recording/result UX correction
+## Current four-improvement brief (supersedes target/cap and voice policy below)
+
+The newer explicit brief sets a **12-second circular elapsed-audio target**, never auto-send at 12, and **automatic send at the existing 30-second capture hard cap**. Cancel and unsent drafts remain available and retain their existing custody/retry intent. The concurrent live Identifications wording, New marker and navigation-away protections are preserved. Sending opens this local clip before saving/network and never reopens it after leaving. Device-shell `voice_routes` data replaces Music's hidden receiver and priority claims. Search paints pending immediately, debounces 250 ms and aborts/fences stale replies. Recognition timing uses one live migrated-capture retry: 6.13 seconds, explicitly described as one last check, not a guaranteed typical latency.
+
+Shazam-like presentation (Opus redesign, `docs/SHazam-UX-ACCEPTANCE.md`) carries this policy unchanged: the 12-second ring wraps the central listening orb, Find it is the one filled action, and the clip sheet's hero shows Saving → Sending → Finding your track with the measured-timing hint.
+
+## Recording/result UX correction (historical; policies superseded above)
 
 Source baseline: actual serving `/home/telos/apps/wizard-music-releases/550ed0f`, byte-equivalent (excluding dist/dependencies) to remote-backed `feat/identify` commit `550ed0f`. The old owner-live repository's main is not this release. Work is isolated on `fix/identify-recording-ux-20261106`; no serving checkout is edited.
 

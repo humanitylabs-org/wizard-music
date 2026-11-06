@@ -1,6 +1,7 @@
 /* Wizard OS Appearance v1, app-local styles consuming the shared WizardApp client.
  * Applies inside a Wizard host that sent valid context (html[data-wz-hosted], set by shared core);
- * standalone Music is untouched and paints its own #0f1014. Canvas transparent on the shell's window glass; mini player,
+ * standalone Music is untouched and paints its own #0f1014. #root layers the canvas over the opaque skin base so the
+ * shell's own screen (e.g. desktop "Choose a chat") never shows through Music's text; mini player,
  * Now Playing and toasts on the overlay material; cards/chips/inputs on ink surfaces; ink and hairlines follow the skin.
  * Music KEEPS its own violet accent (--wiz / --wiz-deep) and its album-art treatment. */
 :root[data-wz-hosted] .music-shell-head { display: none; }
@@ -15,7 +16,9 @@
   --text-dim: var(--wz-text-muted);
   background: var(--wz-canvas);
 }
-:root[data-wz-hosted], :root[data-wz-hosted] body, :root[data-wz-hosted] #root { background: var(--wz-canvas); }
+:root[data-wz-hosted], :root[data-wz-hosted] body { background: var(--wz-canvas); }
+/* html/body stay the shell's transparent canvas (Appearance v1); the full-height app root is the opaque surface. */
+:root[data-wz-hosted] #root { background: linear-gradient(var(--wz-canvas), var(--wz-canvas)), var(--wz-base); }
 :root[data-wz-hosted] .music-mini { background: color-mix(in srgb, var(--wz-overlay) 94%, var(--wiz) 6%); -webkit-backdrop-filter: blur(18px) saturate(1.2); backdrop-filter: blur(18px) saturate(1.2); }
 :root[data-wz-hosted] .music-now { background: linear-gradient(180deg, color-mix(in srgb, var(--wiz-deep) 22%, var(--wz-overlay)) 0%, var(--wz-overlay) 46%); -webkit-backdrop-filter: blur(22px) saturate(1.2); backdrop-filter: blur(22px) saturate(1.2); }
 :root[data-wz-hosted] .music-toast { background: var(--wz-overlay); -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px); }

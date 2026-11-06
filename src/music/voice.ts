@@ -143,44 +143,21 @@ export async function runMusicCommand(cmd: MusicCommand, notify: (message: strin
 
 type Incoming = { type?: string; id?: string; cmd?: MusicCommand; text?: string }
 
-/** Listen for orb commands from the Wizard OS shell (same origin only). */
-const IDENTIFY_COMMAND = 'wizard-music.identify.command.v1'
-export function installIdentifyClaims(notify: (message: string) => void): () => void {
-  const receive = async (text: string) => {
-    const cmd = parseMusicCommand(text)
-    if (cmd?.op !== 'identify') return false
-    // The hidden voice receiver never records itself; only the visible Music app owns the microphone.
-    const receiver = (() => { try { return !!(window.frameElement as HTMLElement | null)?.dataset.voiceService } catch { return false } })()
-    if (!receiver && window.WizardApp.view?.isVisible()) { await runMusicCommand(cmd, notify); return true }
-    localStorage.setItem(IDENTIFY_COMMAND, JSON.stringify({ id: crypto.randomUUID(), at: Date.now() }))
-    return await window.WizardApp.shell?.focusApp() === true
+/** The shell owns speech. Music receives only an explicit URL route or a parsed player command. */
+export function installMusicRoute(notify: (message: string) => void): () => void {
+  let last = ''
+  const take = () => {
+    if (location.href === last) return
+    last = location.href
+    const params = new URL(location.href).searchParams
+    if (params.get('view') !== 'identify' || params.get('listen') !== '1') return
+    const q = params.get('q')?.trim() || ''
+    const command = q ? parseMusicCommand(q, true) : { op: 'identify' as const }
+    if (command) void runMusicCommand(command, notify).catch(e => notify((e as Error).message))
   }
-  const unregister = window.WizardApp.voice?.commands.register({
-    claims(text, context) { return context.kind === 'command' && context.stage === 'priority' && parseMusicCommand(text)?.op === 'identify' },
-    receive,
-  })
-  return () => { unregister?.() }
-}
-export function installPendingIdentify(): () => void {
-  let checking = false
-  const take = async () => {
-    if (checking || !window.WizardApp.view?.isVisible()) return
-    checking = true
-    const consume = async () => {
-      let value: {id: string; at: number} | null = null
-      try { value = JSON.parse(localStorage.getItem(IDENTIFY_COMMAND) || 'null') } catch { /* ignore bad old storage */ }
-      if (!value) return
-      localStorage.removeItem(IDENTIFY_COMMAND)
-      if (Date.now() - value.at > 30000 || Date.now() < value.at) return
-      flushSync(() => { void identifyControl.start() })
-    }
-    try { if (navigator.locks) await navigator.locks.request('music-identify-command', consume); else await consume() } finally { checking = false }
-  }
-  const onStorage = () => { void take() }
-  window.addEventListener('storage', onStorage); window.addEventListener('focus', onStorage)
-  const timer = window.setInterval(onStorage, 250)
-  void take()
-  return () => { clearInterval(timer); window.removeEventListener('storage', onStorage); window.removeEventListener('focus', onStorage) }
+  take()
+  window.addEventListener('popstate', take); window.addEventListener('hashchange', take)
+  return () => { window.removeEventListener('popstate', take); window.removeEventListener('hashchange', take) }
 }
 
 export function installMusicVoice(notify: (message: string) => void) {
@@ -191,7 +168,6 @@ export function installMusicVoice(notify: (message: string) => void) {
     const data = event.data || {}
     let cmd: MusicCommand | null = null
     if (data.type === 'wizard-os:music' && data.cmd && typeof data.cmd.op === 'string') cmd = data.cmd
-    else if (data.type === 'wizard-os:voice' && typeof data.text === 'string') cmd = parseMusicCommand(data.text, true)
     if (!cmd) return
     if (data.id) reply({ type: 'wizard-os:music:ack', id: data.id })
     // The orb shows the outcome; the app stays quiet until then (a late "Got it — no more …" still shows here).

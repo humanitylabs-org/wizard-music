@@ -42,7 +42,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   // A real owner box has an AI signed in and setup finished, so the first-run Welcome never covers the app.
   if(u.pathname==='/wizard/hermes/api/model/options')return route.fulfill({json:{provider:'anthropic',providers:[{slug:'anthropic',authenticated:true}]}})
   if(u.pathname==='/wizard/v1/setup')return route.fulfill({json:{first_run:false,state:'done'}})
-  if(u.pathname==='/wizard/v1/apps')return route.fulfill({json:{apps:[{id:'wizard-music',name:'Music',url:'/wizard-music/',view:{mode:'original',url:'/wizard-music/'},source:'apps.json',type:'service',provides:['music','voice-commands'],voice_names:['Music','Wizard Music']}]}})
+  if(u.pathname==='/wizard/v1/apps')return route.fulfill({json:{apps:[{id:'wizard-music',name:'Music',url:'/wizard-music/',view:{mode:'original',url:'/wizard-music/'},source:'launcher.json',type:'service',provides:['music'],voice_names:['Music','Wizard Music'],voice_routes:[{words:['music','shazam'],open:'?view=identify&listen=1',rest_param:'q'}]}]}})
   if(u.pathname.startsWith('/wizard/') || u.pathname.startsWith('/api/') || u.pathname.startsWith('/notifications/') || u.pathname.startsWith('/pages/')){
    if(req.method()!=='GET')return route.fulfill({status:403,json:{error:'No owner writes in isolated QA'}})
    return route.fulfill({json:u.pathname.endsWith('/ui-preferences')?{pinnedChats:[],spaces:[],migrations:{'launcher.v1':true}}:u.pathname.endsWith('/sessions')?{data:[],has_more:false}:u.pathname.endsWith('/items')?{items:[]}:u.pathname.endsWith('/count')?{unread:0,needs:0}:{}})
@@ -64,6 +64,27 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const tag=async r=>{try{const el=await r.frame().frameElement();return (await el.getAttribute('data-voice-service'))?'hidden':'visible'}catch{return 'page'}}
  const netLines=[];page.on('request',async r=>{if(r.url().includes('/identify/'))netLines.push(ts()+' '+await tag(r)+' '+r.method()+' '+r.url().slice(0,160))});page.on('requestfailed',r=>netLines.push(ts()+' FAILED '+r.method()+' '+r.url().slice(0,160)+' '+(r.failure()?.errorText||'')));page.on('response',r=>{if(r.url().includes('/identify/'))netLines.push(ts()+' RESP '+r.status()+' '+r.request().method()+' '+r.url().slice(0,160))})
  const dump=async(frame,label)=>{const ui=await frame.evaluate(()=>({alert:document.querySelector('[role=alert]')?.textContent||'',text:document.body.innerText.slice(0,800)})).catch(e=>({err:e.message}));await page.screenshot({path:path.join(out,`${shell}-${skin}-FAIL-${label}.png`)}).catch(()=>{});return JSON.stringify({label,ui,netLines:netLines.slice(-40),consoleLines:consoleLines.slice(-20),errors})}
+ // Bounded settle before a raster: the frame's box in the shell and the target's box hold still for six
+ // animation frames with no finite animation running (endless breathing/ripples and the per-tick ring fill are
+ // the product's own steady motion and are not waited on). Never disables motion or edits styles.
+ const still=([target,n])=>{const node=typeof target==='string'?document.querySelector(target):target;const r=node?.getBoundingClientRect();const key=r?[r.x,r.y,r.width,r.height].map(Math.round).join():'none'
+  const moving=document.getAnimations().some(a=>a.playState==='running'&&a.transitionProperty!=='stroke-dashoffset'&&Number.isFinite(a.effect?.getComputedTiming?.().endTime))
+  const s=window.__qaStill||(window.__qaStill={key:'',n:0});if(moving||key!==s.key){s.key=key;s.n=0;return false};return ++s.n>=n}
+ const settle=async(f,sel)=>{
+  const host=f.parentFrame()||page.mainFrame(),frameEl=await f.frameElement()
+  await host.evaluate(()=>{window.__qaStill=null});await f.evaluate(()=>{window.__qaStill=null})
+  const t=Date.now()
+  const shellStill=await host.waitForFunction(still,[frameEl,6],{polling:'raf',timeout:4000}).then(()=>true,()=>false)
+  const appStill=await f.waitForFunction(still,[sel,6],{polling:'raf',timeout:4000}).then(()=>true,()=>false)
+  return {shellStill,appStill,ms:Date.now()-t}
+ }
+ // Scroll every scrolled app element back to its top, assert the target is wholly inside the visible frame, then settle.
+ const atTop=async(f,sel)=>{
+  await f.evaluate(()=>{for(const el of [document.scrollingElement,...document.querySelectorAll('*')])if(el&&(el.scrollTop||el.scrollLeft))el.scrollTo({top:0,left:0,behavior:'instant'})})
+  const r=await f.locator(sel).first().evaluate(el=>{const b=el.getBoundingClientRect();return {top:b.top,bottom:b.bottom,left:b.left,right:b.right,h:innerHeight,w:innerWidth}})
+  assert.ok(r.top>=0&&r.left>=0&&r.bottom<=r.h&&r.right<=r.w,sel+' is outside the visible app: '+JSON.stringify(r))
+  return {...await settle(f,sel),rect:r}
+ }
  const acks=f=>f.evaluate(()=>JSON.parse(localStorage.getItem('qa.acks')||'[]').length)
  const waitAcks=async(f,n,label)=>{const end=Date.now()+30000;while(Date.now()<end){if(await acks(f).catch(()=>0)>=n)return;await new Promise(r=>setTimeout(r,250))}
   const replay=await f.evaluate(async()=>{const out={href:location.href,frameAcks:window.__qaAcks,shared:localStorage.getItem('qa.acks')};try{const d=await new Promise((res,rej)=>{const r=indexedDB.open('trackhunt-offline-v1',1);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});const rows=await new Promise(res=>{const q=d.transaction('captures').objectStore('captures').getAll();q.onsuccess=()=>res(q.result)});out.locals=[];for(const it of rows){const dig=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await it.blob.arrayBuffer())),n=>n.toString(16).padStart(2,'0')).join('');const r=await fetch('/wizard-music/api/identify/captures/'+it.id,{credentials:'include'});let j=null;try{j=await r.json()}catch(e){j={parse:e.message}};out.locals.push({id:it.id,shared:it.sharedId,size:it.blob.size,digest:dig,status:r.status,server:{id:j?.id,raw_sha256:j?.raw_sha256,status:j?.status,error:j?.error}})}}catch(e){out.replayError=e.message}return out}).catch(e=>({evalError:e.message}))
@@ -71,59 +92,55 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await page.addInitScript(()=>{try{if(location.pathname.startsWith('/wizard-os-home/'))localStorage.setItem('wos.welcome.v1','done')}catch{}})
  await page.goto(ORIGIN+'/wizard-os-home/'+(shell==='phone'?'?shell=phone':'desktop.html'),{waitUntil:'load'})
  await page.waitForFunction(([sh,sk])=>document.documentElement.dataset.shell===sh&&document.documentElement.dataset.skin===sk,[shell,skin])
- await page.waitForFunction(()=>window.WizAppServices?.inspect().some(x=>x.appId==='wizard-music'&&x.ready))
- // The shell marks a frame ready when app-client connects; the app's React claim registers a moment later.
- // Wait for the real claim (bounded), and on failure dump what the hidden receiver actually has.
- const claimed=await page.waitForFunction(()=>!!window.WizAppServices.voiceCommand('music',{stage:'priority',kind:'command',view:{kind:'thread list'}}),null,{timeout:20000}).then(()=>true,()=>false)
- if(!claimed){
-  const diag=await page.evaluate(()=>{const f=document.querySelector('iframe[data-voice-service="wizard-music"]');const w=f?.contentWindow;let reg='no-frame';try{if(w){w.WizardApp.voice.commands.register({claims:()=>false,receive:async()=>false});reg='nothing-registered'}}catch(e){reg='registered:'+e.message}return {frame:!!f,src:f?.src,root:w?.document.getElementById('root')?.outerHTML?.slice(0,300),reg,inspect:window.WizAppServices.inspect()}})
-  throw Error('Music never claimed bare "music": '+JSON.stringify({diag,errors,consoleLines:consoleLines.slice(-20)}))
- }
- // Use the shell's real priority dispatcher with a deliberately colliding bare Music app name.
- const command=await page.evaluate(()=>{
-  const grammar=window.WosCommands.create({CHATS:{},APP:{},appByName:()=>({name:'Music'}),findApp:()=>null,quickSearch:()=>null,sendSnap:()=>({view:{kind:'thread list'}})})
+ await page.waitForFunction(sh=>window.WizCore.apps(sh).APP['wizard-music']?.voice_routes?.length,shell)
+ const command=await page.evaluate(sh=>{
+  const registry=window.WizCore.apps(sh)
+  const grammar=window.WosCommands.create({CHATS:{},...registry,quickSearch:()=>null,sendSnap:()=>({view:{kind:'thread list'}})})
   const cmd=grammar.parse('music',{view:{kind:'thread list'}},'command')
-  if(cmd?.action!=='app_voice')throw Error('Bare music was swallowed by app-open routing: '+JSON.stringify(cmd))
-  if(!window.WosAppVoice.execute(cmd,'music',{}))throw Error('Identify claim was not admitted')
+  if(cmd?.action!=='open_app_route')throw Error('Bare music did not use its declared route: '+JSON.stringify(cmd))
+  let admitted=false
+  const remove=window.WosFeatures.register({id:'qa-music-route',run:H=>{admitted=H.command('music',{view:{kind:'thread list'}})}})
+  window.WosFeatures.open('qa-music-route');remove()
+  if(!admitted)throw Error('Shell did not open the Music route')
+  if(document.querySelector('iframe[data-voice-service="wizard-music"]'))throw Error('Music still has a hidden voice receiver')
   return cmd.action
- })
+ },shell)
  const visible=page.locator('iframe:not([data-voice-service])[src*="/wizard-music/"]:visible').last()
  await visible.waitFor({state:'visible'})
  const frame=await (await visible.elementHandle()).contentFrame()
- await frame.getByRole('button',{name:'Send for identification',exact:true}).waitFor({state:'visible'})
- assert.ok(await frame.getByRole('button',{name:'Send for identification',exact:true}).isEnabled(),'early send stays available')
- assert.equal(await frame.getByRole('progressbar',{name:'Recording duration'}).getAttribute('max'),'15')
- await frame.getByText('Keep going · aim for about 15 seconds.',{exact:true}).waitFor()
- if(shell==='phone' && skin==='nebula'){
-  await frame.getByText('Send whenever ready.',{exact:true}).waitFor({timeout:20000})
-  assert.equal(await acks(frame),0,'15s target never auto-sends')
- }
- // Switch skins while Music stays mounted; both directions use shared Appearance v1.
+ await frame.getByRole('progressbar',{name:'Audio capture target'}).waitFor({state:'visible'})
+ const settles={}
+ // Desktop showed the shell's own screen through Music's glass: the hosted app root must be an opaque surface.
+ const rootBg=await frame.evaluate(()=>getComputedStyle(document.getElementById('root')).backgroundColor)
+ const rootAlpha=(m=>m?Number(m[1]??1):0)(rootBg.match(/^rgba?\([^,]+,[^,]+,[^,)]+(?:,\s*([\d.]+))?\)$/))
+ if(rootAlpha<1)throw Error('Hosted Music root lets the shell show through in '+skin+': '+rootBg)
  const beforeColor=await frame.locator('.identify-view').evaluate(el=>getComputedStyle(el).color)
  await page.evaluate(s=>window.WosSkin.set(s),skin==='nebula'?'grove':'nebula')
  await frame.waitForFunction(prior=>getComputedStyle(document.querySelector('.identify-view')).color!==prior,beforeColor)
  await page.evaluate(s=>window.WosSkin.set(s),skin)
  await frame.waitForFunction(prior=>getComputedStyle(document.querySelector('.identify-view')).color===prior,beforeColor)
+ // The recording pane can still be sliding in (Grove phone was caught ~107px across): settle before the raster.
+ settles.recording=await atTop(frame,'.identify-orb-wrap')
  const recordingImage=path.join(out,`${shell}-${skin}-identify-recording.png`)
  await page.screenshot({path:recordingImage})
- netLines.push(ts()+' CLICK Stop and identify; starts='+JSON.stringify(await frame.evaluate(()=>window.__qaStarts.length)))
- await frame.getByRole('button',{name:'Send for identification',exact:true}).click()
- netLines.push(ts()+' CLICKED')
- // Stop must take effect at once (the recording panel leaves Listening); a covered or swallowed tap fails here, not 30 s later.
- const stopped=await frame.waitForFunction(()=>!/Listening…/.test(document.querySelector('.identify-recording')?.textContent||''),null,{timeout:5000}).then(()=>true,()=>false)
- if(!stopped)throw Error('Stop and identify did not take effect: '+JSON.stringify({welcome:await page.evaluate(()=>({active:window.WosWelcome?.active,log:window.WosWelcome?.log}))})+' '+await dump(frame,'stop-click'))
+ await frame.getByRole('button',{name:/^Find it/}).click()
  await frame.locator('dialog[open]').waitFor()
+ // The clip's sheet opens on the tap itself, before saving or any upload.
  await frame.getByRole('heading',{name:/Identification/,exact:false}).last().waitFor()
- await frame.waitForTimeout(400) // let the sheet's open animation finish before judging it
+ settles.waiting=await settle(frame,'dialog[open]')
  const waitingImage=path.join(out,`${shell}-${skin}-identify-waiting.png`)
  await page.screenshot({path:waitingImage})
- await waitAcks(frame,1,'Upload after Send')
- // The submitted result opened while waiting, not only after recognition finished.
+ await waitAcks(frame,1,'Upload after Find it')
+ settles.results=await settle(frame,'dialog[open]')
+ const resultsImage=path.join(out,`${shell}-${skin}-identify-results.png`)
+ await page.screenshot({path:resultsImage})
+ assert.match(await frame.locator('dialog[open]').innerText(),/Finding your track|No match|Possible matches/)
  await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
  await frame.waitForFunction(()=>!document.querySelector('dialog[open]'))
  // Open imported hunt and verify media really decodes. History sits under the Identify stage (James's Shazam-like redesign).
  await frame.getByRole('heading',{name:'Identifications',exact:true}).waitFor()
  assert.ok(await frame.getByRole('button',{name:'Identify song',exact:true}).isVisible(),'one large Identify control on the idle stage')
+ settles.idle=await atTop(frame,'.identify-stage button.identify-orb')
  const idleImage=path.join(out,`${shell}-${skin}-identify-idle.png`)
  await page.screenshot({path:idleImage})
  const row=frame.locator('.identify-hunt').filter({hasText:hunt.best_title}).first()
@@ -150,6 +167,8 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  // Music home: one Identify entry with Identifications beside it, no duplicated top button row.
  await frame.locator('.identify-entry').waitFor({state:'visible'})
  assert.equal(await frame.getByRole('button',{name:/^Identifications/}).count(),1,'one Identifications link on home')
+ // Earlier home captures were left scrolled into the library by the hunt-row click; judge the real top of home.
+ const homeTop=await atTop(frame,'.identify-entry')
  const homeImage=path.join(out,`${shell}-${skin}-music-home.png`)
  await page.screenshot({path:homeImage})
  // Held permission paints starting immediately, then offline stop persists without ack.
@@ -158,12 +177,12 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await frame.getByText('Starting microphone…',{exact:true}).waitFor()
  assert.equal(await frame.evaluate(()=>window.__qaStarts.length),2)
  await frame.evaluate(()=>{window.__qaHold=false;window.__qaResolve()})
- await frame.getByText('Listening…',{exact:true}).waitFor()
+ await frame.getByRole('progressbar',{name:'Audio capture target'}).waitFor()
  offline=true
- await frame.getByRole('button',{name:'Send for identification',exact:true}).click()
+ await frame.getByRole('button',{name:/^Find it/}).click()
  await frame.locator('dialog[open]').waitFor()
- await frame.locator('dialog[open] [role=status]').filter({hasText:/Saved|Not sent|Retrying/}).first().waitFor()
- // "Saved · sending…" paints before the upload is tried; reconnect only once an offline upload was really refused.
+ // "Sending your clip…" paints before the upload is tried; reconnect only once an offline upload was really refused.
+ await frame.getByText('Saved on this device',{exact:true}).first().waitFor()
  for(const end=Date.now()+10000;!refusedPosts&&Date.now()<end;)await new Promise(r=>setTimeout(r,100))
  assert.ok(refusedPosts>=1,'the offline Send really attempted an upload and was refused')
  assert.equal(await acks(frame),1)
@@ -175,7 +194,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await frame.getByRole('heading',{name:'Identifications',exact:true}).waitFor()
  const listImage=path.join(out,`${shell}-${skin}-identify-hunts.png`)
  await page.screenshot({path:listImage})
- rows.push({shell,skin,priority_bare_music:command,legacy_audio_decoded:true,back_sheet_list_home:true,held_permission_same_frame:true,offline_saved_reconnected:true,screenshots:[homeImage,idleImage,recordingImage,waitingImage,sheetImage,listImage],pageerrors:errors})
+ rows.push({shell,skin,priority_bare_music:command,legacy_audio_decoded:true,back_sheet_list_home:true,held_permission_same_frame:true,offline_saved_reconnected:true,home_top:homeTop,settled:settles,screenshots:[homeImage,idleImage,recordingImage,waitingImage,resultsImage,sheetImage,listImage],pageerrors:errors})
  fs.writeFileSync(path.join(out,'browser-progress.json'),JSON.stringify({complete:false,rows},null,2))
  await context.unrouteAll({behavior:'ignoreErrors'})
  await context.close()

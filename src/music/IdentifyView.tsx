@@ -34,6 +34,25 @@ export function IdentifyEntry() {
   </div>
 }
 
+// Clean Shazam fingerprints often match from a few seconds. Wang (2003) shows
+// 10–15 s clips robust in heavy noise where 5 s clips drop off: 12 s is our
+// loud-room "enough" target, never an auto-send timer. The separate hard cap is 30 s.
+const encouragement = (elapsed: number) => elapsed < 4 ? 'Hold it up to the music…' : elapsed < 8 ? 'Catching the beat…' : elapsed < IDENTIFY_TARGET_SECONDS ? 'Almost there, keep it steady…' : 'That should be enough to find it. Keep listening a bit longer to boost the odds.'
+/** The listening orb inside the ring that fills to the 12-second target; elapsed time and encouragement underneath. */
+export function CaptureProgress({ elapsed, level = 0, phase = 'recording' }: { elapsed: number; level?: number; phase?: string }) {
+  const recording = phase === 'recording'
+  const progress = Math.min(1, elapsed / IDENTIFY_TARGET_SECONDS)
+  return <>
+    <div className={'identify-orb-wrap' + (progress >= 1 ? ' reached' : '')}>
+      <div className="identify-ring" {...(recording ? { role: 'progressbar', 'aria-label': 'Audio capture target', 'aria-valuemin': 0, 'aria-valuemax': IDENTIFY_TARGET_SECONDS, 'aria-valuenow': Math.min(IDENTIFY_TARGET_SECONDS, Math.floor(elapsed)) } : { 'aria-hidden': true })}>
+        <svg viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="48" /><circle className="identify-ring-value" cx="50" cy="50" r="48" pathLength="1" strokeDasharray="1" strokeDashoffset={1 - progress} /></svg>
+      </div>
+      <div className={'identify-orb live phase-' + phase} style={{ '--level': level } as CSSProperties} aria-hidden="true"><ListenGlyph /></div>
+    </div>
+    <strong className="identify-timer">{clock(elapsed)} <small>elapsed</small></strong>
+    <p className="identify-guidance" aria-live="polite">{phase === 'ready' ? 'Send whenever ready.' : phase === 'saving' ? 'Keeping the audio on this device first.' : recording ? encouragement(elapsed) : ' '}</p>
+  </>
+}
 function Clip({ src }: { src: string }) { return <audio key={src} controls preload="metadata" src={src} /> }
 export function IdentifyView({ notify }: { notify(message: string): void }) {
   const state = useSyncExternalStore(identifyControl.subscribe, identifyControl.snapshot)
@@ -69,35 +88,32 @@ export function IdentifyView({ notify }: { notify(message: string): void }) {
   const candidates = detail?.candidates || []
   const queued = state.locals.filter(c => !state.hunts.some(h => h.id === c.id))
   const active = state.phase !== 'idle'
-  const reached = state.elapsed >= IDENTIFY_TARGET_SECONDS
-  const progress = Math.min(1, state.elapsed / IDENTIFY_TARGET_SECONDS)
   const phaseText = state.phase === 'starting' ? 'Starting microphone…' : state.phase === 'saving' ? 'Saving your clip…' : state.phase === 'ready' ? 'Recording saved · ready to send' : 'Listening…'
-  // The result hero: the confirmed song, else the hub's best lead (labelled as a possibility), else the waiting/no-match state.
-  const waiting = !!detail && WAITING.includes(detail.status)
+  // The result hero opens on Send, before saving or network: saving → sending → finding (polled) → the song.
+  // The confirmed song, else the hub's best lead (labelled as a possibility), else the honest no-match state.
+  const saving = state.phase === 'saving'
+  const sendError = local ? state.sendErrors[local.id] : ''
+  const held = !!local && (local.sendRequested === false || !!sendError)
+  const waiting = !saving && !local && (!detail || WAITING.includes(detail.status))
+  const busy = saving || (!!local && !held) || waiting
   const lead = candidates.find(c => c.verdict === 'confirmed') || (detail?.best_title ? candidates.find(c => c.title === detail.best_title && c.verdict !== 'rejected') : undefined)
-  const heroTitle = local ? (local.sendRequested === false ? 'Not sent yet' : 'Sending your clip…') : waiting ? 'Identifying your song…' : detail?.best_title || (candidates.length ? 'Possible matches' : 'No match yet')
-  const heroStatus = local ? (local.sendRequested === false ? 'Saved on this device · not sent.' : state.sendErrors[local.id] || 'Saved · sending for identification…') : detail ? (waiting ? 'You can stay here for the result.' : label(detail.status)) : ''
+  const heroTitle = saving ? 'Saving your clip…' : local ? (held ? 'Saved on this device' : 'Sending your clip…') : waiting ? 'Finding your track…' : detail?.best_title || (candidates.length ? 'Possible matches' : detail?.status === 'error' ? 'Couldn’t finish this one' : 'No match this time')
+  const heroStatus = saving ? 'Keeping the audio on this device first.' : local ? (local.sendRequested === false ? 'Not sent. You can review or send it below.' : sendError || 'Your audio is safe here while it uploads.') : waiting ? 'Identifying…' : detail ? label(detail.status) : ''
   return <>
     {state.open && <section className="identify-view" aria-label="Song identification">
       <div className="identify-bar"><button type="button" className="identify-icon" aria-label="Back to Music" onClick={() => identifyControl.back()}><ChevronLeft /></button></div>
       <section className={'identify-stage' + (active ? ' active' : '')}>
         {active ? <div className="identify-recording">
           <p className="identify-phase" role="status">{phaseText}</p>
-          <div className={'identify-orb-wrap' + (reached ? ' reached' : '')}>
-            <svg className="identify-ring" viewBox="0 0 100 100" aria-hidden="true"><circle cx="50" cy="50" r="48" pathLength={100} /><circle className="identify-ring-value" cx="50" cy="50" r="48" pathLength={100} style={{ strokeDashoffset: 100 - progress * 100 }} /></svg>
-            <div className={'identify-orb live phase-' + state.phase} style={{ '--level': state.level } as CSSProperties} aria-hidden="true"><ListenGlyph /></div>
-          </div>
-          <strong className="identify-timer">{clock(state.elapsed)} <small>elapsed</small></strong>
-          <progress className="wz-sr" max={IDENTIFY_TARGET_SECONDS} value={Math.min(IDENTIFY_TARGET_SECONDS, state.elapsed)} aria-label="Recording duration" />
+          <CaptureProgress elapsed={state.elapsed} level={state.level} phase={state.phase} />
           <meter className="wz-sr" min={0} max={1} value={state.level} aria-label="Microphone level" />
-          <p className="identify-guidance" aria-live="polite">{state.phase === 'ready' ? 'Send whenever ready.' : state.elapsed < IDENTIFY_TARGET_SECONDS ? 'Keep going · aim for about 15 seconds.' : 'Send whenever ready.'}</p>
           <div className="identify-stage-actions">
-            <button type="button" className="identify-send" disabled={!['recording', 'ready'].includes(state.phase)} onClick={() => { flushSync(() => { void identifyControl.stop() }) }}>Send for identification</button>
+            <button type="button" className="identify-send" disabled={!['recording', 'ready'].includes(state.phase)} onClick={() => { flushSync(() => { void identifyControl.stop() }) }}>{state.elapsed < 5 ? 'Find it now · early' : 'Find it'}</button>
             <button type="button" className="identify-quiet" disabled={state.phase === 'saving'} onClick={() => identifyControl.cancel()}>Cancel</button>
           </div>
-          <p className="identify-caption">You can send early. Listening stops at {IDENTIFY_LIMIT_SECONDS} seconds; nothing sends until you choose. Your audio is kept even when there's no match.</p>
+          <p className="identify-caption">You can send early. Listening stops at {IDENTIFY_LIMIT_SECONDS} seconds and sends it for identification. Your audio is kept even when there's no match.</p>
         </div> : <>
-          <p className="identify-phase">Tap to identify</p>
+          <p className="identify-phase">{state.needsTap ? 'Tap to start listening' : 'Tap to identify'}</p>
           <div className="identify-orb-wrap"><button type="button" className="identify-orb" aria-label="Identify song" onClick={listen}><ListenGlyph /></button></div>
           <p className="identify-caption">Hear something? Every clip is kept, matched or not.</p>
           <div className="identify-options">
@@ -123,23 +139,23 @@ export function IdentifyView({ notify }: { notify(message: string): void }) {
     {state.selected && createPortal(<dialog ref={dialog} className="wz-sheet identify-sheet" aria-label="Identification details">
       <h2>Identification{detail ? ' · ' + time(detail.created_at) : ''}</h2>
       {state.error && <p role="alert">{state.error}</p>}
-      {!detail && !local && <p role="status">Loading identification…</p>}
-      {(detail || local) && <>
-        <div className={'identify-result' + (local || waiting ? ' waiting' : '')}>
-          {lead?.art_url && !local && !waiting ? <img className="identify-result-art" alt="" src={lead.art_url} /> : <span className={'identify-result-orb' + (local?.sendRequested === false ? '' : local || waiting ? ' live' : '')} aria-hidden="true">{detail?.status === 'resolved' && !local ? <CheckGlyph /> : <ListenGlyph />}</span>}
-          <div className="identify-result-copy" role="status">
-            <h3 className="identify-result-title">{heroTitle}</h3>
-            {!local && !waiting && detail?.best_artist && <p className="identify-result-artist">{detail.best_artist}</p>}
-            <p className="identify-result-status">{heroStatus}</p>
-          </div>
-          {detail?.note && <p className="identify-muted">“{detail.note}”</p>}
-          {local?.sendRequested === false && <button type="button" className="identify-send" disabled={state.phase === 'saving'} onClick={() => { void identifyControl.submit(local.id) }}>Send for identification</button>}
+      <div className={'identify-result' + (busy ? ' waiting' : '')}>
+        {lead?.art_url && !busy && !local ? <img className="identify-result-art" alt="" src={lead.art_url} /> : <span className={'identify-result-orb' + (busy ? ' live' : '')} aria-hidden="true">{detail?.status === 'resolved' && !local && !saving ? <CheckGlyph /> : <ListenGlyph />}</span>}
+        <div className="identify-result-copy" role="status" aria-live="polite">
+          <h3 className="identify-result-title">{heroTitle}</h3>
+          {!busy && !local && detail?.best_artist && <p className="identify-result-artist">{detail.best_artist}</p>}
+          <p className="identify-result-status">{busy && <span className="music-wheel" aria-hidden="true" />}{heroStatus}</p>
+          {waiting && <p className="identify-result-hint">About 6 seconds in our last check. Noisy clips can take longer.</p>}
         </div>
+        {detail?.note && <p className="identify-muted">“{detail.note}”</p>}
+        {local?.sendRequested === false && <button type="button" className="identify-send" disabled={saving} onClick={() => { void identifyControl.submit(local.id) }}>Send for identification</button>}
+        {local && sendError && <button type="button" className="identify-send" onClick={() => { void identifyControl.drain() }}>Try again</button>}
+      </div>
+      {(detail || local) && <>
         {detail?.last_error && <p role="alert" className="identify-error">{detail.last_error}</p>}
         <h3>Your clip</h3><Clip src={localUrl || detail?.audio_url || ''} />
         {detail && <>
-          {candidates.length > 0 && <><h3>Possible matches</h3>
-          {candidates.map(c => <article className={'identify-candidate ' + (c.verdict === 'rejected' ? 'identify-rejected' : '')} key={c.id}>
+          {candidates.length > 0 && <><h3>Possible matches</h3>          {candidates.map(c => <article className={'identify-candidate ' + (c.verdict === 'rejected' ? 'identify-rejected' : '')} key={c.id}>
             <div className="identify-candidate-title">{c.art_url ? <img alt="" src={c.art_url} /> : <span className="identify-candidate-art" aria-hidden="true"><NoteMark /></span>}<div><strong>{c.title}</strong><p>{c.artist} · {c.provider}</p></div></div>
             <div className="identify-actions">
               <button type="button" className="identify-pill primary" disabled={!!pending || c.verdict === 'confirmed'} onClick={() => { void act('confirm-' + c.id, async () => { await identifyControl.verdict(c, 'confirmed'); notify('Liked · saved in Music') }) }}>{pending === 'confirm-' + c.id ? 'Saving…' : c.verdict === 'confirmed' ? '✓ Confirmed' : 'This is it'}</button>

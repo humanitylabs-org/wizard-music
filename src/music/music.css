@@ -130,6 +130,7 @@
 .music-now.music-stale .music-now-body, .music-mini.music-stale > * { opacity: 0; transition: none; }
 
 /* Tap a song: the player opens at once with a loading wheel until the audio starts. */
+.music-search .music-busy{padding:0;color:var(--wz-accent,var(--wiz))}.music-search .music-wheel{width:20px;height:20px;border-width:2px}.music-search .music-busy>span:last-child{display:none}
 .music-wheel { display: block; width: 34px; height: 34px; border-radius: 50%; border: 3px solid color-mix(in srgb, currentColor 22%, transparent); border-top-color: currentColor; animation: music-spin .8s linear infinite; }
 @keyframes music-spin { to { transform: rotate(360deg); } }
 .music-now-pending-art { position: relative; display: block; }

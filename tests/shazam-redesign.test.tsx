@@ -113,7 +113,12 @@ describe("James's Shazam-like Music: home", () => {
     await click(named(view, 'Return to listening')[0])
     expect(captureStart).toHaveBeenCalledTimes(1)
     await act(async () => { reject(new Error('Microphone unavailable')); await flush() })
-    expect(identifyControl.snapshot().phase).toBe('idle')
+    expect(identifyControl.snapshot()).toMatchObject({ phase: 'idle', needsTap: true })
+    // A gesture/permission failure offers Tap to start listening on the same central orb.
+    await act(async () => { root!.unmount() }); host!.remove()
+    const stage = await render(<IdentifyView notify={() => undefined} />)
+    expect(stage.querySelector('.identify-stage .identify-phase')!.textContent).toBe('Tap to start listening')
+    expect(named(stage, 'Identify song')).toEqual([stage.querySelector('.identify-stage button.identify-orb')])
   })
 })
 
@@ -161,26 +166,28 @@ describe("James's Shazam-like Music: Identify screen", () => {
     expect(view.querySelector<HTMLInputElement>('.identify-geo input')!.checked).toBe(true)
   })
 
-  it('focuses listening: elapsed time, 15s encouragement, Send any time, no auto-send, cancelled draft kept', async () => {
+  it('focuses listening: the orb ring fills to 12s with calm encouragement, Find it any time, Cancel keeps the draft', async () => {
     vi.useFakeTimers()
     const view = await render(<IdentifyView notify={() => undefined} />)
     await act(async () => { await identifyControl.start(); await flush() })
     const stage = view.querySelector('.identify-recording')!
     expect(stage.textContent).toContain('Listening…')
-    expect(stage.textContent).toContain('Keep going · aim for about 15 seconds.')
-    expect(view.querySelector('progress[aria-label="Recording duration"]')!.getAttribute('max')).toBe('15')
+    expect(stage.textContent).toContain('Hold it up to the music…')
+    const ring = view.querySelector('[role="progressbar"][aria-label="Audio capture target"]')!
+    expect(ring.getAttribute('aria-valuemax')).toBe('12')
+    expect(ring.closest('.identify-orb-wrap')!.querySelector('.identify-orb.phase-recording')).toBeTruthy() // one central orb inside the ring
     expect(view.querySelector('meter[aria-label="Microphone level"]')).toBeTruthy()
-    expect(named(view, 'Send for identification')[0].disabled).toBe(false)
+    expect(named(view, 'Find it now · early')[0].disabled).toBe(false)
     expect(named(view, 'Cancel')).toHaveLength(1)
     expect(named(view, 'Identify song')).toHaveLength(0)
     expect(view.querySelector('h2')).toBeNull() // history steps aside while listening
-    await act(async () => { await vi.advanceTimersByTimeAsync(15000) })
-    expect(view.querySelector('.identify-recording')!.textContent).toContain('Send whenever ready.')
+    await act(async () => { await vi.advanceTimersByTimeAsync(12000) })
+    expect(view.querySelector('.identify-recording')!.textContent).toContain('That should be enough to find it.')
+    expect(view.querySelector('.identify-ring-value')!.getAttribute('stroke-dashoffset')).toBe('0')
+    expect(view.querySelector('.identify-orb-wrap.reached')).toBeTruthy()
     expect(identifyControl.snapshot().phase).toBe('recording')
-    await act(async () => { await vi.advanceTimersByTimeAsync(15000); await flush() })
-    expect(identifyControl.snapshot().phase).toBe('ready')
-    expect(view.querySelector('.identify-recording')!.textContent).toContain('Recording saved · ready to send')
-    expect(uploads).toBe(0)
+    expect(stop).not.toHaveBeenCalled(); expect(uploads).toBe(0)
+    expect(named(view, 'Find it')[0].disabled).toBe(false)
     await click(named(view, 'Cancel')[0])
     expect(identifyControl.snapshot().phase).toBe('idle')
     expect(rows.get(id).sendRequested).toBe(false)
@@ -188,24 +195,30 @@ describe("James's Shazam-like Music: Identify screen", () => {
     expect(view.querySelector('.identify-hunt')!.textContent).toContain('Not sent · tap to review')
   })
 
-  it('early Send paints saving on the tap, then opens the calm waiting sheet while still waiting', async () => {
+  it('early Find it opens the clip sheet on the tap with loading, before saving or upload, then shows Finding your track', async () => {
     let resolve!: (v: unknown) => void
     stop.mockImplementation(() => new Promise(r => { resolve = r }))
     huntDetail = { id, created_at: '2026-11-06T14:40:00Z', status: 'hunting', candidates: [], attempts: [] }
     const view = await render(<IdentifyView notify={() => undefined} />)
     await act(async () => { await identifyControl.start(); await flush() })
-    act(() => { named(view, 'Send for identification')[0].click() })
-    expect(identifyControl.snapshot().phase).toBe('saving')
+    act(() => { named(view, 'Find it now · early')[0].click() })
+    expect(identifyControl.snapshot()).toMatchObject({ phase: 'saving', selected: id })
     expect(view.querySelector('.identify-recording')!.textContent).toContain('Saving your clip…')
-    expect(named(view, 'Send for identification')[0].disabled).toBe(true)
+    expect(named(view, 'Find it now · early')[0].disabled).toBe(true)
+    const sheet = document.querySelector('dialog.identify-sheet')!
+    expect(sheet.hasAttribute('open')).toBe(true)
+    expect(sheet.querySelector('.identify-result-title')!.textContent).toBe('Saving your clip…')
+    expect(sheet.querySelector('.identify-result-status .music-wheel')).toBeTruthy()
+    expect(uploads).toBe(0)
     await act(async () => { resolve({ id, blob, mime: 'audio/wav', startedAt: Date.now(), durationMs: 2500, meta: { task: 'music-identify', manualSubmit: true } }); await flush() })
     await act(async () => { await identifyControl.drain(); await flush() })
     expect(uploads).toBe(1)
     expect(identifyControl.snapshot().selected).toBe(id)
-    const sheet = document.querySelector('dialog.identify-sheet')!
-    expect(sheet.hasAttribute('open')).toBe(true)
     expect(sheet.querySelector('h2')!.textContent).toMatch(/^Identification/)
-    expect(sheet.querySelector('.identify-result [role=status]')!.textContent).toContain('Identifying your song…')
+    const status = sheet.querySelector('.identify-result [role=status]')!.textContent
+    expect(status).toContain('Finding your track…')
+    expect(status).toContain('About 6 seconds in our last check')
+    expect(status).not.toMatch(/guarantee|\d\s*%|confidence/i)
     expect(sheet.querySelector('audio')).toBeTruthy()
   })
 

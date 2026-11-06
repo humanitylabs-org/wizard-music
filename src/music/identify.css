@@ -56,10 +56,11 @@ button.identify-orb::before { content: ''; position: absolute; inset: -16px; z-i
 .identify-orb.phase-recording .identify-glyph rect { transform-box: fill-box; transform-origin: center; scale: 1 calc(.55 + var(--level, .3) * .8); transition: scale 120ms linear; animation: identify-bar .9s ease-in-out infinite alternate; }
 .identify-orb.phase-recording .identify-glyph rect:nth-child(2n) { animation-delay: -.45s; }
 .identify-orb.phase-recording .identify-glyph rect:nth-child(3) { animation-duration: .7s; }
-/* The ring fills toward the 15-second target; it is guidance, never an automatic send. */
-.identify-ring { position: absolute; inset: -14px; width: calc(100% + 28px); height: calc(100% + 28px); transform: rotate(-90deg); pointer-events: none; }
+/* The ring fills toward the 12-second "enough audio" target; it never sends. Only the 30-second cap sends. */
+.identify-ring { position: absolute; inset: -14px; width: calc(100% + 28px); height: calc(100% + 28px); pointer-events: none; }
+.identify-ring svg { width: 100%; height: 100%; transform: rotate(-90deg); overflow: visible; }
 .identify-ring circle { fill: none; stroke: color-mix(in srgb, var(--id-ink) 12%, transparent); stroke-width: 1.4; }
-.identify-ring .identify-ring-value { stroke: var(--id-accent); stroke-linecap: round; stroke-dasharray: 100; transition: stroke-dashoffset 220ms linear, stroke-width 220ms; }
+.identify-ring .identify-ring-value { stroke: var(--id-accent); stroke-linecap: round; transition: stroke-dashoffset 220ms linear, stroke-width 220ms; }
 .identify-orb-wrap.reached .identify-ring-value { stroke-width: 2; }
 
 .identify-timer { font-size: 34px; font-weight: 600; letter-spacing: -.02em; font-variant-numeric: tabular-nums; color: var(--id-ink); }
@@ -128,6 +129,8 @@ dialog.identify-sheet > h2 { margin: 2px 0 0; padding-right: 40px; font-size: 13
 .identify-sheet .identify-result-title { margin: 0; font-size: 24px; font-weight: 750; line-height: 1.2; letter-spacing: -.015em; text-transform: none; color: var(--id-ink); overflow-wrap: anywhere; }
 .identify-result-artist { margin: 0; font-size: 17px; color: var(--id-ink-2); }
 .identify-result-status { margin: 6px 0 0; padding: 5px 12px; border-radius: 999px; background: color-mix(in srgb, var(--id-ink) 7%, transparent); font-size: 13px; font-weight: 600; color: var(--id-ink-2); }
+.identify-result-status .music-wheel { display: inline-block; width: 12px; height: 12px; margin-right: 7px; border-width: 2px; vertical-align: -1px; color: var(--id-accent); }
+.identify-result-hint { margin: 2px 0 0; max-width: 34ch; font-size: 13px; line-height: 1.45; color: var(--id-ink-3); }
 .identify-result .identify-muted { margin: 6px 0 0; }
 .identify-result .identify-send { width: min(100%, 300px); margin-top: 14px; }
 .identify-sheet audio { width: 100%; height: 44px; margin: 2px 0; }

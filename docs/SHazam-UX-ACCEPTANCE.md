@@ -11,9 +11,11 @@ Opus owns substantive visual design and implementation, not an advisory critique
 - Wizard skins through Appearance v1 `--wz-*` roles, live appearance changes without losing state, dark standalone fallback, opaque text-bearing floating panels. Never change built-in skin names or the owner's skin.
 - App-only changes. Shell bottom navigation, orb and native controls are out of scope.
 - All library, stations, search, recent, likes, queue, playback, mini-player and voice controls remain accessible; data and features are retained. Source connectivity details may be disclosed rather than dominant.
-- Only `WizardApp.capture` owns microphone capture. The existing app-owned whole-utterance identification voice claim stays unchanged.
-- Recording uses elapsed time, a 15-second encouragement target, Send available early and whenever ready. Neither the 15-second target nor the 30-second safety stop submits automatically.
+- Only `WizardApp.capture` owns microphone capture. Voice reaches Music only through its declared `voice_routes` (`?view=identify&listen=1`, rest words in `q` to the existing command parser); no hidden receiver or priority claim (current live policy, `docs/IDENTIFY.md`).
+- Recording (current live policy, supersedes the earlier 15-second/manual-cap wording): the ring around the central orb fills with elapsed audio toward a 12-second "enough" target with calm, playful encouragement; reaching 12 never sends. Find it is available early at any time. The 30-second capture hard cap sends automatically. Accessible name of the ring: "Audio capture target".
+- Send opens that clip's sheet at once, before saving or network, with visible loading (Saving → Sending → Finding your track, polled every two seconds). Timing copy is "About 6 seconds in our last check" from one measured 6.13-second retry, never a guarantee.
 - Durable unsent drafts, cancellation safety and original audio retention stay intact. Fresh waiting/results open only while the user is still waiting; after navigating away they do not steal focus. Keep the New fallback and the visible name Identifications.
+- Hosted desktop: the app root is an opaque skin-base surface (canvas layered over `--wz-base`); html/body stay transparent per Appearance v1, and the shell's own screen never shows through Music text.
 - Optional recording note/location and secondary actions remain discoverable and stateful even when moved into disclosure. No fabricated confidence scores.
 
 ## Reuse
