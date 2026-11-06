@@ -24,40 +24,50 @@ start:async options=>{window.__qaStarts.push(options);if(window.__qaHold)await n
 `
 const rows=[]
 const browser=await chromium.launch({headless:true,args:['--disable-gpu']})
+let activeContext=null, currentStep='launch', diagnostic=null
+const closingContexts=new WeakSet(), routeErrors=[]
+const checkpoint=(step,state={})=>{currentStep=step;fs.appendFileSync(path.join(out,'browser-journal.jsonl'),JSON.stringify({step,...state})+'\n')}
+const closeContext=async context=>{closingContexts.add(context);await context.unrouteAll({behavior:'ignoreErrors'});await context.close();if(activeContext===context)activeContext=null}
 try {
 for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const context=await browser.newContext(shell==='phone'?{viewport:{width:390,height:844},isMobile:true,hasTouch:true,deviceScaleFactor:1}:{viewport:{width:1440,height:900}})
+ activeContext=context;checkpoint('context',{shell,skin});diagnostic=null
  let offline=false,refusedPosts=0
  await context.route('**/*',async route=>{
+  try {
   const req=route.request(),u=new URL(req.url())
-  if(u.origin!==ORIGIN)return route.abort()
-  if(u.pathname==='/qa-local-seed')return route.fulfill({contentType:'text/html',body:'<!doctype html><meta charset="utf-8"><title>Disposable local fixture</title>'})
+  if(u.origin!==ORIGIN)return await route.abort()
+  if(u.pathname==='/qa-local-seed')return await route.fulfill({contentType:'text/html',body:'<!doctype html><meta charset="utf-8"><title>Disposable local fixture</title>'})
   if(u.pathname.startsWith('/wizard-music/')){
-   if(offline && req.method()==='POST'){refusedPosts++;return route.abort('internetdisconnected')}
+   if(offline && req.method()==='POST'){refusedPosts++;return await route.abort('internetdisconnected')}
    const response=await context.request.fetch(APP+u.pathname+u.search,{method:req.method(),headers:{...(req.headers()['content-type']?{'content-type':req.headers()['content-type']}:{})},data:req.postDataBuffer()||undefined})
    const headers={...response.headers()};delete headers['content-security-policy']
-   return route.fulfill({status:response.status(),headers,body:await response.body()})
+   return await route.fulfill({status:response.status(),headers,body:await response.body()})
   }
-  if(u.pathname.endsWith('/data.js'))return route.fulfill({contentType:'application/javascript',body:'window.WIZ_DATA={threads:[],projects:{}};'})
-  if(u.pathname.endsWith('/summaries.js'))return route.fulfill({contentType:'application/javascript',body:'window.WIZ_SUMMARIES={};'})
+  if(u.pathname.endsWith('/data.js'))return await route.fulfill({contentType:'application/javascript',body:'window.WIZ_DATA={threads:[],projects:{}};'})
+  if(u.pathname.endsWith('/summaries.js'))return await route.fulfill({contentType:'application/javascript',body:'window.WIZ_SUMMARIES={};'})
   // The shell only reads the box app list through bootstrap's advertised endpoint (core/config.js).
-  if(u.pathname==='/wizard/v1/bootstrap')return route.fulfill({json:{bootstrap:1,endpoints:{apps:'/wizard/v1/apps'},capabilities:{voice:true},settings:{}}})
+  if(u.pathname==='/wizard/v1/bootstrap')return await route.fulfill({json:{bootstrap:1,endpoints:{apps:'/wizard/v1/apps'},capabilities:{voice:true},settings:{}}})
   // A real owner box has an AI signed in and setup finished, so the first-run Welcome never covers the app.
-  if(u.pathname==='/wizard/hermes/api/model/options')return route.fulfill({json:{provider:'anthropic',providers:[{slug:'anthropic',authenticated:true}]}})
-  if(u.pathname==='/wizard/v1/setup')return route.fulfill({json:{first_run:false,state:'done'}})
-  if(u.pathname==='/wizard/v1/apps')return route.fulfill({json:{apps:[{id:'wizard-music',name:'Music',url:'/wizard-music/',view:{mode:'original',url:'/wizard-music/'},source:'launcher.json',type:'service',provides:['music'],voice_names:['Music','Wizard Music'],voice_routes:[{words:['music','shazam'],open:'?view=identify&listen=1',rest_param:'q'}]}]}})
+  if(u.pathname==='/wizard/hermes/api/model/options')return await route.fulfill({json:{provider:'anthropic',providers:[{slug:'anthropic',authenticated:true}]}})
+  if(u.pathname==='/wizard/v1/setup')return await route.fulfill({json:{first_run:false,state:'done'}})
+  if(u.pathname==='/wizard/v1/apps')return await route.fulfill({json:{apps:[{id:'wizard-music',name:'Music',url:'/wizard-music/',view:{mode:'original',url:'/wizard-music/'},source:'launcher.json',type:'service',provides:['music'],voice_names:['Music','Wizard Music'],voice_routes:[{words:['music','shazam'],open:'?view=identify&listen=1',rest_param:'q'}]}]}})
   if(u.pathname.startsWith('/wizard/') || u.pathname.startsWith('/api/') || u.pathname.startsWith('/notifications/') || u.pathname.startsWith('/pages/')){
-   if(req.method()!=='GET')return route.fulfill({status:403,json:{error:'No owner writes in isolated QA'}})
-   return route.fulfill({json:u.pathname.endsWith('/ui-preferences')?{pinnedChats:[],spaces:[],migrations:{'launcher.v1':true}}:u.pathname.endsWith('/sessions')?{data:[],has_more:false}:u.pathname.endsWith('/items')?{items:[]}:u.pathname.endsWith('/count')?{unread:0,needs:0}:{}})
+   if(req.method()!=='GET')return await route.fulfill({status:403,json:{error:'No owner writes in isolated QA'}})
+   return await route.fulfill({json:u.pathname.endsWith('/ui-preferences')?{pinnedChats:[],spaces:[],migrations:{'launcher.v1':true}}:u.pathname.endsWith('/sessions')?{data:[],has_more:false}:u.pathname.endsWith('/items')?{items:[]}:u.pathname.endsWith('/count')?{unread:0,needs:0}:{}})
   }
   const rel=decodeURIComponent(u.pathname.replace(/^\/wizard-os-home\//,''))||'index.html'
   const f=path.resolve(web,rel)
   if(f.startsWith(web+path.sep)&&fs.existsSync(f)&&fs.statSync(f).isFile()){
    let body=fs.readFileSync(f)
    if(rel==='core/app-client.js')body=Buffer.concat([body,Buffer.from('\n'+fakeCapture)])
-   return route.fulfill({contentType:types[path.extname(f)]||'application/octet-stream',body})
+   return await route.fulfill({contentType:types[path.extname(f)]||'application/octet-stream',body})
   }
-  return route.fulfill({status:404,body:''})
+  return await route.fulfill({status:404,body:''})
+  } catch(error) {
+   if(!closingContexts.has(context))routeErrors.push({url:route.request().url(),error:error.stack||error.message})
+   await route.abort().catch(()=>{})
+  }
  })
  await context.addInitScript(({shell,skin})=>{try{if(window.top===window){localStorage.setItem('wos.coached','true');localStorage.setItem('wos.tour.v1','true');localStorage.setItem('wos.tour','done');localStorage.setItem('wos.tour.done','1');localStorage.setItem('wux.shell',shell);localStorage.setItem('wos.skin',skin)}}catch{}},{shell,skin})
  const page=await context.newPage(),errors=[]
@@ -75,6 +85,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const tag=async r=>{try{const el=await r.frame().frameElement();return (await el.getAttribute('data-voice-service'))?'hidden':'visible'}catch{return 'page'}}
  const netLines=[];page.on('request',async r=>{if(r.url().includes('/identify/'))netLines.push(ts()+' '+await tag(r)+' '+r.method()+' '+r.url().slice(0,160))});page.on('requestfailed',r=>netLines.push(ts()+' FAILED '+r.method()+' '+r.url().slice(0,160)+' '+(r.failure()?.errorText||'')));page.on('response',r=>{if(r.url().includes('/identify/'))netLines.push(ts()+' RESP '+r.status()+' '+r.request().method()+' '+r.url().slice(0,160))})
  const dump=async(frame,label)=>{const ui=await frame.evaluate(()=>({alert:document.querySelector('[role=alert]')?.textContent||'',text:document.body.innerText.slice(0,800)})).catch(e=>({err:e.message}));await page.screenshot({path:path.join(out,`${shell}-${skin}-FAIL-${label}.png`)}).catch(()=>{});return JSON.stringify({label,ui,netLines:netLines.slice(-40),consoleLines:consoleLines.slice(-20),errors})}
+ diagnostic=async()=>({shell,skin,frames:page.frames().map(f=>f.url()),netLines:netLines.slice(-40),errors,consoleLines:consoleLines.slice(-20)})
  // Bounded settle before a raster: the frame's box in the shell and the target's box hold still for six
  // animation frames with no finite animation running (endless breathing/ripples and the per-tick ring fill are
  // the product's own steady motion and are not waited on). Never disables motion or edits styles.
@@ -124,6 +135,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   const read=()=>frame.evaluate(async id=>{const d=await new Promise((res,rej)=>{const r=indexedDB.open('trackhunt-offline-v1',1);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});const row=await new Promise(res=>{const q=d.transaction('captures').objectStore('captures').get(id);q.onsuccess=()=>res(q.result)});d.close();if(!row)return null;return {...row,blob:undefined,size:row.blob.size,hash:Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await row.blob.arrayBuffer())),n=>n.toString(16).padStart(2,'0')).join('')}},id)
   await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).waitFor()
   const original=await read();assert.equal(original.sendRequested,false)
+  checkpoint('local-original',{shell,skin,row:original})
   const baselinePosts=()=>netLines.filter(s=>s.includes(' POST ')&&!s.includes(' RES ')).length
   const beforePosts=baselinePosts(),beforeAcks=await acks(frame)
   await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).click()
@@ -154,9 +166,12 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   assert.equal(baselinePosts(),beforePosts);assert.equal(await acks(frame),beforeAcks)
   const noticeImage=path.join(out,`${shell}-${skin}-local-discard-undo.png`);await page.screenshot({path:noticeImage})
   await frame.evaluate(()=>window.__qaReleaseLocal())
+  checkpoint('local-write-released',{shell,skin,immediate})
   await frame.waitForFunction(async id=>{const d=await new Promise(res=>{const r=indexedDB.open('trackhunt-offline-v1',1);r.onsuccess=()=>res(r.result)});const row=await new Promise(res=>{const q=d.transaction('captures').objectStore('captures').get(id);q.onsuccess=()=>res(q.result)});d.close();return !!row?.discardedAt},id)
   const removed=await read();assert.equal(removed.hash,original.hash);assert.equal(removed.id,id);assert.equal(removed.sendRequested,false)
+  checkpoint('local-tombstone',{shell,skin,row:removed})
   await frame.goto(ORIGIN+'/wizard-music/?view=identify')
+  checkpoint('local-reloaded',{shell,skin})
   await frame.getByRole('button',{name:'Undo',exact:true}).waitFor()
   await frame.evaluate(()=>dispatchEvent(new Event('online')))
   await frame.getByRole('button',{name:'Refresh identifications'}).click()
@@ -164,20 +179,22 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   assert.equal(await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).count(),0)
   assert.equal(baselinePosts(),beforePosts);assert.equal(await acks(frame),beforeAcks)
   await frame.getByRole('button',{name:'Undo',exact:true}).click()
+  checkpoint('local-undo-clicked',{shell,skin})
   await frame.getByText('Clip restored · not sent',{exact:true}).waitFor()
-  assert.deepEqual(await read(),original)
+  const restored=await read();checkpoint('local-restored',{shell,skin,row:restored});assert.deepEqual(restored,original)
   await frame.getByRole('button',{name:'Refresh identifications'}).click();await frame.waitForTimeout(300)
   assert.equal(baselinePosts(),beforePosts);assert.equal(await acks(frame),beforeAcks)
   await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).click()
   await frame.getByText('Not sent. You can review or send it below.',{exact:true}).waitFor()
   await frame.getByRole('button',{name:'Send for identification',exact:true}).click()
+  checkpoint('local-manual-send',{shell,skin})
   await waitAcks(frame,beforeAcks+1,'Manual Send after local Undo')
   assert.equal(baselinePosts(),beforePosts+1)
   const stored=await(await fetch(APP+'/wizard-music/api/identify/captures/'+id)).json();assert.equal(stored.id,id);assert.equal(stored.raw_sha256,original.hash)
   assert.equal(await read(),null)
   rows.push({shell,skin,persisted_unsent:true,discard_same_frame:immediate,no_upload_or_ack_before_manual_send:true,shared_replay_reload_hidden:true,undo_same_uuid_blob_unsent:true,manual_send_durable_readback_before_ack:true,pageerrors:errors,screenshots:[sheetImage,noticeImage]})
   fs.writeFileSync(path.join(out,'browser-progress.json'),JSON.stringify({complete:false,rows},null,2))
-  await context.unrouteAll({behavior:'ignoreErrors'});await context.close();continue
+  assert.deepEqual(routeErrors,[]);await closeContext(context);continue
  }
  await frame.getByRole('progressbar',{name:'Audio capture target'}).waitFor({state:'visible'})
  const settles={}
@@ -249,7 +266,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   assert.equal((await (await fetch(target)).json()).raw_sha256,original.raw_sha256)
   rows.push({shell,skin,discard_same_frame:immediate,undo_real_readback:true,reload_hidden:true,audio_attempts_candidates_preserved:true,pageerrors:errors,screenshots:[sheetImage,noticeImage]})
   fs.writeFileSync(path.join(out,'browser-progress.json'),JSON.stringify({complete:false,rows},null,2))
-  await context.unrouteAll({behavior:'ignoreErrors'});await context.close();continue
+  assert.deepEqual(routeErrors,[]);await closeContext(context);continue
  }
  settles.results=await settle(frame,'dialog[open]')
  const resultsImage=path.join(out,`${shell}-${skin}-identify-results.png`)
@@ -316,9 +333,11 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await page.screenshot({path:listImage})
  rows.push({shell,skin,priority_bare_music:command,legacy_audio_decoded:true,back_sheet_list_home:true,held_permission_same_frame:true,offline_saved_reconnected:true,home_top:homeTop,settled:settles,screenshots:[homeImage,idleImage,recordingImage,waitingImage,resultsImage,sheetImage,listImage],pageerrors:errors})
  fs.writeFileSync(path.join(out,'browser-progress.json'),JSON.stringify({complete:false,rows},null,2))
- await context.unrouteAll({behavior:'ignoreErrors'})
- await context.close()
+ assert.deepEqual(routeErrors,[]);await closeContext(context)
 }
-} finally {await browser.close()}
+} catch(error) {
+ const failure={step:currentStep,error:error.stack||error.message,routeErrors,diagnostic:await diagnostic?.().catch(e=>({error:e.message}))}
+ fs.writeFileSync(path.join(out,'browser-failure.json'),JSON.stringify(failure,null,2));console.error('PRIMARY BROWSER FAILURE',JSON.stringify(failure,null,2));throw error
+} finally {if(activeContext)await closeContext(activeContext);await browser.close()}
 fs.writeFileSync(path.join(out,'browser-results.json'),JSON.stringify({ok:true,capture:'synthetic shared-capture port; real handset remains owner test',rows},null,2))
 console.log(JSON.stringify({ok:true,rows},null,2))
