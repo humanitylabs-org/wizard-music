@@ -104,6 +104,10 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await row.click()
  await frame.locator('dialog[open]').waitFor()
  await frame.waitForFunction(()=>{const a=document.querySelector('dialog audio');return a&&a.readyState>=1&&a.duration>0})
+ await frame.waitForTimeout(400) // let the sheet's open animation finish before judging it
+ const sheetBg=await frame.evaluate(()=>getComputedStyle(document.querySelector('dialog[open]')).backgroundColor)
+ const alpha=(m=>m?Number(m[1]??1):0)(sheetBg.match(/^rgba?\([^,]+,[^,]+,[^,)]+(?:,\s*([\d.]+))?\)$/))
+ if(alpha<1)throw Error('Hunt sheet is not fully opaque in '+skin+': '+sheetBg)
  const sheetImage=path.join(out,`${shell}-${skin}-identify-sheet.png`)
  await page.screenshot({path:sheetImage})
  // A physical click on the iframe backdrop closes the shared sheet.

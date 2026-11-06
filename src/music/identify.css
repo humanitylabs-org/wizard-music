@@ -11,7 +11,7 @@
 .identify-hunt{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:64px;width:100%;text-align:left;padding:12px 4px;background:transparent;border:0;border-bottom:1px solid var(--wz-border,var(--line));color:inherit;font:inherit;cursor:pointer}
 .identify-hunt-copy{display:grid;gap:4px;min-width:0}.identify-hunt strong{font-weight:600;font-size:15px}
 .identify-footer,.identify-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:12px 0}
-.identify-sheet{background:var(--wz-surface-raised,var(--bg-raised));color:var(--wz-text,var(--text));isolation:isolate;max-height:88dvh;overflow:auto}
+.identify-sheet{background:linear-gradient(var(--wz-surface-raised,var(--bg-raised)),var(--wz-surface-raised,var(--bg-raised))),var(--wz-base,var(--bg,#0d0d12));background-color:var(--wz-base,var(--bg,#0d0d12));color:var(--wz-text,var(--text));isolation:isolate;max-height:88dvh;overflow:auto}
 .identify-sheet h2{padding-right:38px}.identify-sheet h3{font-size:15px;margin:24px 0 10px}
 .identify-sheet audio{width:100%;height:44px;margin:8px 0}.identify-sheet summary{cursor:pointer;padding:12px 0;font-size:13px}
 .identify-candidate{padding:16px 0;border-bottom:1px solid var(--wz-border,var(--line))}
