@@ -53,7 +53,7 @@ def main():
     logs=[(OUT/'hub.log').open('w'),(OUT/'node.log').open('w')]
     children=[]
     try:
-        children.append(subprocess.Popen([str(PY),'-c',code],cwd=ROOT,env=env,stdout=logs[0],stderr=subprocess.STDOUT))
+        children.append(subprocess.Popen([str(PY),'-u','-c',code],cwd=ROOT,env=env,stdout=logs[0],stderr=subprocess.STDOUT))
         children.append(subprocess.Popen(['node','server/index.mjs'],cwd=ROOT,env=env,stdout=logs[1],stderr=subprocess.STDOUT))
         ready('http://127.0.0.1:19305/wizard-music/api/identify/captures')
         def get(path):

@@ -64,3 +64,57 @@ describe('held microphone and app-owned shell claims', () => {
     expect(identifyControl.snapshot().phase).toBe('idle')
   })
 })
+
+function fakeIndexedDB(rows: Map<string, unknown>) {
+  const tx = () => { const t: Record<string, unknown> = {}; queueMicrotask(() => (t.oncomplete as () => void)?.()); t.objectStore = () => ({
+    put: (v: {id: string}) => { rows.set(v.id, v) }, delete: (id: string) => { rows.delete(id) },
+    getAll: () => { const q: Record<string, unknown> = { result: [...rows.values()] }; queueMicrotask(() => (q.onsuccess as () => void)?.()); return q } }); return t }
+  return { open: () => { const r: Record<string, unknown> = { result: { transaction: tx, close: () => undefined, createObjectStore: () => undefined } }; queueMicrotask(() => (r.onsuccess as () => void)?.()); return r } }
+}
+
+describe('sending a saved clip', () => {
+  const bytes = new Uint8Array([1, 2, 3, 4])
+  const clip = { id: '11111111-2222-4333-8444-555555555555', sharedId: 'shared-1', blob: { size: 4, type: 'audio/wav', arrayBuffer: async () => bytes.buffer }, mime: 'audio/wav', client_ts: '2026-11-06T00:00:00Z' }
+  const hex = async () => Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)), n => n.toString(16).padStart(2, '0')).join('')
+
+  it('is confirmed from the upload reply itself, with no second read that can race the server', async () => {
+    const rows = new Map<string, unknown>([[clip.id, clip]])
+    vi.stubGlobal('indexedDB', fakeIndexedDB(rows))
+    const digest = await hex()
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ id: clip.id, raw_sha256: digest }) }))
+    vi.stubGlobal('fetch', fetchMock)
+    const ack = vi.fn(async () => true)
+    vi.stubGlobal('WizardApp', { capture: { ack } })
+    const { uploadClip } = await import('../src/music/identify')
+    await uploadClip(clip as never)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(ack).toHaveBeenCalledWith('shared-1')
+    expect(rows.has(clip.id)).toBe(false)
+  })
+
+  it('keeps the clip and says it is retrying when the server never confirms the audio', async () => {
+    const rows = new Map<string, unknown>([[clip.id, clip]])
+    vi.stubGlobal('indexedDB', fakeIndexedDB(rows))
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => url.includes('?') ? { ok: true, json: async () => ({ id: clip.id, raw_sha256: 'other' }) } : { ok: false, json: async () => ({ error: 'Unknown hunt' }) }))
+    const ack = vi.fn(async () => true)
+    vi.stubGlobal('WizardApp', { capture: { ack } })
+    const { uploadClip } = await import('../src/music/identify')
+    const sent = await uploadClip(clip as never).then(() => 'sent', (e: Error) => e.message)
+    expect(sent).toMatch(/Retrying/)
+    expect(ack).not.toHaveBeenCalled()
+    expect(rows.has(clip.id)).toBe(true)
+  }, 15000)
+
+  it('the hidden voice receiver hands Identify to the visible app instead of recording itself', async () => {
+    let handler: {receive(s: string): Promise<boolean>} | undefined
+    const start = vi.fn(); const focusApp = vi.fn(async () => true)
+    Object.defineProperty(window, 'frameElement', { configurable: true, value: { dataset: { voiceService: 'wizard-music' } } })
+    vi.stubGlobal('WizardApp', { voice: { commands: { register: vi.fn(h => { handler = h; return () => undefined }) } }, view: { isVisible: () => true }, shell: { focusApp }, capture: { start } })
+    const cleanup = installIdentifyClaims(() => undefined)
+    expect(await handler!.receive('music')).toBe(true)
+    expect(focusApp).toHaveBeenCalledTimes(1)
+    expect(start).not.toHaveBeenCalled()
+    cleanup()
+    Object.defineProperty(window, 'frameElement', { configurable: true, value: null })
+  })
+})

@@ -1764,7 +1764,8 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("%s %s\n" % (self.command, self.path.split("?")[0]))
+        code = args[1] if fmt.startswith('"%s"') and len(args) > 1 else ''
+        sys.stderr.write("%s %s %s\n" % (self.command, self.path.split("?")[0], code))
 
     def _auth(self) -> bool:
         if TOKEN and self.headers.get("Authorization", "") != f"Bearer {TOKEN}":

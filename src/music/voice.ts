@@ -149,7 +149,9 @@ export function installIdentifyClaims(notify: (message: string) => void): () => 
   const receive = async (text: string) => {
     const cmd = parseMusicCommand(text)
     if (cmd?.op !== 'identify') return false
-    if (window.WizardApp.view?.isVisible()) { await runMusicCommand(cmd, notify); return true }
+    // The hidden voice receiver never records itself; only the visible Music app owns the microphone.
+    const receiver = (() => { try { return !!(window.frameElement as HTMLElement | null)?.dataset.voiceService } catch { return false } })()
+    if (!receiver && window.WizardApp.view?.isVisible()) { await runMusicCommand(cmd, notify); return true }
     localStorage.setItem(IDENTIFY_COMMAND, JSON.stringify({ id: crypto.randomUUID(), at: Date.now() }))
     return await window.WizardApp.shell?.focusApp() === true
   }

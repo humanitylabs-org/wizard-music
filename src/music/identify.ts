@@ -7,10 +7,10 @@ export type CaptureResult = { id: string; blob: Blob; mime: string; startedAt: n
 export type CaptureHandle = { id: string; stop(): Promise<CaptureResult>; onLevel(fn: (value: number | { me?: number; them?: number }) => void): () => void }
 export type CapturePort = { start(options: Record<string, unknown>): Promise<CaptureHandle>; pending(): Promise<CaptureResult[]>; ack(id: string): Promise<unknown> }
 type LocalClip = { id: string; sharedId?: string; blob: Blob; mime: string; client_ts: string; duration_s: number; geo?: Record<string, number>; partial?: boolean; note?: string }
-type State = { open: boolean; selected: string | null; detail: Hunt | null; hunts: Hunt[]; locals: LocalClip[]; phase: 'idle' | 'starting' | 'recording' | 'saving'; elapsed: number; level: number; error: string; loading: boolean; note: string; geoEnabled: boolean }
+type State = { open: boolean; selected: string | null; detail: Hunt | null; hunts: Hunt[]; locals: LocalClip[]; phase: 'idle' | 'starting' | 'recording' | 'saving'; elapsed: number; level: number; error: string; loading: boolean; note: string; geoEnabled: boolean; sendErrors: Record<string, string> }
 const BASE = '/wizard-music/api/identify/'
 const ACTIVE = 'wizard-music.identify.active.v1'
-let state: State = { open: false, selected: null, detail: null, hunts: [], locals: [], phase: 'idle', elapsed: 0, level: 0, error: '', loading: false, note: '', geoEnabled: false }
+let state: State = { open: false, selected: null, detail: null, hunts: [], locals: [], phase: 'idle', elapsed: 0, level: 0, error: '', loading: false, note: '', geoEnabled: false, sendErrors: {} }
 const listeners = new Set<() => void>()
 function paint(patch: Partial<State>) { state = { ...state, ...patch }; listeners.forEach(fn => fn()) }
 let handle: CaptureHandle | null = null, startedAt = 0, tick = 0, autoStop = 0, offLevel: (() => void) | undefined
@@ -58,14 +58,20 @@ async function persist(result: CaptureResult): Promise<LocalClip> {
   paint({ locals: await localStore('all') })
   return item
 }
+const wait = (ms: number) => new Promise(r => setTimeout(r, ms))
 export async function uploadClip(item: LocalClip) {
   const q = new URLSearchParams({ id: item.id, client_ts: item.client_ts, note: item.note || '' })
   if (item.geo) for (const k of ['lat', 'lon', 'accuracy_m']) if (item.geo[k] != null) q.set(k, String(item.geo[k]))
   const response = await fetch(BASE + 'captures?' + q, { method: 'POST', credentials: 'include', headers: { 'Content-Type': item.mime || item.blob.type || 'audio/webm' }, body: item.blob })
-  if (!response.ok) throw new Error('Saved on this device. Upload not confirmed yet.')
-  const saved = await identifyJson<Hunt>('captures/' + item.id)
+  if (!response.ok) throw new Error('Not sent yet. Retrying.')
   const digest = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await item.blob.arrayBuffer())), n => n.toString(16).padStart(2, '0')).join('')
-  if (saved.id !== item.id || saved.raw_sha256 !== digest) throw new Error('Saved audio bytes were not confirmed. Keeping your local clip.')
+  // The upload reply already describes the stored clip; a separate read is only a fallback.
+  let saved: Partial<Hunt> | null = await response.json().catch(() => null)
+  for (let i = 0; !(saved?.id === item.id && saved.raw_sha256 === digest) && i < 4; i++) {
+    await wait(500 * 2 ** i)
+    saved = await identifyJson<Hunt>('captures/' + item.id).catch(() => null)
+  }
+  if (saved?.id !== item.id || saved.raw_sha256 !== digest) throw new Error('Sent, but the server has not confirmed the audio yet. Retrying.')
   if (item.sharedId) await window.WizardApp.capture.ack(item.sharedId)
   await localStore('delete', item.id)
 }
@@ -87,15 +93,30 @@ async function detail(id: string, selecting = true) {
     if (gen === detailGeneration && state.selected === id) paint({ detail: value })
   } catch (e) { if (gen === detailGeneration && state.selected === id) paint({ error: (e as Error).message }) }
 }
-async function drain() {
-  if (draining) return draining
+let drainAgain = false, retryTimer = 0, retryDelay = 5000
+function scheduleRetry() {
+  if (retryTimer) return
+  retryTimer = window.setTimeout(() => { retryTimer = 0; void drain() }, retryDelay)
+  retryDelay = Math.min(retryDelay * 2, 120000)
+}
+async function drain(): Promise<void> {
+  // A clip saved while a drain is running gets its own pass; it is never left waiting for the next trigger.
+  if (draining) { drainAgain = true; return draining }
   draining = (async () => {
     try {
-      for (const r of await window.WizardApp.capture.pending()) if (r.blob?.size && r.meta?.task === 'music-identify') await persist(r)
-      for (const item of await localStore('all')) {
-        if (!item.blob?.size || (item.partial && !item.sharedId)) continue
-        try { await uploadClip(item) } catch (e) { paint({ error: (e as Error).message }); break }
-      }
+      do {
+        drainAgain = false
+        for (const r of await window.WizardApp.capture.pending()) if (r.blob?.size && r.meta?.task === 'music-identify') await persist(r)
+        let failed = false
+        for (const item of await localStore('all')) {
+          if (!item.blob?.size || (item.partial && !item.sharedId)) continue
+          try {
+            await uploadClip(item)
+            const { [item.id]: _sent, ...rest } = state.sendErrors; paint({ sendErrors: rest })
+          } catch (e) { failed = true; paint({ sendErrors: { ...state.sendErrors, [item.id]: (e as Error).message || 'Not sent yet. Retrying.' } }); break }
+        }
+        if (failed) scheduleRetry(); else retryDelay = 5000
+      } while (drainAgain)
     } finally { await refresh() }
   })().finally(() => { draining = null })
   return draining
@@ -158,7 +179,7 @@ export const identifyControl = {
   async add(id: string, c: unknown) { await identifyJson(`captures/${id}/candidates`, c); await detail(id, false) },
   async init(onIdentify: () => void) {
     closePlayer = onIdentify
-    const online = () => { void drain() }
+    const online = () => { retryDelay = 5000; window.clearTimeout(retryTimer); retryTimer = 0; void drain() }
     window.addEventListener('online', online)
     const poll = window.setInterval(() => { if (state.open && !this.busy()) void refresh() }, 5000)
     try {

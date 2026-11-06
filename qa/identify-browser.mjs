@@ -57,8 +57,10 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const page=await context.newPage(),errors=[]
  page.on('pageerror',e=>errors.push(e.message))
  const consoleLines=[];page.on('console',m=>{if(['error','warning'].includes(m.type()))consoleLines.push(m.type()+': '+m.text().slice(0,300))})
- const netLines=[];page.on('request',r=>{if(r.url().includes('/identify/'))netLines.push(r.method()+' '+r.url().slice(0,160))});page.on('requestfailed',r=>netLines.push('FAILED '+r.method()+' '+r.url().slice(0,160)+' '+(r.failure()?.errorText||'')));page.on('response',r=>{if(r.url().includes('/identify/')&&r.request().method()==='POST')netLines.push('RESP '+r.status()+' '+r.url().slice(0,160))})
- const dump=async(frame,label)=>{const ui=await frame.evaluate(()=>({alert:document.querySelector('[role=alert]')?.textContent||'',text:document.body.innerText.slice(0,800)})).catch(e=>({err:e.message}));await page.screenshot({path:path.join(out,`${shell}-${skin}-FAIL-${label}.png`)}).catch(()=>{});return JSON.stringify({label,ui,netLines:netLines.slice(-20),consoleLines:consoleLines.slice(-20),errors})}
+ const T0=Date.now(),ts=()=>'+'+(Date.now()-T0)+'ms'
+ const tag=async r=>{try{const el=await r.frame().frameElement();return (await el.getAttribute('data-voice-service'))?'hidden':'visible'}catch{return 'page'}}
+ const netLines=[];page.on('request',async r=>{if(r.url().includes('/identify/'))netLines.push(ts()+' '+await tag(r)+' '+r.method()+' '+r.url().slice(0,160))});page.on('requestfailed',r=>netLines.push(ts()+' FAILED '+r.method()+' '+r.url().slice(0,160)+' '+(r.failure()?.errorText||'')));page.on('response',r=>{if(r.url().includes('/identify/'))netLines.push(ts()+' RESP '+r.status()+' '+r.request().method()+' '+r.url().slice(0,160))})
+ const dump=async(frame,label)=>{const ui=await frame.evaluate(()=>({alert:document.querySelector('[role=alert]')?.textContent||'',text:document.body.innerText.slice(0,800)})).catch(e=>({err:e.message}));await page.screenshot({path:path.join(out,`${shell}-${skin}-FAIL-${label}.png`)}).catch(()=>{});return JSON.stringify({label,ui,netLines:netLines.slice(-40),consoleLines:consoleLines.slice(-20),errors})}
  const acks=f=>f.evaluate(()=>JSON.parse(localStorage.getItem('qa.acks')||'[]').length)
  const waitAcks=async(f,n,label)=>{const end=Date.now()+30000;while(Date.now()<end){if(await acks(f).catch(()=>0)>=n)return;await new Promise(r=>setTimeout(r,250))}
   const replay=await f.evaluate(async()=>{const out={href:location.href,frameAcks:window.__qaAcks,shared:localStorage.getItem('qa.acks')};try{const d=await new Promise((res,rej)=>{const r=indexedDB.open('trackhunt-offline-v1',1);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});const rows=await new Promise(res=>{const q=d.transaction('captures').objectStore('captures').getAll();q.onsuccess=()=>res(q.result)});out.locals=[];for(const it of rows){const dig=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',await it.blob.arrayBuffer())),n=>n.toString(16).padStart(2,'0')).join('');const r=await fetch('/wizard-music/api/identify/captures/'+it.id,{credentials:'include'});let j=null;try{j=await r.json()}catch(e){j={parse:e.message}};out.locals.push({id:it.id,shared:it.sharedId,size:it.blob.size,digest:dig,status:r.status,server:{id:j?.id,raw_sha256:j?.raw_sha256,status:j?.status,error:j?.error}})}}catch(e){out.replayError=e.message}return out}).catch(e=>({evalError:e.message}))
@@ -85,7 +87,9 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await visible.waitFor({state:'visible'})
  const frame=await (await visible.elementHandle()).contentFrame()
  await frame.getByRole('button',{name:'Stop and identify',exact:true}).waitFor({state:'visible'})
+ netLines.push(ts()+' CLICK Stop and identify; starts='+JSON.stringify(await frame.evaluate(()=>window.__qaStarts.length)))
  await frame.getByRole('button',{name:'Stop and identify',exact:true}).click()
+ netLines.push(ts()+' CLICKED')
  await waitAcks(frame,1,'Upload after Stop')
  // Open imported hunt and verify media really decodes.
  await frame.getByRole('button',{name:'Hunts',exact:true}).click()
