@@ -57,6 +57,8 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const page=await context.newPage(),errors=[]
  page.on('pageerror',e=>errors.push(e.message))
  const consoleLines=[];page.on('console',m=>{if(['error','warning'].includes(m.type()))consoleLines.push(m.type()+': '+m.text().slice(0,300))})
+ const netLines=[];page.on('request',r=>{if(r.url().includes('/identify/'))netLines.push(r.method()+' '+r.url().slice(0,160))});page.on('requestfailed',r=>netLines.push('FAILED '+r.method()+' '+r.url().slice(0,160)+' '+(r.failure()?.errorText||'')));page.on('response',r=>{if(r.url().includes('/identify/')&&r.request().method()==='POST')netLines.push('RESP '+r.status()+' '+r.url().slice(0,160))})
+ const dump=async(frame,label)=>{const ui=await frame.evaluate(()=>({alert:document.querySelector('[role=alert]')?.textContent||'',text:document.body.innerText.slice(0,800)})).catch(e=>({err:e.message}));await page.screenshot({path:path.join(out,`${shell}-${skin}-FAIL-${label}.png`)}).catch(()=>{});return JSON.stringify({label,ui,netLines:netLines.slice(-20),consoleLines:consoleLines.slice(-20),errors})}
  await page.goto(ORIGIN+'/wizard-os-home/'+(shell==='phone'?'?shell=phone':'desktop.html'),{waitUntil:'load'})
  await page.waitForFunction(([sh,sk])=>document.documentElement.dataset.shell===sh&&document.documentElement.dataset.skin===sk,[shell,skin])
  await page.waitForFunction(()=>window.WizAppServices?.inspect().some(x=>x.appId==='wizard-music'&&x.ready))
@@ -80,7 +82,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  const frame=await (await visible.elementHandle()).contentFrame()
  await frame.getByRole('button',{name:'Stop and identify',exact:true}).waitFor({state:'visible'})
  await frame.getByRole('button',{name:'Stop and identify',exact:true}).click()
- await frame.waitForFunction(()=>window.__qaAcks.length===1)
+ await frame.waitForFunction(()=>window.__qaAcks.length===1,null,{timeout:30000}).catch(async e=>{throw Error('Upload after Stop never confirmed: '+await dump(frame,'first-upload'))})
  // Open imported hunt and verify media really decodes.
  await frame.getByRole('button',{name:'Hunts',exact:true}).click()
  const row=frame.locator('.identify-hunt').filter({hasText:hunt.best_title}).first()
@@ -112,7 +114,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  assert.equal(await frame.evaluate(()=>window.__qaAcks.length),1)
  offline=false
  await frame.evaluate(()=>dispatchEvent(new Event('online')))
- await frame.waitForFunction(()=>window.__qaAcks.length===2)
+ await frame.waitForFunction(()=>window.__qaAcks.length===2,null,{timeout:30000}).catch(async e=>{throw Error('Reconnect upload never confirmed: '+await dump(frame,'reconnect-upload'))})
  await frame.getByRole('button',{name:'Hunts',exact:true}).click()
  const listImage=path.join(out,`${shell}-${skin}-identify-hunts.png`)
  await page.screenshot({path:listImage})
