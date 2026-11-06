@@ -54,5 +54,8 @@ export async function checkPlaylists({ page, frame, shell, skin, out, settle, AP
   await collapsed.click();assert.equal(await collapsed.getAttribute('aria-expanded'),'false')
   await collapsed.click();assert.equal(await frame.getByRole('link',{name:'Open on YouTube: '+TITLE,exact:true}).count(),1)
   assert.equal(await frame.locator('audio[autoplay]').count(),0)
-  return {shell,skin,immediate,url:URL,id:duplicate.id,reload:true,deduped:true,back_and_outside:true,live_skin:true,no_autoplay_on_save:true,screenshots:[sheetImage,listImage]}
+  await frame.getByRole('button',{name:'Play '+TITLE+' in Music',exact:true}).click()
+  await frame.getByText(/Online playback is not connected/).waitFor()
+  assert.equal(await frame.getByRole('link',{name:'Open on YouTube: '+TITLE,exact:true}).getAttribute('href'),URL)
+  return {shell,skin,immediate,url:URL,id:duplicate.id,reload:true,deduped:true,back_and_outside:true,live_skin:true,no_autoplay_on_save:true,offline_playback_fallback:true,screenshots:[sheetImage,listImage]}
 }

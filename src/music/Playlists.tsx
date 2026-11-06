@@ -60,7 +60,7 @@ export function Playlists({ onPlay, notify }: { onPlay(track: MusicTrack): Promi
       <form onSubmit={e => { e.preventDefault(); submit() }}>
         <label>YouTube link<input type="url" required maxLength={2048} value={url} onChange={e => setUrl(e.target.value)} placeholder="https://www.youtube.com/watch?v=…" autoFocus /></label>
         <label>Name <small>(optional)</small><input type="text" maxLength={2000} value={title} onChange={e => setTitle(e.target.value)} placeholder="Name this mix or playlist" /></label>
-        <button type="submit" className="primary-action" disabled={!!state.pending}>Save playlist</button>
+        <button type="submit" className="music-chip" disabled={!!state.pending}>Save playlist</button>
       </form>
     </dialog>, document.body)}
   </section>

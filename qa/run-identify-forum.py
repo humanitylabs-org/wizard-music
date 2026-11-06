@@ -126,6 +126,18 @@ def main():
             (OUT/'discard-api.json').write_text(json.dumps({'ok':True,'synthetic_only':True,'proxy_hub_mcp':True,'idempotent':True,'preserved':True},indent=2))
         qaenv={**env,'QA_APP_ORIGIN':APP_ORIGIN,'QA_SHELL_WEB':str(INPUT/'shell-web'),'OUT':str(OUT),'QA_AUDIO':str(OUT/'synthetic.wav') if discard_only else str(next((INPUT/'trackhunt/audio').glob('*/normalized.wav')))}
         run(['node','qa/identify-browser.mjs'],env=qaenv)
+        if playlist_only:
+            def mcp(name,args):
+                req=urllib.request.Request(APP_ORIGIN+'/mcp',data=json.dumps({'jsonrpc':'2.0','id':1,'method':'tools/call','params':{'name':name,'arguments':args}}).encode(),headers={'Content-Type':'application/json'})
+                with urllib.request.urlopen(req) as r: result=json.load(r)['result']
+                assert not result['isError'],result
+                return json.loads(result['content'][0]['text'])
+            entries=mcp('playlist_list',{})['playlists'];assert len(entries)==1
+            saved=mcp('playlist_save',json.loads((ROOT/'docs/playlist-seed.json').read_text()))
+            assert saved['url']=='https://www.youtube.com/watch?v=9TbASs-ZjHA' and saved['id']==entries[0]['id']
+            assert mcp('playlist_list',{})['playlists']==entries
+            assert json.loads(get('/wizard-music/api/playlists')[0])['playlists']==entries
+            (OUT/'playlist-api-mcp.json').write_text(json.dumps({'ok':True,'entries':entries,'duplicate_mcp_save':True,'no_autoplay':True},indent=2))
     finally:
         for p in children:p.terminate()
         for p in children:
