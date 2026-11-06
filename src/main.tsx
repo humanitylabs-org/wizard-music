@@ -1,7 +1,7 @@
 import { StrictMode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { lastViewWasNowPlaying, MiniPlayer, MusicApp, musicControl, NowPlaying, rememberView, restoreMusicSession, whenTrackLoaded } from './music/MusicApp'
-import { installMusicVoice, installIdentifyClaims, installPendingIdentify } from './music/voice'
+import { installMusicVoice, installMusicRoute } from './music/voice'
 import { IdentifyButtons, IdentifyView } from './music/IdentifyView'
 import { identifyControl, type CapturePort } from './music/identify'
 import { useSyncExternalStore } from 'react'
@@ -146,13 +146,14 @@ function App() {
   }, [autoOpenNowPlaying])
   // Identify shares capture custody with the shell; leaving the list never discards audio.
   useEffect(() => {
-    let disposed = false, cleanup: (() => void) | undefined
-    void identifyControl.init(() => { if (nowPlayingRef.current) closeNowPlaying() }).then(fn => { if (disposed) fn(); else cleanup = fn })
-    if (new URLSearchParams(location.search).get('view') === 'identify') identifyControl.open()
-    return () => { disposed = true; cleanup?.() }
-  }, [closeNowPlaying])
+    let disposed = false, cleanup: (() => void) | undefined, routeCleanup: (() => void) | undefined
+    void identifyControl.init(() => { if (nowPlayingRef.current) closeNowPlaying() }).then(fn => { if (disposed) fn(); else { cleanup = fn; routeCleanup = installMusicRoute(notify) } })
+    const params = new URLSearchParams(location.search)
+    if (params.get('view') === 'identify' && !params.get('q')?.trim()) identifyControl.open()
+    return () => { disposed = true; routeCleanup?.(); cleanup?.() }
+  }, [closeNowPlaying, notify])
   // The Wizard OS orb drives playback: "play …", pause, next, louder (src/music/voice.ts).
-  useEffect(() => { const a = installMusicVoice(notify), b = installIdentifyClaims(notify), c = installPendingIdentify(); return () => { a(); b(); c() } }, [notify])
+  useEffect(() => installMusicVoice(notify), [notify])
   // A voice search shows its results list, so Now Playing steps aside.
   useEffect(() => musicControl.onSearchShown(() => { if (nowPlayingRef.current) closeNowPlaying() }), [closeNowPlaying])
   useLayoutEffect(() => {
@@ -177,12 +178,6 @@ function App() {
   </div>
 }
 
-function IdentifyVoiceService() {
-  useEffect(() => { window.WizardApp.ready({ name: 'Music', version: '0.2.0-identify' }); return installIdentifyClaims(() => undefined) }, [])
-  return null
-}
-const voiceService = (() => { try { return !!(window.frameElement as HTMLElement | null)?.dataset.voiceService } catch { return false } })()
-// Wizard restarted or the app updated: carry on with the song, spot, queue and station from last time.
-// The hidden voice receiver never starts a second player.
-if (!voiceService) restoreMusicSession()
-createRoot(document.getElementById('root')!).render(voiceService ? <IdentifyVoiceService /> : <App />)
+// Wizard restarted or the app updated: keep the song, position, queue and station.
+restoreMusicSession()
+createRoot(document.getElementById('root')!).render(<App />)

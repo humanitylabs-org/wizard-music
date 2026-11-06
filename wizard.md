@@ -30,7 +30,11 @@ view:
     build: npm ci && npm run build
     dist: dist
 health: /health
-provides: [music, voice-commands]
+provides: [music]
+voice_routes:
+  - words: [music, shazam]
+    open: "?view=identify&listen=1"
+    rest_param: q
 voice_names: [Music, Wizard Music]
 needs: []
 uses: []

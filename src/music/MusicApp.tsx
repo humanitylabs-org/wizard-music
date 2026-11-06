@@ -20,7 +20,7 @@ async function musicJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 export const musicApi = {
   home: () => musicJson<MusicHome>(BASE + 'api/home'),
-  search: (q: string) => musicJson<{ tracks: MusicTrack[] }>(`${BASE}api/search?q=${encodeURIComponent(q)}`),
+  search: (q: string, signal?: AbortSignal) => musicJson<{ tracks: MusicTrack[] }>(`${BASE}api/search?q=${encodeURIComponent(q)}`, { signal }),
   station: (seed: { trackId?: string; query?: string; label?: string }) => musicJson<{ station: MusicStation; tracks: MusicTrack[] }>(BASE + 'api/station', { method: 'POST', body: JSON.stringify(seed) }),
   feedback: (id: string, action: FeedbackAction, upcoming: string[] = []) => musicJson<FeedbackResult>(BASE + 'api/feedback', { method: 'POST', body: JSON.stringify({ id, action, upcoming }) }),
   /** A spoken request as heard ("play music guy barato trap"): the hub fixes misheard names and picks a station. */
@@ -223,6 +223,8 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
   const [searching, setSearching] = useState(false)
   const [starting, setStarting] = useState('')
   const searchSeq = useRef(0)
+  const searchTimer = useRef(0)
+  const searchAbort = useRef<AbortController | null>(null)
   const current = snapshot.queue[snapshot.index]
 
   const loadHome = useCallback(() => {
@@ -232,13 +234,17 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
   useEffect(() => { loadHome() }, [loadHome])
 
   const runSearch = useCallback(async (text: string, quiet = false): Promise<number> => {
+    window.clearTimeout(searchTimer.current)
+    searchAbort.current?.abort()
+    const controller = new AbortController()
+    searchAbort.current = controller
     const q = text.trim()
     const seq = ++searchSeq.current
-    if (!q) { setResults(null); return 0 }
+    if (!q) { setSearching(false); setResults(null); return 0 }
     setSearching(true)
     if (quiet) setResults((was) => was ?? [])
     try {
-      const payload = await musicApi.search(q)
+      const payload = await musicApi.search(q, controller.signal)
       if (seq === searchSeq.current) setResults(payload.tracks)
       return payload.tracks.length
     } catch (error) {
@@ -248,6 +254,15 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
       return 0
     } finally { if (seq === searchSeq.current) setSearching(false) }
   }, [notify])
+  const changeQuery = (text: string) => {
+    // Paint in the input event, before the debounce or any network. Invalidate old replies now, not 250 ms later.
+    ++searchSeq.current
+    window.clearTimeout(searchTimer.current)
+    searchAbort.current?.abort()
+    setQuery(text); setSearching(!!text.trim()); setResults(text.trim() ? [] : null)
+    if (text.trim()) searchTimer.current = window.setTimeout(() => { void runSearch(text) }, 250)
+  }
+  useEffect(() => () => { ++searchSeq.current; window.clearTimeout(searchTimer.current); searchAbort.current?.abort() }, [])
   // Voice: "search for X" fills the box and lists the results, top of the page.
   useEffect(() => {
     searchHandler = (q) => { setQuery(q); window.scrollTo?.(0, 0); return runSearch(q, true) }
@@ -283,9 +298,9 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
 
   return <section className="music-workspace" aria-label="Wizard Music">
     <form className="music-search" role="search" onSubmit={(event) => { event.preventDefault(); void runSearch(query) }}>
-      <SearchGlyph />
-      <input type="search" value={query} placeholder="Song, artist, or vibe" aria-label="Search music" enterKeyHint="search" onChange={(event) => { setQuery(event.target.value); if (!event.target.value) setResults(null) }} />
-      {query && <button type="button" className="music-clear" aria-label="Clear search" onClick={() => { setQuery(''); setResults(null) }}>×</button>}
+      {searching ? <LoadingWheel label="Searching music" /> : <SearchGlyph />}
+      <input type="search" value={query} placeholder="Song, artist, or vibe" aria-label="Search music" enterKeyHint="search" onChange={(event) => changeQuery(event.target.value)} />
+      {query && <button type="button" className="music-clear" aria-label="Clear search" onClick={() => changeQuery('')}>×</button>}
     </form>
 
     {starting && <p className="music-status" role="status">Starting your station…</p>}

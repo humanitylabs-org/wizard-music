@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createHash } from 'node:crypto'
 import { identifyControl } from '../src/music/identify'
-import { installIdentifyClaims, parseMusicCommand, runMusicCommand } from '../src/music/voice'
+import { installMusicRoute, parseMusicCommand, runMusicCommand } from '../src/music/voice'
 
 const flush = async () => { for (let n=0;n<8;n++) await Promise.resolve() }
 afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); localStorage.clear(); identifyControl.back() })
@@ -39,21 +39,6 @@ describe('held microphone and app-owned shell claims', () => {
     expect(identifyControl.snapshot().phase).toBe('idle')
     expect(identifyControl.snapshot().error).toBe('Microphone unavailable')
     expect(release).toHaveBeenCalledTimes(1)
-  })
-  it('claims priority before app names; taps remain messages and larger utterances are not stolen', async () => {
-    let handler: {claims(s:string,c:{kind:string;stage:string}):boolean; receive(s:string):Promise<boolean>} | undefined
-    const unregister=vi.fn()
-    const focusApp=vi.fn(async()=>true)
-    vi.stubGlobal('WizardApp', {voice:{commands:{register:vi.fn(h=>{handler=h;return unregister})}},view:{isVisible:()=>false},shell:{focusApp}})
-    const cleanup=installIdentifyClaims(()=>undefined)
-    for(const s of ['music','shazam',"what's this song",'identify this']) expect(handler!.claims(s,{kind:'command',stage:'priority'})).toBe(true)
-    expect(handler!.claims('music',{kind:'message',stage:'priority'})).toBe(false)
-    expect(handler!.claims('I listen to music',{kind:'command',stage:'priority'})).toBe(false)
-    expect(handler!.claims('music',{kind:'command',stage:'app'})).toBe(false)
-    expect(await handler!.receive('music')).toBe(true)
-    expect(focusApp).toHaveBeenCalledTimes(1)
-    expect(JSON.parse(localStorage.getItem('wizard-music.identify.command.v1')!).at).toBeGreaterThan(0)
-    cleanup();expect(unregister).toHaveBeenCalledTimes(1)
   })
   it('voice returns on same frame while capture permission is held', async () => {
     let reject!: (reason: Error) => void
@@ -108,18 +93,7 @@ describe('sending a saved clip', () => {
     expect(rows.has(clip.id)).toBe(true)
   }, 15000)
 
-  it('the hidden voice receiver hands Identify to the visible app instead of recording itself', async () => {
-    let handler: {receive(s: string): Promise<boolean>} | undefined
-    const start = vi.fn(); const focusApp = vi.fn(async () => true)
-    Object.defineProperty(window, 'frameElement', { configurable: true, value: { dataset: { voiceService: 'wizard-music' } } })
-    vi.stubGlobal('WizardApp', { voice: { commands: { register: vi.fn(h => { handler = h; return () => undefined }) } }, view: { isVisible: () => true }, shell: { focusApp }, capture: { start } })
-    const cleanup = installIdentifyClaims(() => undefined)
-    expect(await handler!.receive('music')).toBe(true)
-    expect(focusApp).toHaveBeenCalledTimes(1)
-    expect(start).not.toHaveBeenCalled()
-    cleanup()
-    Object.defineProperty(window, 'frameElement', { configurable: true, value: null })
-  })
+
 })
 
 describe('Back after the sheet already closed', () => {

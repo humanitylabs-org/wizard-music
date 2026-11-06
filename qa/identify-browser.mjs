@@ -42,7 +42,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   // A real owner box has an AI signed in and setup finished, so the first-run Welcome never covers the app.
   if(u.pathname==='/wizard/hermes/api/model/options')return route.fulfill({json:{provider:'anthropic',providers:[{slug:'anthropic',authenticated:true}]}})
   if(u.pathname==='/wizard/v1/setup')return route.fulfill({json:{first_run:false,state:'done'}})
-  if(u.pathname==='/wizard/v1/apps')return route.fulfill({json:{apps:[{id:'wizard-music',name:'Music',url:'/wizard-music/',view:{mode:'original',url:'/wizard-music/'},source:'apps.json',type:'service',provides:['music','voice-commands'],voice_names:['Music','Wizard Music']}]}})
+  if(u.pathname==='/wizard/v1/apps')return route.fulfill({json:{apps:[{id:'wizard-music',name:'Music',url:'/wizard-music/',view:{mode:'original',url:'/wizard-music/'},source:'launcher.json',type:'service',provides:['music'],voice_names:['Music','Wizard Music'],voice_routes:[{words:['music','shazam'],open:'?view=identify&listen=1',rest_param:'q'}]}]}})
   if(u.pathname.startsWith('/wizard/') || u.pathname.startsWith('/api/') || u.pathname.startsWith('/notifications/') || u.pathname.startsWith('/pages/')){
    if(req.method()!=='GET')return route.fulfill({status:403,json:{error:'No owner writes in isolated QA'}})
    return route.fulfill({json:u.pathname.endsWith('/ui-preferences')?{pinnedChats:[],spaces:[],migrations:{'launcher.v1':true}}:u.pathname.endsWith('/sessions')?{data:[],has_more:false}:u.pathname.endsWith('/items')?{items:[]}:u.pathname.endsWith('/count')?{unread:0,needs:0}:{}})
@@ -71,33 +71,33 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await page.addInitScript(()=>{try{if(location.pathname.startsWith('/wizard-os-home/'))localStorage.setItem('wos.welcome.v1','done')}catch{}})
  await page.goto(ORIGIN+'/wizard-os-home/'+(shell==='phone'?'?shell=phone':'desktop.html'),{waitUntil:'load'})
  await page.waitForFunction(([sh,sk])=>document.documentElement.dataset.shell===sh&&document.documentElement.dataset.skin===sk,[shell,skin])
- await page.waitForFunction(()=>window.WizAppServices?.inspect().some(x=>x.appId==='wizard-music'&&x.ready))
- // The shell marks a frame ready when app-client connects; the app's React claim registers a moment later.
- // Wait for the real claim (bounded), and on failure dump what the hidden receiver actually has.
- const claimed=await page.waitForFunction(()=>!!window.WizAppServices.voiceCommand('music',{stage:'priority',kind:'command',view:{kind:'thread list'}}),null,{timeout:20000}).then(()=>true,()=>false)
- if(!claimed){
-  const diag=await page.evaluate(()=>{const f=document.querySelector('iframe[data-voice-service="wizard-music"]');const w=f?.contentWindow;let reg='no-frame';try{if(w){w.WizardApp.voice.commands.register({claims:()=>false,receive:async()=>false});reg='nothing-registered'}}catch(e){reg='registered:'+e.message}return {frame:!!f,src:f?.src,root:w?.document.getElementById('root')?.outerHTML?.slice(0,300),reg,inspect:window.WizAppServices.inspect()}})
-  throw Error('Music never claimed bare "music": '+JSON.stringify({diag,errors,consoleLines:consoleLines.slice(-20)}))
- }
- // Use the shell's real priority dispatcher with a deliberately colliding bare Music app name.
- const command=await page.evaluate(()=>{
-  const grammar=window.WosCommands.create({CHATS:{},APP:{},appByName:()=>({name:'Music'}),findApp:()=>null,quickSearch:()=>null,sendSnap:()=>({view:{kind:'thread list'}})})
+ await page.waitForFunction(sh=>window.WizCore.apps(sh).APP['wizard-music']?.voice_routes?.length,shell)
+ const command=await page.evaluate(sh=>{
+  const registry=window.WizCore.apps(sh)
+  const grammar=window.WosCommands.create({CHATS:{},...registry,quickSearch:()=>null,sendSnap:()=>({view:{kind:'thread list'}})})
   const cmd=grammar.parse('music',{view:{kind:'thread list'}},'command')
-  if(cmd?.action!=='app_voice')throw Error('Bare music was swallowed by app-open routing: '+JSON.stringify(cmd))
-  if(!window.WosAppVoice.execute(cmd,'music',{}))throw Error('Identify claim was not admitted')
+  if(cmd?.action!=='open_app_route')throw Error('Bare music did not use its declared route: '+JSON.stringify(cmd))
+  let admitted=false
+  const remove=window.WosFeatures.register({id:'qa-music-route',run:H=>{admitted=H.command('music',{view:{kind:'thread list'}})}})
+  window.WosFeatures.open('qa-music-route');remove()
+  if(!admitted)throw Error('Shell did not open the Music route')
+  if(document.querySelector('iframe[data-voice-service="wizard-music"]'))throw Error('Music still has a hidden voice receiver')
   return cmd.action
- })
+ },shell)
  const visible=page.locator('iframe:not([data-voice-service])[src*="/wizard-music/"]:visible').last()
  await visible.waitFor({state:'visible'})
  const frame=await (await visible.elementHandle()).contentFrame()
- await frame.getByRole('button',{name:'Stop and identify',exact:true}).waitFor({state:'visible'})
- netLines.push(ts()+' CLICK Stop and identify; starts='+JSON.stringify(await frame.evaluate(()=>window.__qaStarts.length)))
- await frame.getByRole('button',{name:'Stop and identify',exact:true}).click()
- netLines.push(ts()+' CLICKED')
- // Stop must take effect at once (the recording panel leaves Listening); a covered or swallowed tap fails here, not 30 s later.
- const stopped=await frame.waitForFunction(()=>!/Listening…/.test(document.querySelector('.identify-recording')?.textContent||''),null,{timeout:5000}).then(()=>true,()=>false)
- if(!stopped)throw Error('Stop and identify did not take effect: '+JSON.stringify({welcome:await page.evaluate(()=>({active:window.WosWelcome?.active,log:window.WosWelcome?.log}))})+' '+await dump(frame,'stop-click'))
- await waitAcks(frame,1,'Upload after Stop')
+ await frame.getByRole('progressbar',{name:'Audio capture target'}).waitFor({state:'visible'})
+ const ringImage=path.join(out,`${shell}-${skin}-identify-ring.png`)
+ await page.screenshot({path:ringImage})
+ await frame.getByRole('button',{name:/^Find it/}).click()
+ await frame.locator('dialog[open]').waitFor()
+ await waitAcks(frame,1,'Upload after Find it')
+ const resultsImage=path.join(out,`${shell}-${skin}-identify-results.png`)
+ await page.screenshot({path:resultsImage})
+ assert.match(await frame.locator('dialog[open]').innerText(),/Finding your track|No match|Possible matches/)
+ await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
+ await frame.waitForFunction(()=>!document.querySelector('dialog[open]'))
  // Open imported hunt and verify media really decodes.
  await frame.getByRole('button',{name:'Hunts',exact:true}).click()
  const row=frame.locator('.identify-hunt').filter({hasText:hunt.best_title}).first()
@@ -127,18 +127,20 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await frame.getByText('Starting microphone…',{exact:true}).waitFor()
  assert.equal(await frame.evaluate(()=>window.__qaStarts.length),2)
  await frame.evaluate(()=>{window.__qaHold=false;window.__qaResolve()})
- await frame.getByText('Listening…',{exact:true}).waitFor()
+ await frame.getByRole('progressbar',{name:'Audio capture target'}).waitFor()
  offline=true
- await frame.getByRole('button',{name:'Stop and identify',exact:true}).click()
- await frame.getByText(/Saved on this device · waiting for connection/).first().waitFor()
+ await frame.getByRole('button',{name:/^Find it/}).click()
+ await frame.getByText('Saved on this device',{exact:true}).first().waitFor()
  assert.equal(await acks(frame),1)
  offline=false
  await frame.evaluate(()=>dispatchEvent(new Event('online')))
  await waitAcks(frame,2,'Reconnect upload')
+ await page.evaluate(el=>window.WizAppServices.back(el),await visible.elementHandle())
+ await frame.waitForFunction(()=>!document.querySelector('dialog[open]'))
  await frame.getByRole('button',{name:'Hunts',exact:true}).click()
  const listImage=path.join(out,`${shell}-${skin}-identify-hunts.png`)
  await page.screenshot({path:listImage})
- rows.push({shell,skin,priority_bare_music:command,legacy_audio_decoded:true,back_sheet_list_home:true,held_permission_same_frame:true,offline_saved_reconnected:true,screenshots:[sheetImage,listImage],pageerrors:errors})
+ rows.push({shell,skin,priority_bare_music:command,legacy_audio_decoded:true,back_sheet_list_home:true,held_permission_same_frame:true,offline_saved_reconnected:true,screenshots:[sheetImage,listImage,ringImage,resultsImage],pageerrors:errors})
  await context.close()
 }
 } finally {await browser.close()}

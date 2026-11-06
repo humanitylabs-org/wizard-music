@@ -7,12 +7,13 @@ export type CaptureResult = { id: string; blob: Blob; mime: string; startedAt: n
 export type CaptureHandle = { id: string; stop(): Promise<CaptureResult>; onLevel(fn: (value: number | { me?: number; them?: number }) => void): () => void }
 export type CapturePort = { start(options: Record<string, unknown>): Promise<CaptureHandle>; pending(): Promise<CaptureResult[]>; ack(id: string): Promise<unknown> }
 type LocalClip = { id: string; sharedId?: string; blob: Blob; mime: string; client_ts: string; duration_s: number; geo?: Record<string, number>; partial?: boolean; note?: string }
-type State = { open: boolean; selected: string | null; detail: Hunt | null; hunts: Hunt[]; locals: LocalClip[]; phase: 'idle' | 'starting' | 'recording' | 'saving'; elapsed: number; level: number; error: string; loading: boolean; note: string; geoEnabled: boolean; sendErrors: Record<string, string> }
+type State = { open: boolean; selected: string | null; detail: Hunt | null; hunts: Hunt[]; locals: LocalClip[]; phase: 'idle' | 'starting' | 'recording' | 'saving'; elapsed: number; level: number; error: string; loading: boolean; note: string; geoEnabled: boolean; sendErrors: Record<string, string>; sending: string | null; needsTap: boolean }
 const BASE = '/wizard-music/api/identify/'
 const ACTIVE = 'wizard-music.identify.active.v1'
-let state: State = { open: false, selected: null, detail: null, hunts: [], locals: [], phase: 'idle', elapsed: 0, level: 0, error: '', loading: false, note: '', geoEnabled: false, sendErrors: {} }
+let state: State = { open: false, selected: null, detail: null, hunts: [], locals: [], phase: 'idle', elapsed: 0, level: 0, error: '', loading: false, note: '', geoEnabled: false, sendErrors: {}, sending: null, needsTap: false }
 const listeners = new Set<() => void>()
 function paint(patch: Partial<State>) { state = { ...state, ...patch }; listeners.forEach(fn => fn()) }
+let recordingId = ''
 let handle: CaptureHandle | null = null, startedAt = 0, tick = 0, autoStop = 0, offLevel: (() => void) | undefined
 let releaseHold: (() => void) | undefined
 let draining: Promise<void> | null = null
@@ -111,20 +112,21 @@ async function drain(): Promise<void> {
         for (const item of await localStore('all')) {
           if (!item.blob?.size || (item.partial && !item.sharedId)) continue
           try {
+            paint({ sending: item.id })
             await uploadClip(item)
             const { [item.id]: _sent, ...rest } = state.sendErrors; paint({ sendErrors: rest })
           } catch (e) { failed = true; paint({ sendErrors: { ...state.sendErrors, [item.id]: (e as Error).message || 'Not sent yet. Retrying.' } }); break }
         }
         if (failed) scheduleRetry(); else retryDelay = 5000
       } while (drainAgain)
-    } finally { await refresh() }
+    } finally { paint({ sending: null }); await refresh() }
   })().finally(() => { draining = null })
   return draining
 }
 async function start(resume?: { id: string; startedAt: number }) {
   if (state.phase !== 'idle') { paint({ open: true }); return }
   // This is before capture/permissions, storage, geolocation or any network request.
-  paint({ open: true, phase: 'starting', elapsed: 0, error: '' })
+  paint({ open: true, selected: null, detail: null, phase: 'starting', elapsed: 0, error: '', needsTap: false })
   closePlayer?.()
   const hold = window.WizardApp.update?.hold('Saving a song identification clip')
   releaseHold = () => hold?.release()
@@ -135,20 +137,23 @@ async function start(resume?: { id: string; startedAt: number }) {
     startedAt = resume?.startedAt || Date.now()
     const captured = await window.WizardApp.capture.start({ kind: 'audio', resumeId: resume?.id, chunkMs: 1000, maxMs: Math.max(1000, 30000 - (Date.now() - startedAt)), audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }, meta: { task: 'music-identify', geo, note: state.note } })
     handle = { id: captured.id, onLevel: fn => captured.onLevel(fn), stop: async () => { const result = await captured.stop(); return { ...result, meta: { ...result.meta, geo: geo || result.meta?.geo } } } }
+    if (!resume) startedAt = Date.now() // Permission time is not recorded audio.
+    recordingId = await backendCaptureId(handle.id)
     localStorage.setItem(ACTIVE, JSON.stringify({ id: handle.id, startedAt }))
     offLevel = handle.onLevel(v => paint({ level: Math.max(0, Math.min(1, typeof v === 'number' ? v : Math.max(v.me || 0, v.them || 0))) }))
     paint({ phase: 'recording' })
     tick = window.setInterval(() => paint({ elapsed: Math.min(30, (Date.now() - startedAt) / 1000) }), 200)
     autoStop = window.setTimeout(() => { void stop() }, Math.max(0, 30000 - (Date.now() - startedAt)))
   } catch (e) {
-    paint({ phase: 'idle', error: (e as Error).message || 'Microphone unavailable. Try Identify again.' })
+    paint({ phase: 'idle', needsTap: true, error: (e as Error).message || 'Microphone unavailable. Tap to try again.' })
     releaseHold?.(); releaseHold = undefined
     if ((e as { code?: string }).code === 'not_recoverable') localStorage.removeItem(ACTIVE)
   }
 }
 async function stop() {
   if (!handle || state.phase === 'saving') return
-  paint({ phase: 'saving' })
+  // Open this take before Stop/storage/network settles. Capture custody and the durable outbox stay unchanged.
+  paint({ phase: 'saving', open: true, selected: recordingId, detail: null, error: '' })
   window.clearInterval(tick); window.clearTimeout(autoStop); offLevel?.()
   try {
     const result = await handle.stop()
@@ -183,7 +188,12 @@ export const identifyControl = {
     closePlayer = onIdentify
     const online = () => { retryDelay = 5000; window.clearTimeout(retryTimer); retryTimer = 0; void drain() }
     window.addEventListener('online', online)
-    const poll = window.setInterval(() => { if (state.open && !this.busy()) void refresh() }, 5000)
+    let polls = 0
+    const poll = window.setInterval(() => {
+      if (!state.open || this.busy()) return
+      if (state.selected && (!state.detail || ['pending', 'uploaded', 'hunting'].includes(state.detail.status))) void detail(state.selected, false)
+      if (++polls % 3 === 0) void refresh()
+    }, 2000)
     try {
       const active = JSON.parse(localStorage.getItem(ACTIVE) || 'null')
       const pending = await window.WizardApp.capture.pending()
