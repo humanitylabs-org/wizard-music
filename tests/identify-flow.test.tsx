@@ -25,6 +25,7 @@ it('the no-match Discard closes the sheet and removes its row in the click befor
   expect(document.querySelector('.identify-hunt')).toBeNull()
   expect(document.querySelector('.identify-notice')?.textContent).toContain('Undo')
   act(()=>control.back())
+  await act(async()=>{ await Promise.resolve() })
   await act(async()=>finish({ok:false,json:async()=>({error:'fixture refusal'})}))
   expect(document.querySelector('.identify-view')).toBeNull()
   expect(document.querySelector('.identify-notice[role=alert]')?.textContent).toContain('Try again')

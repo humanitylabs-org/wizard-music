@@ -45,14 +45,14 @@ describe('explicit reversible no-match discard', () => {
   it('failure restores the same clip and exposes retry after navigating home or hiding Music',async()=>{
     fail=true
     const request=control.discard(id); control.back(); visible=false
-    held!(); await request
+    await flush(); held!(); await request
     expect(control.snapshot()).toMatchObject({open:false,discardNotice:{action:'discard',error:true}})
     expect(control.snapshot().hunts.map(h=>h.id)).toEqual([id]); expect(toast).toHaveBeenCalledTimes(1)
-    fail=false; const retry=control.discard(id); held!(); await retry
+    fail=false; const retry=control.discard(id); await flush(); held!(); await retry
     expect(server.retention_state).toBe('discarded')
-    fail=true; const undo=control.restore(id); held!(); await undo
+    fail=true; const undo=control.restore(id); await flush(); held!(); await undo
     expect(control.snapshot()).toMatchObject({hunts:[],discardNotice:{action:'restore',error:true}})
-    fail=false; const retryUndo=control.restore(id); held!(); await retryUndo
+    fail=false; const retryUndo=control.restore(id); await flush(); held!(); await retryUndo
     expect(control.snapshot().hunts.map(h=>h.id)).toEqual([id])
   })
   it.each(['pending','uploaded','hunting','has_leads','resolved','identified','error'])('does not discard %s captures',async status=>{
@@ -61,6 +61,7 @@ describe('explicit reversible no-match discard', () => {
   })
   it('Undo while discard is pending serializes one restore after real discard',async()=>{
     const request=control.discard(id),undo=control.restore(id)
+    expect(post).not.toHaveBeenCalled(); await flush()
     expect(post).toHaveBeenCalledTimes(1); held!(); await request; await flush()
     expect(post).toHaveBeenCalledTimes(2); held!(); await undo
     expect(server.retention_state).toBe('active')

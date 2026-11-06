@@ -48,8 +48,10 @@ function discard(id: string): Promise<void> {
   leaveWaiting(); ++detailGeneration; ++refreshGeneration
   // Close and remove before the first network/storage/bridge call; double taps see the tombstone.
   paint({ ...(state.selected === id ? { selected: null, detail: null } : {}), hunts: activeHunts(state.hunts), freshId: state.freshId === id ? null : state.freshId, discardNotice: { id, message: 'Discarded · audio kept', action: 'undo' } })
-  const hold = window.WizardApp.update?.hold('Keeping a reversible identification discard')
   const operation = (async () => {
+    // Let the event's flushSync commit the removal before any bridge/network I/O.
+    await Promise.resolve()
+    const hold = window.WizardApp.update?.hold('Keeping a reversible identification discard')
     try {
       await identifyJson<Hunt>(`captures/${id}/discard`, {})
       const saved = await identifyJson<Hunt>(`captures/${id}`)
@@ -76,9 +78,10 @@ function restore(id: string): Promise<void> {
   if (captureOverlay.get(id) !== null) return Promise.resolve()
   captureOverlay.set(id, { ...record, retention_state: 'active' }); ++refreshGeneration
   paint({ hunts: activeHunts(state.hunts), discardNotice: { id, message: 'Restoring identification…', action: null } })
-  const hold = window.WizardApp.update?.hold('Restoring an identification')
   restoring.add(id)
   const operation = (async () => {
+    await Promise.resolve()
+    const hold = window.WizardApp.update?.hold('Restoring an identification')
     try {
       await identifyJson<Hunt>(`captures/${id}/restore`, {})
       const saved = await identifyJson<Hunt>(`captures/${id}`)
