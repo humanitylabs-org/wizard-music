@@ -601,8 +601,11 @@ STYLE_FAMILIES = {
                   "chillwave": .7, "vaporwave": .6, "synth": .6, "synthpop": .4},
     "vaporwave": {"vaporwave": 1, "mallsoft": .9, "future funk": .7, "chillwave": .6, "synthwave": .6, "simpsonwave": 1},
     "chillwave": {"chillwave": 1, "chillsynth": .9, "synthwave": .6, "vaporwave": .6, "dream pop": .5},
+    # Deep house is narrow: plain "house", tech house, electro house and party remixes are not deep house, so
+    # their weights sit under STYLE_AT and only a deep/melodic/organic/minimal tag gets a song in.
     "deep house": {"deep house": 1, "melodic house": .8, "organic house": .8, "minimal house": .8, "lo-fi house": .7,
-                   "garage house": .7, "house": .6, "tech house": .6, "progressive house": .6, "minimal": .6, "minimal techno": .5},
+                   "afro house": .5, "house": .45, "tech house": .4, "progressive house": .45, "minimal": .4, "minimal techno": .3,
+                   "garage house": .4},
     "house": {"house": 1, "deep house": .9, "tech house": .9, "melodic house": .9, "garage house": .9, "progressive house": .8,
               "organic house": .8, "afro house": .8, "minimal": .6, "dance": .4},
     "melodic house": {"melodic house": 1, "melodic techno": .9, "progressive house": .8, "deep house": .7, "organic house": .8},
@@ -1071,6 +1074,27 @@ def _style_loop():
             time.sleep(5)
 
 
+ELECTRONIC_GENRES = {"house", "dance", "electronic", "electronica", "electro", "techno", "edm", "dance & electronic", "club/dance"}
+
+
+def style_fit(t: dict, style: str) -> int:
+    """How well a song suits a `style` station: 2 = its artists' styles say yes, 1 = nothing known about the
+    artists yet but the genre is electronic, 0 = no (its artists' styles say another sound), -1 = nothing known
+    at all. Unknown songs are looked up in the background so the next pick knows."""
+    names = artist_names(t.get("artist", ""))
+    if style_match(track_styles(t), style) >= STYLE_AT:
+        return 2
+    if any(artist_styles(_key(n)) for n in names):
+        return 0
+    for n in names:
+        queue_style(n, t.get("title", ""))
+    genre = genre_of(t["id"]).strip().lower()
+    if not genre:
+        queue_info(t["id"])
+        return -1
+    return 1 if genre in ELECTRONIC_GENRES else 0
+
+
 def style_station(style: str, said: str, q: str) -> dict | None:
     """A station that plays your own tracks in this style, interleaved with radio grown from them."""
     mine = collection(style)
@@ -1101,7 +1125,7 @@ def style_station(style: str, said: str, q: str) -> dict | None:
         if not mine_left:
             queue += radio
             radio = []
-    out = create_station({"trackId": first["id"], "label": label, "queue": queue, "pool": [t["id"] for t in mine]})
+    out = create_station({"trackId": first["id"], "label": label, "queue": queue, "pool": [t["id"] for t in mine], "style": style})
     heard = f"{label} · {len(mine)} of your songs" if len(mine) >= COLLECTION_MIN else label
     return {"kind": "collection", "said": said, "query": q, "heard": heard, "style": style, "mine": len(mine), **out}
 
@@ -1501,6 +1525,11 @@ def create_station(seed: dict) -> dict:
     state = {"seed": tid, "queue": candidates, "played": [tid], "lastSeed": tid}
     if seed.get("pool"):
         state["pool"] = list(seed["pool"])[:300]  # your own tracks this station keeps coming back to
+    if seed.get("style"):
+        state["style"] = str(seed["style"])  # every song this station serves has to sound like it
+        for cid in candidates[:40]:
+            queue_styles_for(cid)
+            queue_info(cid)
     sid = uuid.uuid4().hex[:16]
     db("INSERT INTO stations(id,title,seed,state,at) VALUES(?,?,?,?,?)", (sid, title, tid, json.dumps(state), time.time()))
     tracks = [first] + _take(sid, state, 14)
@@ -1591,6 +1620,8 @@ def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
     taste = taste_profile()
     recent = recent_songs(state)
     out: list[dict] = []
+    maybe: list[str] = []  # style station: electronic songs by artists not looked up yet (used only if nothing better)
+    later: list[str] = []  # style station: songs nothing is known about yet (asked again once looked up)
     attempts = 0
     while len(out) < n and attempts < 4:
         attempts += 1
@@ -1602,6 +1633,13 @@ def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
                 continue
             t = track(tid)
             if t and not blocked(t, taste) and not off_station(t, allowed, taste):
+                fit = 2 if tid in pool or not state.get("style") else style_fit(t, state["style"])
+                if fit < 2:  # a style station only plays what sounds like its style; unknowns wait for their lookup
+                    if fit == 1:
+                        maybe.append(tid)
+                    elif fit == -1:
+                        later.append(tid)
+                    continue
                 sig = song_sig(t)
                 if any(rid != tid and same_song(sig, rsig) for rid, rsig in recent):
                     continue  # another version of a song you just heard
@@ -1633,6 +1671,18 @@ def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
             state["queue"] = [c for c in _radio_from(reseed) if c not in state["played"]]
             if not state["queue"]:
                 break
+    if state.get("style"):
+        for tid in maybe:  # nothing better turned up: electronic songs by artists not looked up yet
+            if len(out) >= n:
+                break
+            t = track(tid)
+            sig = song_sig(t) if t else None
+            if t and not any(rid != tid and same_song(sig, rsig) for rid, rsig in recent):
+                out.append(t)
+                state["played"].append(tid)
+                recent.append((tid, sig))
+        spare = [c for c in maybe + later if c not in state["played"]]
+        state["queue"] = state["queue"] + spare[:80]  # asked again later, once their styles are known
     state["played"] = state["played"][-400:]
     if persist:
         db("UPDATE stations SET state=?, at=? WHERE id=?", (json.dumps(state), time.time(), sid))
