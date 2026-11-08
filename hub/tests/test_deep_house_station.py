@@ -70,3 +70,24 @@ def test_station_without_style_is_unchanged(hub):
     ids = list(SONGS)
     out = hub.create_station({"trackId": "yt:deep1", "label": "radio", "queue": [i for i in ids if i != "yt:deep1"]})
     assert {"yt:hiphop", "yt:rock"} <= {t["id"] for t in out["tracks"]}
+
+
+def test_scene_station_leads_with_scene_songs_and_tags_scene_artists(hub, monkeypatch):
+    monkeypatch.setattr(hub, "ONLINE", True)
+    monkeypatch.setattr(hub, "SCENES", {"deep house": {"artists": ["Darren Phillips"], "seeds": ["Darren Phillips Velvet Skies"]}})
+    hub._scene_tracks.clear()
+    hub.db("INSERT INTO tracks(id,title,artist,album,duration_ms,thumb,source,path,updated) VALUES(?,?,?,?,?,?,?,?,?)",
+           ("yt:scene1", "Velvet Skies", "Darren Phillips", "", 200000, "", "yt", "", 0))
+
+    class FakeYTM:
+        def search(self, q, filter=None, limit=5):
+            return [{"videoId": "other"}, {"videoId": "scene1"}]
+    monkeypatch.setattr(hub, "ytm", lambda: FakeYTM())
+    monkeypatch.setattr(hub, "remember_yt", lambda item: hub.track("yt:" + item["videoId"]))
+    monkeypatch.setattr(hub, "_radio_from", lambda tid: ["yt:tech", "yt:hiphop"])
+    assert hub.scene_tracks("deep house") == ["yt:scene1"]
+    assert hub.artist_styles(hub._key("Darren Phillips"))["deep house"] == 1.0
+    out = hub.style_station("deep house", "Deep house", "deep house")
+    ids = [t["id"] for t in out["tracks"]]
+    assert ids[0] == "yt:scene1" or "yt:scene1" in ids
+    assert not set(ids) & {"yt:tech", "yt:hiphop"}

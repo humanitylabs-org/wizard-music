@@ -1074,6 +1074,60 @@ def _style_loop():
             time.sleep(5)
 
 
+# Scenes: the sound of a style as the biggest recent mixes play it. Deep house today is the moody late-night
+# vocal/nu-disco/chill-house sound (black-and-white portraits, smoke, neon) from channels like After 2AM and
+# Midnight Deep. The tracklists of those mixes (fingerprinted 8 Nov 2026) give the artists and seed songs: a
+# station for the style starts from them, and their artists count as that style so the gate lets their
+# neighbours through. HOME/scenes.json can replace or extend this without a release.
+SCENES = {
+    "deep house": {
+        "artists": ["Darren Phillips", "DJ YC1977", "TheHouseArchive", "MoonNight Vibe", "Smoke Mood", "After 2AM", "Aura House"],
+        "seeds": ["Darren Phillips Velvet Skies", "Darren Phillips Golden Horizon", "Darren Phillips Ocean Lights",
+                  "DJ YC1977 Ocean Between Us", "DJ YC1977 Low Light Fever", "DJ YC1977 Dark Room Desire",
+                  "DJ YC1977 Midnight Control", "TheHouseArchive Infinite Pulse", "TheHouseArchive Golden Dust",
+                  "MoonNight Vibe Just Relax V6 (Deep House)", "MoonNight Vibe Just Relax V10 (Deep House)",
+                  "Smoke Mood Drift With Me", "After 2AM Infinite Pulse Horizon"],
+    },
+}
+_scene_tracks: dict[str, list[str]] = {}
+
+
+def scene_of(style: str) -> dict:
+    cfg = dict(SCENES.get(style) or {})
+    try:
+        extra = json.loads((HOME / "scenes.json").read_text()).get(style)
+        if isinstance(extra, dict):
+            cfg.update({k: v for k, v in extra.items() if k in ("artists", "seeds") and isinstance(v, list)})
+    except (OSError, ValueError, AttributeError):
+        pass
+    return cfg
+
+
+def scene_tracks(style: str) -> list[str]:
+    """Track ids of the scene's seed songs (looked up once per run; only a result by the named artist counts)."""
+    cfg = scene_of(style)
+    if style in _scene_tracks or not ONLINE or not cfg:
+        return _scene_tracks.get(style, [])
+    for name in cfg.get("artists", []):  # the scene's artists count as this style
+        if not artist_styles(_key(name)):
+            db("INSERT OR REPLACE INTO artist_styles(key,name,tags,source,at) VALUES(?,?,?,?,?)",
+               (_key(name), name, json.dumps({style: 1.0, "house": 1.0}), "scene", time.time()))
+    found: list[str] = []
+    for seed in cfg.get("seeds", []):
+        owner = next((a for a in cfg.get("artists", []) if seed.lower().startswith(a.lower())), "")
+        try:
+            for item in ytm().search(seed, filter="songs", limit=5):
+                t = remember_yt(item)
+                if t and (not owner or _key(owner) in {_key(n) for n in artist_names(t["artist"])}):
+                    found.append(prefer_library(t)["id"])
+                    break
+        except Exception as exc:
+            print("scene seed failed", seed, repr(exc), file=sys.stderr)
+    if found:
+        _scene_tracks[style] = list(dict.fromkeys(found))
+    return _scene_tracks.get(style, [])
+
+
 ELECTRONIC_GENRES = {"house", "dance", "electronic", "electronica", "electro", "techno", "edm", "dance & electronic", "club/dance"}
 
 
@@ -1099,9 +1153,13 @@ def style_station(style: str, said: str, q: str) -> dict | None:
     """A station that plays your own tracks in this style, interleaved with radio grown from them."""
     mine = collection(style)
     label = style_label(style)
+    scene = [t for t in (track(i) for i in scene_tracks(style)) if t]
+    if scene:  # the scene leads; a few of your own songs in the style stay in the mix
+        have = {t["id"] for t in scene}
+        mine = scene + [t for t in mine if t["id"] not in have][:4]
     if not mine:
         return None
-    seeds = random.sample(mine[: max(6, len(mine) // 2)], k=min(3, len(mine)))
+    seeds = random.sample(scene, k=min(4, len(scene))) if scene else random.sample(mine[: max(6, len(mine) // 2)], k=min(3, len(mine)))
     radio: list[str] = []
     for seed in seeds:
         for cid in _radio_from(seed["id"]):
@@ -1126,7 +1184,7 @@ def style_station(style: str, said: str, q: str) -> dict | None:
             queue += radio
             radio = []
     out = create_station({"trackId": first["id"], "label": label, "queue": queue, "pool": [t["id"] for t in mine], "style": style})
-    heard = f"{label} · {len(mine)} of your songs" if len(mine) >= COLLECTION_MIN else label
+    heard = f"{label} · {len(mine)} of your songs" if len(mine) >= COLLECTION_MIN and not scene else label
     return {"kind": "collection", "said": said, "query": q, "heard": heard, "style": style, "mine": len(mine), **out}
 
 
