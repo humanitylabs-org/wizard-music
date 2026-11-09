@@ -1,0 +1,78 @@
+{
+  "ok": true,
+  "capture": "synthetic shared-capture port; real handset remains owner test",
+  "rows": [
+    {
+      "shell": "phone",
+      "skin": "nebula",
+      "discard_same_frame": {
+        "syncClosed": true,
+        "ms": 93.80000007152557,
+        "rows": 0,
+        "undo": true
+      },
+      "undo_real_readback": true,
+      "reload_hidden": true,
+      "audio_attempts_candidates_preserved": true,
+      "pageerrors": [],
+      "screenshots": [
+        "evidence/27/discard/phone-nebula-discard-action.png",
+        "evidence/27/discard/phone-nebula-discard-undo.png"
+      ]
+    },
+    {
+      "shell": "phone",
+      "skin": "grove",
+      "discard_same_frame": {
+        "syncClosed": true,
+        "ms": 27.799999952316284,
+        "rows": 0,
+        "undo": true
+      },
+      "undo_real_readback": true,
+      "reload_hidden": true,
+      "audio_attempts_candidates_preserved": true,
+      "pageerrors": [],
+      "screenshots": [
+        "evidence/27/discard/phone-grove-discard-action.png",
+        "evidence/27/discard/phone-grove-discard-undo.png"
+      ]
+    },
+    {
+      "shell": "desktop",
+      "skin": "nebula",
+      "discard_same_frame": {
+        "syncClosed": true,
+        "ms": 45,
+        "rows": 0,
+        "undo": true
+      },
+      "undo_real_readback": true,
+      "reload_hidden": true,
+      "audio_attempts_candidates_preserved": true,
+      "pageerrors": [],
+      "screenshots": [
+        "evidence/27/discard/desktop-nebula-discard-action.png",
+        "evidence/27/discard/desktop-nebula-discard-undo.png"
+      ]
+    },
+    {
+      "shell": "desktop",
+      "skin": "grove",
+      "discard_same_frame": {
+        "syncClosed": true,
+        "ms": 50.700000047683716,
+        "rows": 0,
+        "undo": true
+      },
+      "undo_real_readback": true,
+      "reload_hidden": true,
+      "audio_attempts_candidates_preserved": true,
+      "pageerrors": [],
+      "screenshots": [
+        "evidence/27/discard/desktop-grove-discard-action.png",
+        "evidence/27/discard/desktop-grove-discard-undo.png"
+      ]
+    }
+  ]
+}

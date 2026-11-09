@@ -1,0 +1,90 @@
+{
+  "ok": true,
+  "capture": "synthetic shared-capture port; real handset remains owner test",
+  "rows": [
+    {
+      "shell": "phone",
+      "skin": "nebula",
+      "immediate": {
+        "closed": true,
+        "pending": true,
+        "ms": 82.89999997615814
+      },
+      "url": "https://www.youtube.com/watch?v=9TbASs-ZjHA",
+      "id": "219d7b8b7030dcccc1a0f984",
+      "reload": true,
+      "deduped": true,
+      "back_and_outside": true,
+      "live_skin": true,
+      "no_autoplay_on_save": true,
+      "offline_playback_fallback": true,
+      "screenshots": [
+        "evidence/27/playlists/phone-nebula-playlist-add.png",
+        "evidence/27/playlists/phone-nebula-playlists.png"
+      ]
+    },
+    {
+      "shell": "phone",
+      "skin": "grove",
+      "immediate": {
+        "closed": true,
+        "pending": true,
+        "ms": 47.09999990463257
+      },
+      "url": "https://www.youtube.com/watch?v=9TbASs-ZjHA",
+      "id": "219d7b8b7030dcccc1a0f984",
+      "reload": true,
+      "deduped": true,
+      "back_and_outside": true,
+      "live_skin": true,
+      "no_autoplay_on_save": true,
+      "offline_playback_fallback": true,
+      "screenshots": [
+        "evidence/27/playlists/phone-grove-playlist-add.png",
+        "evidence/27/playlists/phone-grove-playlists.png"
+      ]
+    },
+    {
+      "shell": "desktop",
+      "skin": "nebula",
+      "immediate": {
+        "closed": true,
+        "pending": true,
+        "ms": 38.60000002384186
+      },
+      "url": "https://www.youtube.com/watch?v=9TbASs-ZjHA",
+      "id": "219d7b8b7030dcccc1a0f984",
+      "reload": true,
+      "deduped": true,
+      "back_and_outside": true,
+      "live_skin": true,
+      "no_autoplay_on_save": true,
+      "offline_playback_fallback": true,
+      "screenshots": [
+        "evidence/27/playlists/desktop-nebula-playlist-add.png",
+        "evidence/27/playlists/desktop-nebula-playlists.png"
+      ]
+    },
+    {
+      "shell": "desktop",
+      "skin": "grove",
+      "immediate": {
+        "closed": true,
+        "pending": true,
+        "ms": 20.5
+      },
+      "url": "https://www.youtube.com/watch?v=9TbASs-ZjHA",
+      "id": "219d7b8b7030dcccc1a0f984",
+      "reload": true,
+      "deduped": true,
+      "back_and_outside": true,
+      "live_skin": true,
+      "no_autoplay_on_save": true,
+      "offline_playback_fallback": true,
+      "screenshots": [
+        "evidence/27/playlists/desktop-grove-playlist-add.png",
+        "evidence/27/playlists/desktop-grove-playlists.png"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "ok": true,
+  "capture": "synthetic shared-capture port; real handset remains owner test",
+  "rows": [
+    {
+      "shell": "phone",
+      "skin": "nebula",
+      "persisted_unsent": true,
+      "discard_same_frame": {
+        "syncClosed": true,
+        "ms": 91.20000004768372,
+        "rows": 0,
+        "held": true,
+        "undo": true
+      },
+      "no_upload_or_ack_before_manual_send": true,
+      "shared_replay_reload_hidden": true,
+      "undo_same_uuid_blob_unsent": true,
+      "manual_send_durable_readback_before_ack": true,
+      "pageerrors": [],
+      "screenshots": [
+        "evidence/27/local/phone-nebula-local-unsent-discard.png",
+        "evidence/27/local/phone-nebula-local-discard-undo.png"
+      ]
+    },
+    {
+      "shell": "phone",
+      "skin": "grove",
+      "persisted_unsent": true,
+      "discard_same_frame": {
+        "syncClosed": true,
+        "ms": 31.899999976158142,
+        "rows": 1,
+        "held": true,
+        "undo": true
+      },
+      "no_upload_or_ack_before_manual_send": true,
+      "shared_replay_reload_hidden": true,
+      "undo_same_uuid_blob_unsent": true,
+      "manual_send_durable_readback_before_ack": true,
+      "pageerrors": [],
+      "screenshots": [
+        "evidence/27/local/phone-grove-local-unsent-discard.png",
+        "evidence/27/local/phone-grove-local-discard-undo.png"
+      ]
+    },
+    {
+      "shell": "desktop",
+      "skin": "nebula",
+      "persisted_unsent": true,
+      "discard_same_frame": {
+        "syncClosed": true,
+        "ms": 27.700000047683716,
+        "rows": 2,
+        "held": true,
+        "undo": true
+      },
+      "no_upload_or_ack_before_manual_send": true,
+      "shared_replay_reload_hidden": true,
+      "undo_same_uuid_blob_unsent": true,
+      "manual_send_durable_readback_before_ack": true,
+      "pageerrors": [],
+      "screenshots": [
+        "evidence/27/local/desktop-nebula-local-unsent-discard.png",
+        "evidence/27/local/desktop-nebula-local-discard-undo.png"
+      ]
+    },
+    {
+      "shell": "desktop",
+      "skin": "grove",
+      "persisted_unsent": true,
+      "discard_same_frame": {
+        "syncClosed": true,
+        "ms": 29.200000047683716,
+        "rows": 3,
+        "held": true,
+        "undo": true
+      },
+      "no_upload_or_ack_before_manual_send": true,
+      "shared_replay_reload_hidden": true,
+      "undo_same_uuid_blob_unsent": true,
+      "manual_send_durable_readback_before_ack": true,
+      "pageerrors": [],
+      "screenshots": [
+        "evidence/27/local/desktop-grove-local-unsent-discard.png",
+        "evidence/27/local/desktop-grove-local-discard-undo.png"
+      ]
+    }
+  ]
+}
