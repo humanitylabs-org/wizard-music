@@ -1,5 +1,9 @@
 # Wizard Music
 
+Identify UX: a 12-second "enough audio" ring never sends by itself; Find it is available early and the separate 30-second safety cap sends. Audio custody remains capture-first with the existing durable outbox and acknowledgement checks. Sending opens that clip's detail immediately and polls hunting results every two seconds. Recognition timing copy is based on a live forum retry of migrated capture `6639dc87-a6d4-42ca-8c9b-c6eaecca3b34`: 6.13 seconds to `has_leads` on 6 Nov 2026 (one sample, not a latency guarantee).
+
+REUSE shared capture/outbox, sheets, Back and existing player command parser. EXTEND Music search with immediate pending paint plus 250 ms debounce/abort/stale fencing, and Identify's existing view/state. NEW domain presentation only (progress ring). Voice is routed by the device shell from `voice_routes` data, including launcher-only records; Music has no hidden speech receiver or priority claim. The explicit URL `?view=identify&listen=1` starts listening; `q` goes to the existing Music command parser instead. A permission/gesture failure offers Tap to start listening.
+
 Your music library inside Wizard, with a player, search, radio, liked songs and saved mixes. This MIT-licensed test release ships no music, account, history or credentials.
 
 **Install:** in the Wizard App Store’s Alpha channel, choose Music → Get → Open. Turn on Online sources if you want catalog search and radio, or add your own audio files. No manual server configuration is needed. See [SETUP.md](SETUP.md) for first-song instructions and optional advanced integrations, and [API.md](API.md) for the API/MCP contract.

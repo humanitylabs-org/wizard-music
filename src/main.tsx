@@ -1,8 +1,11 @@
 import { StrictMode, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { lastViewWasNowPlaying, MiniPlayer, MusicApp, musicControl, NowPlaying, rememberView, restoreMusicSession, whenTrackLoaded } from './music/MusicApp'
-import { installMusicVoice } from './music/voice'
+import { installMusicVoice, installMusicRoute } from './music/voice'
 import { installAppKeys } from './music/appKeys'
+import { IdentifyEntry, IdentifyView } from './music/IdentifyView'
+import { identifyControl, type CapturePort } from './music/identify'
+import { useSyncExternalStore } from 'react'
 
 function musicIsPlaying() {
   const snap = musicControl.engine()?.snapshot()
@@ -16,7 +19,11 @@ declare global {
     ready(options: {name: string; version: string}): unknown
     back: { register(options: {canGoBack: () => boolean; back: () => boolean}): () => void; useHistory(options: {isRoot: () => boolean}): () => void }
     view?: { isVisible(): boolean }
-    share?: { text(data: {title?: string; text?: string; url?: string}): Promise<'shared' | 'copied' | 'cancelled' | 'unsupported'> }
+    capture: CapturePort
+    voice?: { commands: { register(handler: { claims(text: string, context: {kind: string; stage: string}): boolean; receive(text: string): Promise<boolean> }): () => void } }
+    shell?: { focusApp(): Promise<boolean> }
+    update?: { hold(reason: string): { release(): void } }
+    share?: { text(data: {title?: string; text?: string; url?: string}): Promise<'shared' | 'copied' | 'cancelled' | 'unsupported'>; file(file: File, options?: {title?: string}): Promise<string> }
   } }
 }
 
@@ -46,6 +53,7 @@ function ownEntryBehind(): boolean {
 }
 
 function App() {
+  const identify = useSyncExternalStore(identifyControl.subscribe, identifyControl.snapshot)
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false)
   const nowPlayingRef = useRef(false)
   // The listener swiped the player down (or tapped the chevron): no automatic reopen until Music has really been
@@ -80,7 +88,7 @@ function App() {
     else history.replaceState({ ...(history.state || {}), wizardMusic: 'root' }, '')
   }, [])
   const dismissNowPlaying = useCallback(() => { dismissedRef.current = true; closeNowPlaying() }, [closeNowPlaying])
-  const autoOpenNowPlaying = useCallback(() => { if (!dismissedRef.current) openNowPlaying() }, [openNowPlaying])
+  const autoOpenNowPlaying = useCallback(() => { if (identifyControl.busy()) { musicControl.engine()?.pause(); return }; if (!dismissedRef.current && !identifyControl.snapshot().open) openNowPlaying() }, [openNowPlaying])
   useEffect(() => {
     const onPop = () => { nowPlayingRef.current = history.state?.wizardMusic === 'now'; setNowPlayingOpen(nowPlayingRef.current); rememberView(nowPlayingRef.current ? 'now' : 'home') }
     window.addEventListener('popstate', onPop)
@@ -108,7 +116,7 @@ function App() {
     let was = visible(), awaySince = 0, phoneAwaySince = 0, phoneWas = !document.hidden
     const check = () => {
       const now = visible()
-      if (!now && was) awaySince = Date.now()
+      if (!now && was) { awaySince = Date.now(); identifyControl.leftView() }
       // Only really leaving the Wizard app (the phone page hidden, not a shell sheet or desk switch, not a
       // blip while dragging) lifts a swipe-down and may bring the player back full screen.
       const phoneNow = !document.hidden
@@ -126,9 +134,9 @@ function App() {
       // and Music reopens where you were), so a Music window left open never keeps running old code.
       if (!now && was) {
         const leftAt = awaySince
-        void newerBuildLive().then((newer) => { if (newer && !visible() && awaySince === leftAt) window.setTimeout(() => { if (!visible() && awaySince === leftAt) window.location.reload() }, 1000) })
+        void newerBuildLive().then((newer) => { if (newer && !identifyControl.busy() && !visible() && awaySince === leftAt) window.setTimeout(() => { if (!visible() && awaySince === leftAt) window.location.reload() }, 1000) })
       }
-      if (realReturn && !nowPlayingRef.current) void newerBuildLive().then((newer) => { if (newer && visible()) window.location.reload() })
+      if (realReturn && !nowPlayingRef.current) void newerBuildLive().then((newer) => { if (newer && !identifyControl.busy() && visible()) window.location.reload() })
       was = now
     }
     // The page's own visibility covers the phone app; the shell's view state covers switching Wizard windows.
@@ -137,6 +145,14 @@ function App() {
     const timer = window.setInterval(check, 800)
     return () => { document.removeEventListener('visibilitychange', check); window.removeEventListener('focus', check); window.clearInterval(timer) }
   }, [autoOpenNowPlaying])
+  // Identify shares capture custody with the shell; leaving the list never discards audio.
+  useEffect(() => {
+    let disposed = false, cleanup: (() => void) | undefined, routeCleanup: (() => void) | undefined
+    void identifyControl.init(() => { if (nowPlayingRef.current) closeNowPlaying() }).then(fn => { if (disposed) fn(); else { cleanup = fn; routeCleanup = installMusicRoute(notify) } })
+    const params = new URLSearchParams(location.search)
+    if (params.get('view') === 'identify' && !params.get('q')?.trim()) identifyControl.open()
+    return () => { disposed = true; routeCleanup?.(); cleanup?.() }
+  }, [closeNowPlaying, notify])
   // The Wizard OS orb drives playback: "play …", pause, next, louder (src/music/voice.ts).
   useEffect(() => installMusicVoice(notify), [notify])
   // ⌥P play/pause, ⌥K next, ⌥J previous, ⌥/ search (the shared data-wz-key contract; only outside Wizard, without WizardApp.keys).
@@ -147,23 +163,23 @@ function App() {
     window.WizardApp.ready({ name: 'Music', version: '1' })
     // A cold document opens on Home; consume a stale previous player marker.
     if (!nowPlayingRef.current) history.replaceState({ ...(history.state || {}), wizardMusic: 'root' }, '')
-    const detachHistory = window.WizardApp.back.useHistory({ isRoot: () => !nowPlayingRef.current })
+    const detachHistory = window.WizardApp.back.useHistory({ isRoot: () => !nowPlayingRef.current && !identifyControl.snapshot().open })
     const unregister = window.WizardApp.back.register({
-      canGoBack: () => nowPlayingRef.current,
-      back: () => { if (!nowPlayingRef.current) return false; closeNowPlaying(); return true }
+      canGoBack: () => nowPlayingRef.current || identifyControl.snapshot().open,
+      back: () => { if (identifyControl.back()) return true; if (!nowPlayingRef.current) return false; closeNowPlaying(); return true }
     })
     return () => { unregister(); if (typeof detachHistory === 'function') detachHistory() }
   }, [closeNowPlaying])
 
   return <div className="music-shell">
     <header className="music-shell-head"><h1>Music</h1></header>
-    <main className="music-shell-main"><MusicApp onOpenNowPlaying={openNowPlaying} notify={notify} /></main>
+    <main className="music-shell-main"><div hidden={identify.open}><MusicApp lead={<IdentifyEntry />} onOpenNowPlaying={openNowPlaying} notify={notify} /></div><IdentifyView notify={notify} /></main>
     <MiniPlayer onOpen={openNowPlaying} notify={notify} />
     {nowPlayingOpen && <NowPlaying onClose={dismissNowPlaying} notify={notify} />}
     {toast && <div className="music-toast" role="status">{toast}</div>}
   </div>
 }
 
-// Wizard restarted or the app updated: carry on with the song, spot, queue and station from last time.
+// Wizard restarted or the app updated: keep the song, position, queue and station.
 restoreMusicSession()
-createRoot(document.getElementById('root')!).render(<StrictMode><App /></StrictMode>)
+createRoot(document.getElementById('root')!).render(<App />)

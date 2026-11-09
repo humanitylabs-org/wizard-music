@@ -13,7 +13,8 @@ RUN python3 -m venv /opt/hub && /opt/hub/bin/pip install --no-cache-dir -r /opt/
 WORKDIR /app
 COPY --from=build /build/dist ./dist
 COPY server ./server
-COPY hub/hub.py ./hub/hub.py
+COPY hub/hub.py hub/identify.py ./hub/
+COPY hub/recognizers ./hub/recognizers
 RUN mkdir /data /music && chown node:node /data
 USER root
 ENV WIZARD_MUSIC_APP_HOST=0.0.0.0 WIZARD_MUSIC_APP_PORT=9205 WIZARD_MUSIC_HUB_HOME=/data WIZARD_MUSIC_LIBRARY=/music WIZARD_MUSIC_PYTHON=/opt/hub/bin/python WIZARD_MUSIC_HUB_ORIGIN=http://127.0.0.1:8793

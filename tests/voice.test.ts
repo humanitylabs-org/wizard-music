@@ -36,7 +36,7 @@ describe('music voice grammar', () => {
     ['mute', { op: 'volume', dir: 'mute' }],
     ['I like this song', { op: 'like' }],
     ['thumbs down', { op: 'dislike' }],
-    ["what's this song", { op: 'what' }],
+    ["what's this song", { op: 'identify' }],
   ])('%s', (said, cmd) => expect(parseMusicCommand(said)).toEqual(cmd))
 
   it('leaves non-music commands alone outside the music app', () => {

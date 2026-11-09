@@ -19,7 +19,7 @@ const HOSTS = new Set(['127.0.0.1', 'localhost', ...(process.env.WIZARD_TRUSTED_
 const HOST = process.env.WIZARD_MUSIC_APP_HOST || '127.0.0.1'
 const configured = Boolean(process.env.WIZARD_MUSIC_HUB_ORIGIN && process.env.WIZARD_MUSIC_HUB_TOKEN)
 const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.json': 'application/json' }
-const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
+const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 
 const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '' })
 
@@ -50,7 +50,7 @@ const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', 'http://local')
     if (!requestAllowed(request, { hosts: HOSTS, origins: ORIGINS })) { sendJson(response, 403, { error: 'origin' }); return }
-    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.8', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
+    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.8', release: process.env.WIZARD_MUSIC_RELEASE || 'development', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
     if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT); return }
     if (url.pathname === BASE) { response.writeHead(308, { Location: `${BASE}/` }); response.end(); return }
     if (!url.pathname.startsWith(`${BASE}/`)) { sendJson(response, 404, { error: 'not_found' }); return }

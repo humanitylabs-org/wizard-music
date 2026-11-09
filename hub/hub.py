@@ -31,6 +31,9 @@ from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # identify.py lives beside the hub, however it is loaded
+import identify  # noqa: E402
+
 HOST = os.environ.get("WIZARD_MUSIC_HUB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("WIZARD_MUSIC_HUB_PORT", "8793"))
 TOKEN = os.environ.get("WIZARD_MUSIC_HUB_TOKEN", "")
@@ -87,6 +90,10 @@ _db.executescript(
     CREATE TABLE IF NOT EXISTS artist_styles (key TEXT PRIMARY KEY, name TEXT, tags TEXT, source TEXT, at REAL);
     -- mixes: a named set of songs you saved ("tea music"); ids JSON list, aliases JSON list of other spoken names
     CREATE TABLE IF NOT EXISTS mixes (key TEXT PRIMARY KEY, name TEXT, ids TEXT, aliases TEXT, at REAL);
+    -- URL bookmarks, not playback-history mixes. Saving never imports or downloads audio.
+    CREATE TABLE IF NOT EXISTS saved_playlists (id TEXT PRIMARY KEY, url TEXT NOT NULL,
+        kind TEXT NOT NULL, provider_id TEXT NOT NULL, title TEXT NOT NULL,
+        author TEXT NOT NULL, author_url TEXT NOT NULL, thumbnail TEXT NOT NULL, created_at REAL NOT NULL);
     """
 )
 _db.commit()
@@ -143,12 +150,84 @@ def online_urlopen(*args, **kwargs):
         return urllib.request.urlopen(*args, **kwargs)
 
 
+identify.online = lambda: ONLINE  # Identify sends audio and song details out only with Online sources on
+
+
 def db(sql: str, args: tuple = (), many: bool = False):
     with _db_lock:
         cur = _db.execute(sql, args)
         rows = cur.fetchall()
         _db.commit()
         return rows
+
+
+# ---------------------------------------------------------------- Saved URL playlists / long mixes
+PLAYLIST_FIELDS = ('id', 'url', 'kind', 'providerId', 'title', 'author', 'authorUrl', 'thumbnail', 'createdAt')
+
+
+def playlist_source(value):
+    if not isinstance(value, str) or not 1 <= len(value) <= 2048 or re.search(r'[\s\x00-\x1f\x7f\\]', value):
+        raise ValueError('Use a full YouTube video or playlist URL.')
+    u = urllib.parse.urlsplit(value)
+    if u.scheme != 'https' or u.netloc not in {'youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be'}:
+        raise ValueError('Use a full HTTPS YouTube video or playlist URL.')
+    q = urllib.parse.parse_qs(u.query)
+    if u.netloc == 'youtu.be':
+        kind, pid = 'video', u.path[1:]
+    elif u.path == '/watch' and len(q.get('v', [])) == 1:
+        kind, pid = 'video', q['v'][0]
+    elif u.path == '/playlist' and len(q.get('list', [])) == 1:
+        kind, pid = 'playlist', q['list'][0]
+    else:
+        raise ValueError('Use a YouTube video or playlist link, not a channel or search.')
+    if not re.fullmatch(r'[A-Za-z0-9_-]{11}' if kind == 'video' else r'[A-Za-z0-9_-]{10,150}', pid):
+        raise ValueError('That YouTube link has an invalid ID.')
+    return kind, pid, hashlib.sha256((kind + ':' + pid).encode()).hexdigest()[:24]
+
+
+def saved_playlists():
+    return [dict(zip(PLAYLIST_FIELDS, row)) for row in db('SELECT * FROM saved_playlists ORDER BY created_at DESC,id')]
+
+
+def save_playlist(body):
+    if not isinstance(body, dict) or set(body) - {'url', 'title', 'author', 'authorUrl', 'thumbnail'}:
+        raise ValueError('Invalid playlist fields.')
+    url = body.get('url')
+    kind, pid, key = playlist_source(url)
+    values = {}
+    for field, limit in [('title', 2000), ('author', 300), ('authorUrl', 2048), ('thumbnail', 2048)]:
+        value = body.get(field, '')
+        if not isinstance(value, str) or len(value) > limit or re.search(r'[\x00-\x1f\x7f]', value):
+            raise ValueError('Invalid playlist metadata.')
+        values[field] = value
+    # Metadata is stored as text only. No arbitrary URL is fetched, and no credentials are used.
+    if values['authorUrl']:
+        a = urllib.parse.urlsplit(values['authorUrl'])
+        if a.scheme != 'https' or a.netloc not in {'www.youtube.com', 'youtube.com'}:
+            raise ValueError('Invalid author link.')
+    if values['thumbnail'] and values['thumbnail'] != f'https://i.ytimg.com/vi/{pid}/hqdefault.jpg':
+        raise ValueError('Invalid thumbnail.')
+    title = values['title'] or f"YouTube {'mix' if kind == 'video' else 'playlist'} · {pid}"
+    # First exact URL and metadata win. Equivalent URL retries cannot duplicate or overwrite the bookmark.
+    db('INSERT OR IGNORE INTO saved_playlists VALUES(?,?,?,?,?,?,?,?,?)',
+       (key, url, kind, pid, title, values['author'], values['authorUrl'], values['thumbnail'], time.time()))
+    return next(item for item in saved_playlists() if item['id'] == key)
+
+
+def playlist_track(key):
+    item = next((p for p in saved_playlists() if p['id'] == key), None)
+    if not item:
+        raise LookupError('Playlist not found.')
+    if item['kind'] != 'video':
+        raise ValueError('Open this playlist on YouTube.')
+    if not ONLINE:
+        raise ValueError('Online playback is not connected. Open this mix on YouTube.')
+    tid = 'yt:' + item['providerId']
+    # Only an explicit Play tap reaches this path. Do not mutate existing track metadata.
+    db('INSERT OR IGNORE INTO tracks VALUES(?,?,?,?,?,?,?,?,?)',
+       (tid, item['title'], item['author'] or 'YouTube', '', 0,
+        item['thumbnail'] or f"https://i.ytimg.com/vi/{item['providerId']}/hqdefault.jpg", 'youtube', '', time.time()))
+    return track(tid)
 
 
 # ---------------------------------------------------------------- YouTube Music
@@ -839,9 +918,9 @@ def song_metrics() -> dict[str, dict]:
         if action == "played" and (i + 1 >= len(events) or events[i + 1][1] - at >= 30):
             kept_starts.setdefault(tid, []).append(at)
     last: dict[str, float] = {}
-    for tid, at in db("SELECT id, at FROM requests ORDER BY at"):
+    for tid, at, how in db("SELECT id, at, how FROM requests ORDER BY at"):
         # One request per minute per song, and only when the song then actually played.
-        if at - last.get(tid, -1e12) >= 60 and any(-5 <= s - at <= 90 for s in kept_starts.get(tid, [])):
+        if at - last.get(tid, -1e12) >= 60 and (how == 'identify' or any(-5 <= s - at <= 90 for s in kept_starts.get(tid, []))):
             row(tid)["request"] += 1
             last[tid] = at
     for tid, action, n in db("SELECT id, action, COUNT(*) FROM plays GROUP BY id, action"):
@@ -1962,7 +2041,8 @@ class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("%s %s\n" % (self.command, self.path.split("?")[0]))
+        code = args[1] if fmt.startswith('"%s"') and len(args) > 1 else ''
+        sys.stderr.write("%s %s %s\n" % (self.command, self.path.split("?")[0], code))
 
     def _auth(self) -> bool:
         if TOKEN and self.headers.get("Authorization", "") != f"Bearer {TOKEN}":
@@ -1998,6 +2078,9 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth():
             return
         try:
+            if identify.handle(self,path,qs,sys.modules[__name__]): return
+            if path == '/api/playlists':
+                return self._json(200, {'playlists': saved_playlists()})
             if path == "/api/settings":
                 return self._json(200, online_settings())
             if path == "/api/home":
@@ -2048,7 +2131,23 @@ class Handler(BaseHTTPRequestHandler):
         if not self._auth():
             return
         try:
+            if url.path == '/api/identify/captures':
+                if identify.handle(self,url.path,urllib.parse.parse_qs(url.query),sys.modules[__name__]): return
             body = self._body()
+            if identify.handle(self,url.path,urllib.parse.parse_qs(url.query),sys.modules[__name__],body): return
+            if url.path == '/api/playlists':
+                try:
+                    return self._json(200, save_playlist(body))
+                except ValueError as exc:
+                    return self._json(400, {'error': str(exc)})
+            playlist_play = re.fullmatch(r'/api/playlists/([a-f0-9]{24})/play', url.path)
+            if playlist_play:
+                try:
+                    return self._json(200, {'track': playlist_track(playlist_play[1])})
+                except LookupError:
+                    return self._json(404, {'error': 'Playlist not found.'})
+                except ValueError as exc:
+                    return self._json(400, {'error': str(exc)})
             if url.path == "/api/settings":
                 return self._json(200, set_online(body.get("online")))
             if url.path == "/api/station":
@@ -2120,6 +2219,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def _stream(self, tid: str):
         path = audio_path(tid)
+        return self._stream_file(path)
+
+    def _stream_file(self,path):
         size = path.stat().st_size
         ctype = {".m4a": "audio/mp4", ".webm": "audio/webm", ".opus": "audio/ogg", ".mp3": "audio/mpeg",
                  ".flac": "audio/flac", ".wav": "audio/wav", ".ogg": "audio/ogg", ".aac": "audio/aac"}.get(
@@ -2174,6 +2276,7 @@ def main():
     if HOST not in {"127.0.0.1", "::1"}:
         print("hub binds loopback only", file=sys.stderr)
         sys.exit(1)
+    identify.start()
     scan_library()
     threading.Thread(target=_library_loop, daemon=True).start()
     threading.Thread(target=_info_loop, daemon=True).start()

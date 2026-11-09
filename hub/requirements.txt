@@ -1,1 +1,4 @@
 tinytag==2.3.2
+
+shazamio==0.8.1
+audioop-lts==0.2.2; python_version >= '3.13'

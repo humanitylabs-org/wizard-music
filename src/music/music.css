@@ -86,7 +86,14 @@
 .music-art-list { display: grid; place-items: center; background: color-mix(in srgb, var(--wiz) 22%, transparent); color: color-mix(in srgb, var(--wiz) 70%, var(--text)); }
 
 /* Sources and the Online switch live at the bottom once set up. */
-.music-foot { display: grid; gap: 12px; padding-top: 4px; }
+/* Sources and taste live in a quiet disclosure at the foot of Home: there when you look, never ahead of the music. */
+.music-about { border-top: 1px solid var(--line); color: var(--text-2); }
+.music-about summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 48px; cursor: pointer; list-style: none; font-size: var(--wz-text-md, .875rem); font-weight: 600; }
+.music-about summary::-webkit-details-marker { display: none; }
+.music-about summary::after { content: ''; width: 8px; height: 8px; margin: 0 6px 4px 0; border: solid currentColor; border-width: 0 1.8px 1.8px 0; transform: rotate(45deg); transition: transform .18s ease; }
+.music-about[open] summary::after { transform: rotate(-135deg); margin-bottom: -4px; }
+.music-about summary small { margin-left: auto; color: var(--text-dim); font-size: var(--wz-text-sm, .8125rem); font-weight: 500; }
+.music-foot { display: grid; gap: 12px; padding: 4px 0 12px; }
 .music-sources { display: grid; gap: 2px; padding: 4px; border: 1px solid var(--line); border-radius: 18px; background: color-mix(in srgb, var(--text) 4%, transparent); }
 .music-source { display: flex; align-items: center; gap: 12px; min-height: 56px; padding: 6px 12px; border-radius: 14px; color: var(--text); text-decoration: none; }
 a.music-source:hover { background: color-mix(in srgb, var(--text) 5%, transparent); }
@@ -121,7 +128,7 @@ a.music-source:hover { background: color-mix(in srgb, var(--text) 5%, transparen
   .music-station { min-height: 76px; }
   .music-list { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
   .music-foot { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; column-gap: 24px; }
-  .music-foot > .music-section-head, .music-foot > .music-taste { grid-column: 1 / -1; }
+  .music-foot > .music-taste, .music-foot > .music-consent { grid-column: 1 / -1; }
 }
 @container musicmain (min-width: 1100px) {
   .music-shelf { grid-auto-columns: 196px; }
@@ -198,6 +205,7 @@ a.music-source:hover { background: color-mix(in srgb, var(--text) 5%, transparen
 .music-now.music-stale .music-now-body, .music-mini.music-stale > * { opacity: 0; transition: none; }
 
 /* Tap a song: the player opens at once with a loading wheel until the audio starts. */
+.music-search .music-busy{padding:0;color:var(--wz-accent,var(--wiz))}.music-search .music-wheel{width:20px;height:20px;border-width:2px}.music-search .music-busy>span:last-child{display:none}
 .music-wheel { display: block; width: 34px; height: 34px; border-radius: 50%; border: 3px solid color-mix(in srgb, currentColor 22%, transparent); border-top-color: currentColor; animation: music-spin .8s linear infinite; }
 @keyframes music-spin { to { transform: rotate(360deg); } }
 .music-now-pending-art { position: relative; display: block; }
