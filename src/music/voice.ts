@@ -6,11 +6,13 @@
 // orb can say what happened ("Playing Trap · Gui Boratto"). A plain {type:'wizard-os:voice', text}
 // (a view-routed utterance) is parsed here with the same grammar.
 import { musicApi, musicControl, thumbsDown } from './MusicApp'
+import { identifyControl } from './identify'
+import { flushSync } from 'react-dom'
 
 export type MusicCommand =
   | { op: 'play'; said: string }
   | { op: 'search'; query: string }
-  | { op: 'pause' | 'resume' | 'toggle' | 'next' | 'previous' | 'like' | 'dislike' | 'what' }
+  | { op: 'pause' | 'resume' | 'toggle' | 'next' | 'previous' | 'like' | 'dislike' | 'what' | 'identify' }
   | { op: 'volume'; dir: 'up' | 'down' | 'mute' | 'unmute' | 'set'; level?: number }
 export type MusicResult = { ok: boolean; text: string; volume?: number }
 
@@ -46,6 +48,7 @@ export function parseMusicSearch(text: string, inMusic = false): string | null {
 export function parseMusicCommand(text: string, inMusic = false): MusicCommand | null {
   const s = norm(text).replace(/^(?:hey |ok |okay )?(?:wizard|archimedes)\s*/, '').replace(/ (?:please|for me|now)$/, '').replace(/^(?:(?:can|could|would|will) you |please |maybe |just |go ahead and )+/, '')
   if (!s) return null
+  if (/^(?:music|shazam|what s this song|what is this song|whats this song|identify this)$/.test(norm(text))) return { op: 'identify' }
   const query = parseMusicSearch(text, inMusic)
   if (query) return { op: 'search', query }
   if (new RegExp(`^(?:pause|stop|hold)${MUSIC}$|^(?:shut up|silence)$`).test(s)) return { op: 'pause' }
@@ -74,6 +77,9 @@ export async function runMusicCommand(cmd: MusicCommand, notify: (message: strin
   const engine = musicControl.engine()
   const current = nowTrack()
   switch (cmd.op) {
+    case 'identify':
+      flushSync(() => { void identifyControl.start() })
+      return { ok: true, text: 'Listening for a song · your clip will be kept' }
     case 'play': {
       // "play" / "play music" with something already loaded carries on; anything named is searched.
       if (current && !norm(cmd.said).replace(/^(?:play|put on|resume)\b/, '').replace(/\b(?:the |some |my )?(?:music|songs?|tunes?)\b/g, '').trim()) {
@@ -137,8 +143,24 @@ export async function runMusicCommand(cmd: MusicCommand, notify: (message: strin
 
 type Incoming = { type?: string; id?: string; cmd?: MusicCommand; text?: string }
 
-/** Listen for orb commands from the Wizard OS shell (same origin only). */
-export function installMusicVoice(notify: (message: string) => void): () => void {
+/** The shell owns speech. Music receives only an explicit URL route or a parsed player command. */
+export function installMusicRoute(notify: (message: string) => void): () => void {
+  let last = ''
+  const take = () => {
+    if (location.href === last) return
+    last = location.href
+    const params = new URL(location.href).searchParams
+    if (params.get('view') !== 'identify' || params.get('listen') !== '1') return
+    const q = params.get('q')?.trim() || ''
+    const command = q ? parseMusicCommand(q, true) : { op: 'identify' as const }
+    if (command) void runMusicCommand(command, notify).catch(e => notify((e as Error).message))
+  }
+  take()
+  window.addEventListener('popstate', take); window.addEventListener('hashchange', take)
+  return () => { window.removeEventListener('popstate', take); window.removeEventListener('hashchange', take) }
+}
+
+export function installMusicVoice(notify: (message: string) => void) {
   if (typeof window === 'undefined' || window.parent === window) return () => undefined
   const reply = (value: Record<string, unknown>) => { try { window.parent.postMessage(value, window.location.origin) } catch { /* shell gone */ } }
   const onMessage = (event: MessageEvent<Incoming>) => {
@@ -146,7 +168,6 @@ export function installMusicVoice(notify: (message: string) => void): () => void
     const data = event.data || {}
     let cmd: MusicCommand | null = null
     if (data.type === 'wizard-os:music' && data.cmd && typeof data.cmd.op === 'string') cmd = data.cmd
-    else if (data.type === 'wizard-os:voice' && typeof data.text === 'string') cmd = parseMusicCommand(data.text, true)
     if (!cmd) return
     if (data.id) reply({ type: 'wizard-os:music:ack', id: data.id })
     // The orb shows the outcome; the app stays quiet until then (a late "Got it — no more …" still shows here).

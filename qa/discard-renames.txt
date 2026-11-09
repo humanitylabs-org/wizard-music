@@ -1,0 +1,2 @@
+# Equivalent MCP description for explicit owner-requested discard filtering.
+label:List saved song hunts, including unsolved clips. => List active saved song hunts, including unsolved clips; excludes discarded. | test=tests/identify.test.ts | token=discard

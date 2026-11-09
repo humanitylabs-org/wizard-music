@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
 import { browserSessionStore, EMPTY_SNAPSHOT, musicEngine, NativeEngine, playedTracks, readSession, WebEngine, type MusicEngine, type MusicSnapshot, type MusicStation, type MusicTrack } from './engine'
 import { hostedAudioBridge } from './backgroundAudio'
 if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNativeMusic = hostedAudioBridge()
 import { shareSong } from './share'
 import { SwipeDeck, type SwipeDirection } from './swipe'
+import { Playlists } from './Playlists'
 import './music.css'
 
 const BASE = new URL('./', document.baseURI).pathname
@@ -21,7 +22,7 @@ async function musicJson<T>(path: string, init?: RequestInit): Promise<T> {
 export const musicApi = {
   home: () => musicJson<MusicHome>(BASE + 'api/home'),
   settings: (online: boolean) => musicJson<{online: boolean}>(BASE + 'api/settings', { method: 'POST', body: JSON.stringify({online}) }),
-  search: (q: string) => musicJson<{ tracks: MusicTrack[] }>(`${BASE}api/search?q=${encodeURIComponent(q)}`),
+  search: (q: string, signal?: AbortSignal) => musicJson<{ tracks: MusicTrack[] }>(`${BASE}api/search?q=${encodeURIComponent(q)}`, { signal }),
   station: (seed: { trackId?: string; query?: string; label?: string }) => musicJson<{ station: MusicStation; tracks: MusicTrack[] }>(BASE + 'api/station', { method: 'POST', body: JSON.stringify(seed) }),
   feedback: (id: string, action: FeedbackAction, upcoming: string[] = []) => musicJson<FeedbackResult>(BASE + 'api/feedback', { method: 'POST', body: JSON.stringify({ id, action, upcoming }) }),
   /** A spoken request as heard ("play music guy barato trap"): the hub fixes misheard names and picks a station. */
@@ -220,7 +221,8 @@ export function usePendingStart(): MusicTrack | null {
 }
 const LoadingWheel = ({ label }: { label: string }) => <span className="music-wheel" role="progressbar" aria-label={label} />
 
-export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () => void; notify: (message: string) => void }) {
+/** `lead` is the one Identify entry, first on the home page (kept out of this module so Identify stays its own). */
+export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying: () => void; notify: (message: string) => void; lead?: ReactNode }) {
   const snapshot = useMusicSnapshot()
   useFeedbackReporter(snapshot)
   const [home, setHome] = useState<MusicHome | null>(null)
@@ -231,13 +233,15 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
   const [searching, setSearching] = useState(false)
   const [starting, setStarting] = useState('')
   const searchSeq = useRef(0)
+  const searchTimer = useRef(0)
+  const searchAbort = useRef<AbortController | null>(null)
   const current = snapshot.queue[snapshot.index]
   // Back (phone Back, Android Back, Escape) on search results returns to Music's home, like the search box's ×.
   // Results own one history entry (like Now Playing), so the phone's Back pops it instead of leaving Music. The
   // WizardApp handler is registered before the app shell's own, so an open Now Playing still closes first.
   const resultsRef = useRef<MusicTrack[] | null>(null)
   resultsRef.current = results
-  const clearSearch = useCallback(() => { ++searchSeq.current; setQuery(''); setResults(null); setSearching(false) }, [])
+  const clearSearch = useCallback(() => { ++searchSeq.current; window.clearTimeout(searchTimer.current); searchAbort.current?.abort(); setQuery(''); setResults(null); setSearching(false) }, [])
   const showingResults = results !== null
   useEffect(() => {
     const at = history.state?.wizardMusic
@@ -265,13 +269,17 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
   useEffect(() => { loadHome() }, [loadHome])
 
   const runSearch = useCallback(async (text: string, quiet = false): Promise<number> => {
+    window.clearTimeout(searchTimer.current)
+    searchAbort.current?.abort()
+    const controller = new AbortController()
+    searchAbort.current = controller
     const q = text.trim()
     const seq = ++searchSeq.current
-    if (!q) { setResults(null); return 0 }
+    if (!q) { setSearching(false); setResults(null); return 0 }
     setSearching(true)
     if (quiet) setResults((was) => was ?? [])
     try {
-      const payload = await musicApi.search(q)
+      const payload = await musicApi.search(q, controller.signal)
       if (seq === searchSeq.current) setResults(payload.tracks)
       return payload.tracks.length
     } catch (error) {
@@ -281,6 +289,15 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
       return 0
     } finally { if (seq === searchSeq.current) setSearching(false) }
   }, [notify])
+  const changeQuery = (text: string) => {
+    // Paint in the input event, before the debounce or any network. Invalidate old replies now, not 250 ms later.
+    ++searchSeq.current
+    window.clearTimeout(searchTimer.current)
+    searchAbort.current?.abort()
+    setQuery(text); setSearching(!!text.trim()); setResults(text.trim() ? [] : null)
+    if (text.trim()) searchTimer.current = window.setTimeout(() => { void runSearch(text) }, 250)
+  }
+  useEffect(() => () => { ++searchSeq.current; window.clearTimeout(searchTimer.current); searchAbort.current?.abort() }, [])
   // Voice: "search for X" fills the box and lists the results, top of the page.
   useEffect(() => {
     searchHandler = (q) => { setQuery(q); window.scrollTo?.(0, 0); return runSearch(q, true) }
@@ -334,8 +351,8 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
 
   return <section className="music-workspace" aria-label="Wizard Music">
     <div className="music-searchbar"><form className="music-search" role="search" onSubmit={(event) => { event.preventDefault(); void runSearch(query) }}>
-      <SearchGlyph />
-      <input type="search" value={query} placeholder="Song, artist, or vibe" aria-label="Search music" enterKeyHint="search" data-wz-key="/" data-wz-key-label="Search" onClick={(event) => event.currentTarget.focus()} onChange={(event) => { setQuery(event.target.value); if (!event.target.value) clearSearch() }} />
+      {searching ? <LoadingWheel label="Searching music" /> : <SearchGlyph />}
+      <input type="search" value={query} placeholder="Song, artist, or vibe" aria-label="Search music" enterKeyHint="search" data-wz-key="/" data-wz-key-label="Search" onClick={(event) => event.currentTarget.focus()} onChange={(event) => changeQuery(event.target.value)} />
       {query && <button type="button" className="music-clear" aria-label="Clear search" onClick={clearSearch}>×</button>}
     </form></div>
 
@@ -348,6 +365,7 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
       {!searching && !results.length && <p className="music-empty">Nothing matched. Try an artist, a song, or a mood.</p>}
       <div className="music-list">{results.map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}</div>
     </section> : <>
+      {lead}
       {homeError && <div className="music-card music-error"><p>{homeError}</p><button type="button" className="music-pill" onClick={loadHome}>Try again</button></div>}
 
       {home && home.recent.length > 0 && <section className="music-section" aria-label="Recently played">
@@ -370,6 +388,8 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
         </div>
       </section>}
 
+      <Playlists notify={notify} onPlay={async (track) => { await musicControl.play([track], null); onOpenNowPlaying() }} />
+
       {home && home.liked.length > 0 && <section className="music-section" aria-label="Liked songs">
         <div className="music-section-head"><h3>Liked</h3><button type="button" className="music-pill music-pill-solid" onClick={async () => { const station: MusicStation | null = null; await startEngine().load(home.liked, 0, station); noteEngineStarted(); onOpenNowPlaying() }}><PlayGlyph size={16} />Play all</button></div>
         <div className="music-list">{home.liked.slice(0, 8).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}</div>
@@ -385,9 +405,9 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
       {nothingYet && <p className="music-empty">Your music starts here. Turn on Online sources above, search for a song and tap it to play. Or ask your Wizard to add your own MP3, M4A, FLAC, OGG or WAV files to Music’s library folder; they appear automatically. No music or account is bundled.</p>}
       {!home && !homeError && <p className="music-status">Loading your music…</p>}
 
-      {home && <footer className="music-foot" aria-label="Music sources">
-        <div className="music-section-head"><h3>Sources</h3></div>
-        <div className="music-sources">
+      {/* Where the music comes from and what you turned down: there when you look, never ahead of the music. */}
+      {home && <details className="music-about"><summary><span>Sources{home.taste?.avoid.length ? ' & taste' : ''}</span><small>{home.sources.filter((source) => source.ok).length} of {home.sources.length} connected</small></summary><footer className="music-foot">
+        <div className="music-sources" aria-label="Music sources">
           {home.sources.map((source) => {
             const body = <><span className={`music-source-dot${source.ok ? ' ok' : ''}`} aria-hidden="true" /><span className="music-row-text"><strong>{source.name}</strong><small>{source.detail}</small></span>{source.open && <ChevronRight />}</>
             return source.open
@@ -397,7 +417,7 @@ export function MusicApp({ onOpenNowPlaying, notify }: { onOpenNowPlaying: () =>
         </div>
         {!consentFirst && consent}
         {Boolean(home.taste?.avoid.length) && <p className="music-taste" aria-label="Music you turned down">Playing less: {home.taste!.avoid.join(' · ')}</p>}
-      </footer>}
+      </footer></details>}
     </>}
   </section>
 }

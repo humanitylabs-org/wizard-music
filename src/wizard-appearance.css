@@ -1,6 +1,7 @@
 /* Wizard OS Appearance v1, app-local styles consuming the shared WizardApp client.
  * Applies inside a Wizard host that sent valid context (html[data-wz-hosted], set by shared core);
- * standalone Music is untouched and paints its own #0f1014. Canvas transparent on the shell's window glass; mini player,
+ * standalone Music is untouched and paints its own #0f1014. #root layers the canvas over the opaque skin base so the
+ * shell's own screen (e.g. desktop "Choose a chat") never shows through Music's text; mini player,
  * Now Playing and toasts on the overlay material; cards/chips/inputs on ink surfaces; ink and hairlines follow the skin.
  * Music KEEPS its own violet accent (--wiz / --wiz-deep) and its album-art treatment. */
 :root[data-wz-hosted] .music-shell-head { display: none; }
@@ -15,7 +16,9 @@
   --text-dim: var(--wz-text-muted);
   background: var(--wz-canvas);
 }
-:root[data-wz-hosted], :root[data-wz-hosted] body, :root[data-wz-hosted] #root { background: var(--wz-canvas); }
+:root[data-wz-hosted], :root[data-wz-hosted] body { background: var(--wz-canvas); }
+/* html/body stay the shell's transparent canvas (Appearance v1); the full-height app root is the opaque surface. */
+:root[data-wz-hosted] #root { background: linear-gradient(var(--wz-canvas), var(--wz-canvas)), var(--wz-base, var(--bg)); }
 /* Text-bearing panels are fully opaque in every skin (Miguel, 3 Nov 2026: the library showed through Now Playing on
  * Landscapes Light, where --wz-overlay is 80% white and the blur may not run). The overlay tint is kept, painted over
  * the skin's opaque base (--wz-base; hosted, --wz-canvas is transparent), so nothing behind ever shows. */

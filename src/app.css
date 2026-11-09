@@ -29,7 +29,7 @@ html, body, #root { height: 100%; margin: 0; }
 body { background: var(--bg); overscroll-behavior: none; }
 button { font: inherit; cursor: pointer; }
 .icon-button { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 50%; background: none; color: var(--text); }
-.secondary-action { min-height: 38px; padding: 0 14px; border: 1px solid var(--line-strong); border-radius: 12px; background: var(--bg-raised); color: var(--text); }
+.secondary-action { min-height: 40px; padding: 0 16px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); font-weight: 600; }
 
 .music-shell { display: flex; flex-direction: column; height: 100%; }
 .music-shell-head { flex: none; padding: calc(var(--safe-area-top) + 14px) 18px 8px; }

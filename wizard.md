@@ -32,6 +32,10 @@ view:
     dist: dist
 health: /health
 provides: [music]
+voice_routes:
+  - words: [music, shazam]
+    open: "?view=identify&listen=1"
+    rest_param: q
 needs: []
 uses: [music-source]
 ---

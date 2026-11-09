@@ -68,3 +68,30 @@ def test_settings_reload_ignores_legacy_env_after_revoke(hub, monkeypatch):
     spec.loader.exec_module(module)
     assert module.ONLINE is False
     module._db.close()
+
+
+def test_identify_sends_nothing_while_offline(hub, monkeypatch):
+    """Identify (from the saved-playlists branch) obeys the same consent: no Shazam or iTunes call while off."""
+    import identify
+    assert identify.online() is False
+    def forbidden(*a, **kw): raise AssertionError('identify egress while offline')
+    monkeypatch.setattr(identify, 'shazam_lookup', forbidden)
+    monkeypatch.setattr(identify.urllib.request, 'urlopen', forbidden)
+    assert identify.itunes_search('Song Artist') == []
+    updates = []
+    monkeypatch.setattr(identify, 'update_capture', lambda cid, **kw: updates.append(kw))
+    class Row(dict):
+        pass
+    raw = Path(hub.HOME) / 'clip.wav'
+    raw.write_bytes(b'RIFF')
+    class Con:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def execute(self, *a): return self
+        def fetchone(self): return Row(raw_path=str(raw))
+    monkeypatch.setattr(identify, 'connect', lambda: Con())
+    identify.recognize('11111111-2222-4333-8444-555555555555')
+    assert updates == [{'status': 'error', 'last_error': identify.OFFLINE_ERROR}]
+    assert raw.exists()
+    hub.set_online(True)
+    assert identify.online() is True
