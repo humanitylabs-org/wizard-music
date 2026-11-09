@@ -14,6 +14,8 @@ const types={'.js':'application/javascript','.css':'text/css','.html':'text/html
 const data=await (await fetch(APP+'/wizard-music/api/identify/captures')).json()
 const discardOnly=process.env.IDENTIFY_DISCARD_ONLY==='1'
 const localOnly=process.env.IDENTIFY_LOCAL_DISCARD_ONLY==='1'
+// Open the declared route directly (as the shell's voice route does) when the shell under test has no WosFeatures command hook.
+const directRoute=process.env.QA_IDENTIFY_DIRECT_ROUTE==='1'
 if(!discardOnly)assert.equal(data.captures.length,5,'all five original hunts are imported before browser exercise')
 const hunt=data.captures.find(h=>h.status==='has_leads')
 if(!discardOnly)assert.ok(hunt)
@@ -117,7 +119,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
  await page.goto(ORIGIN+'/wizard-os-home/'+(shell==='phone'?'?shell=phone':'desktop.html'),{waitUntil:'load'})
  await page.waitForFunction(([sh,sk])=>document.documentElement.dataset.shell===sh&&document.documentElement.dataset.skin===sk,[shell,skin])
  await page.waitForFunction(sh=>window.WizCore.apps(sh).APP['wizard-music']?.voice_routes?.length,shell)
- const command=playlistOnly?await page.evaluate(()=>{if(!window.WizOpenApp('wizard-music','/wizard-music/'))throw Error('Music did not open');return 'playlists'}):localOnly?await page.evaluate(()=>{if(!window.WizOpenApp('wizard-music','/wizard-music/?view=identify'))throw Error('Music did not open');return 'persisted-unsent'}):await page.evaluate(sh=>{
+ const command=playlistOnly?await page.evaluate(()=>{if(!window.WizOpenApp('wizard-music','/wizard-music/'))throw Error('Music did not open');return 'playlists'}):directRoute&&!localOnly?await page.evaluate(()=>{if(!window.WizOpenApp('wizard-music','/wizard-music/?view=identify&listen=1'))throw Error('Music did not open');return 'open_app_route'}):localOnly?await page.evaluate(()=>{if(!window.WizOpenApp('wizard-music','/wizard-music/?view=identify'))throw Error('Music did not open');return 'persisted-unsent'}):await page.evaluate(sh=>{
   const registry=window.WizCore.apps(sh)
   const grammar=window.WosCommands.create({CHATS:{},...registry,quickSearch:()=>null,sendSnap:()=>({view:{kind:'thread list'}})})
   const cmd=grammar.parse('music',{view:{kind:'thread list'}},'command')
@@ -144,7 +146,7 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).waitFor()
   const original=await read();assert.equal(original.sendRequested,false)
   checkpoint('local-original',{shell,skin,row:original})
-  const baselinePosts=()=>netLines.filter(s=>s.includes(' POST ')&&!s.includes(' RES ')).length
+  const baselinePosts=()=>netLines.filter(s=>s.includes(' POST ')&&!s.includes(' RESP ')).length
   const beforePosts=baselinePosts(),beforeAcks=await acks(frame)
   await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).click()
   await frame.getByText('Not sent. You can review or send it below.',{exact:true}).waitFor()
@@ -192,6 +194,8 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   const restored=await read();checkpoint('local-restored',{shell,skin,row:restored});assert.deepEqual(restored,original)
   await frame.getByRole('button',{name:'Refresh identifications'}).click();await frame.waitForTimeout(300)
   assert.equal(baselinePosts(),beforePosts);assert.equal(await acks(frame),beforeAcks)
+  // The restored notice stays until dismissed and can sit over the only row on a tall phone frame.
+  await frame.getByRole('button',{name:'Dismiss discard message'}).click()
   await frame.locator('.identify-hunt').filter({hasText:'Not sent · tap to review'}).click()
   await frame.getByText('Not sent. You can review or send it below.',{exact:true}).waitFor()
   await frame.getByRole('button',{name:'Send for identification',exact:true}).click()
@@ -264,6 +268,8 @@ for(const shell of ['phone','desktop'])for(const skin of ['nebula','grove']){
   // Discard once more then cold-reload this app, without restarting its listen route.
   const targetRow=frame.locator('.identify-history .identify-hunt').filter({hasText:'Unknown song'}).first()
   // This capture is newest; the API list uses that same creation-time ordering.
+  // With a fresh hub it is the only row, which the restored notice can cover until dismissed.
+  await frame.getByRole('button',{name:'Dismiss discard message'}).click()
   await targetRow.click();await frame.getByRole('button',{name:'Discard',exact:true}).click()
   await frame.waitForFunction(async id=>(await (await fetch('/wizard-music/api/identify/captures/'+id)).json()).retention_state==='discarded',cid)
   await frame.goto(ORIGIN+'/wizard-music/?view=identify')
