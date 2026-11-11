@@ -2,7 +2,7 @@
 wizard: 0.2
 id: wizard-music
 name: Music
-version: 0.2.0-test.8
+version: 0.2.0-test.9
 type: service
 category: app
 voice_names: [music, songs, music player, wizard music]
@@ -38,6 +38,9 @@ voice_routes:
     rest_param: q
 needs: []
 uses: [music-source]
+switches:
+  contract: wizard.app-switches/1
+  path: /api/switches
 ---
 ## Registry packaging
 
