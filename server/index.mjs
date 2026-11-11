@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { BASE, createMusicProxy } from './music.mjs'
 import { handleMcp } from './mcp.mjs'
 import { createCatalogLookup } from './catalog.mjs'
+import { handleSwitches } from './switches.mjs'
 
 const handleCatalog = createCatalogLookup({ origin: process.env.WIZARD_MUSIC_CONNECTORS_URL || '', token: process.env.MUSIC_ADAPTER_TOKEN || '' })
 
@@ -50,7 +51,8 @@ const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', 'http://local')
     if (!requestAllowed(request, { hosts: HOSTS, origins: ORIGINS })) { sendJson(response, 403, { error: 'origin' }); return }
-    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.8', release: process.env.WIZARD_MUSIC_RELEASE || 'development', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
+    if (await handleSwitches(request, response)) return   // wizard.app-switches/1 (Tracker Try it)
+    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.9', release: process.env.WIZARD_MUSIC_RELEASE || 'development', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
     if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT); return }
     if (url.pathname === BASE) { response.writeHead(308, { Location: `${BASE}/` }); response.end(); return }
     if (!url.pathname.startsWith(`${BASE}/`)) { sendJson(response, 404, { error: 'not_found' }); return }
