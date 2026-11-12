@@ -31,8 +31,8 @@ export function rewriteHubPaths(text, base = BASE) {
   return text.split(JSON.stringify(HUB_PREFIX).slice(1, -1)).join(`${base}/`).split(HUB_PREFIX).join(`${base}/`)
 }
 
-/** @param {{ origin?: string, token?: string, timeoutMs?: number, base?: string }} [options] */
-export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000, base: appBase = BASE } = {}) {
+/** @param {{ origin?: string, token?: string, timeoutMs?: number, base?: string, tickets?: { addTickets(text: string): string } }} [options] */
+export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000, base: appBase = BASE, tickets } = {}) {
   const hub = origin ? new URL(origin) : null
   if (hub && (hub.protocol !== 'http:' || hub.hostname !== '127.0.0.1' || hub.pathname !== '/' || hub.search || hub.username)) {
     throw new Error('Wizard Music hub must be an exact loopback HTTP origin')
@@ -78,7 +78,9 @@ export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000,
         up.on('data', (chunk) => chunks.push(chunk))
         up.once('error', () => { response.destroy(); done() })
         up.once('end', () => {
-          const text = rewriteHubPaths(Buffer.concat(chunks).toString('utf8'), appBase)
+          const rewritten = rewriteHubPaths(Buffer.concat(chunks).toString('utf8'), appBase)
+          // Art and stream addresses carry a media ticket so a sandboxed Music frame can load them (wizard-os#133).
+          const text = tickets ? tickets.addTickets(rewritten) : rewritten
           const raw = Buffer.from(text)
           delete out['content-length']
           out['content-type'] = up.headers['content-type'] || 'application/json'
