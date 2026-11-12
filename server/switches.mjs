@@ -5,7 +5,10 @@
 //   { id: 'compact-header', name: 'Compact top bar', description: '...', default: false, issues: ['humanitylabs-org/<repo>#20'] }
 // and gate the feature on switchOn('compact-header'). State lives on the box (<data dir>/switches.json), so the page,
 // the Tracker (through the App Manager) and the agent see one state. GET/POST /api/switches, owner only: the box's
-// Tailscale Serve owner login with X-Wizard-Switch: 1; never a bearer, agent grant or box-local host.
+// Tailscale Serve owner login with X-Wizard-Switch: 1; never a bearer, agent grant or box-local host. An app with a
+// platform owner-proof key (owner_proof in wizard.md, wizard-os spec/OWNER_PROOF.md) accepts only a valid signed proof:
+// any process on the box can set the other headers.
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
@@ -13,6 +16,8 @@ export const SWITCHES = []
 const CONTRACT = 'wizard.app-switches/1'
 const ROUTE = /^(?:\/[a-z0-9][a-z0-9-]{0,62})?\/api\/switches\/?$/
 const LOCAL = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'])
+const PROOF = /^(\d{1,12})\.([0-9a-f]{48})\.([0-9a-f]{64})$/
+const nonces = new Map()
 
 const file = () => join(process.env.WIZARD_SWITCHES_DIR || process.env.DATA_DIR || '/data', 'switches.json')
 function saved() {
@@ -32,9 +37,31 @@ function setSwitch(id, on) {
   writeFileSync(f + '.tmp', JSON.stringify(next)); renameSync(f + '.tmp', f)
   return switchesDoc()
 }
+// null when this app has no platform owner-proof key, else whether the request carries a valid, unused proof.
+function proof(req) {
+  const keyFile = process.env.WIZARD_OWNER_PROOF_KEY_FILE
+  if (!keyFile) return null
+  let key
+  try { key = readFileSync(keyFile) } catch { return false } // a key is named but unreadable: refuse, never fall back
+  const app = process.env.WIZARD_OWNER_PROOF_APP || ''
+  const values = []
+  for (let i = 0; i < req.rawHeaders.length; i += 2) if (req.rawHeaders[i].toLowerCase() === 'x-wizard-app-owner-proof') values.push(req.rawHeaders[i + 1])
+  const m = values.length === 1 ? PROOF.exec(String(values[0]).trim()) : null
+  if (key.length !== 32 || !app || !m || Math.abs(Date.now() / 1000 - Number(m[1])) > 30) return false
+  const msg = ['wizard-app-owner-v1', app, m[1], m[2], req.method, req.url].join('\n')
+  const want = Buffer.from(createHmac('sha256', key).update(msg).digest('hex'))
+  if (!timingSafeEqual(want, Buffer.from(m[3]))) return false
+  const now = Date.now()
+  for (const [n, until] of nonces) if (until < now) nonces.delete(n)
+  if (nonces.has(m[2])) return false
+  nonces.set(m[2], now + 61000)
+  return true
+}
 function owner(req, write) {
   const h = req.headers
   if (h.authorization || h['x-wizard-switch'] !== '1') return false
+  const p = proof(req)
+  if (p !== null) return p
   if (!['same-origin', 'none', undefined].includes(h['sec-fetch-site'])) return false
   const host = String(h.host || '').trim().toLowerCase()
   const name = host.startsWith('[') ? host.split(']')[0] + ']' : host.replace(/:\d+$/, '')
