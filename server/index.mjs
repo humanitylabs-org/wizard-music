@@ -2,7 +2,7 @@
 // Wizard Music app server: static view + hub proxy, loopback only, behind the private gateway.
 import { createServer } from 'node:http'
 import { readFile, stat } from 'node:fs/promises'
-import { requestAllowed } from './request-policy.mjs'
+import { ASSET, publicAsset, requestAllowed } from './request-policy.mjs'
 import { extname, join, normalize, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { BASE, createMusicProxy } from './music.mjs'
@@ -43,6 +43,8 @@ async function serveStatic(response, sub, head) {
     'Content-Type': TYPES[extname(target)] || 'application/octet-stream', 'Content-Length': raw.length,
     'Cache-Control': immutable ? 'public, max-age=31536000, immutable' : 'no-store',
     'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'X-Robots-Tag': 'noindex, nofollow', 'Referrer-Policy': 'same-origin',
+    // Public app files are readable from the app's own sandboxed frame (Origin: null); no credentials (wizard-os#133).
+    ...(ASSET.test(target) ? { 'Access-Control-Allow-Origin': '*' } : {}),
   })
   response.end(head ? undefined : raw)
 }
@@ -50,7 +52,7 @@ async function serveStatic(response, sub, head) {
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', 'http://local')
-    if (!requestAllowed(request, { hosts: HOSTS, origins: ORIGINS })) { sendJson(response, 403, { error: 'origin' }); return }
+    if (!requestAllowed(request, { hosts: HOSTS, origins: ORIGINS, asset: publicAsset(request, url.pathname, BASE) })) { sendJson(response, 403, { error: 'origin' }); return }
     if (await handleSwitches(request, response)) return   // wizard.app-switches/1 (Tracker Try it)
     if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.9', release: process.env.WIZARD_MUSIC_RELEASE || 'development', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
     if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT); return }
