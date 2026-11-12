@@ -14,7 +14,7 @@ import { SWITCHES, handleSwitches, switchOn } from '../server/switches.mjs'
 
 const KEY = Buffer.from(Array.from({ length: 32 }, (_, i) => i))
 const APP = 'wizard-music'
-const FORGED = { 'x-wizard-switch': '1', host: 'box.tail1234.ts.net', origin: 'https://box.tail1234.ts.net', 'tailscale-user-login': 'owner@example.com' }
+const FORGED = { 'x-wizard-switch': '1', host: 'wizard.example.com', origin: 'https://wizard.example.com', 'tailscale-user-login': 'owner@example.com' }
 const ENV = ['WIZARD_OWNER_PROOF_KEY_FILE', 'WIZARD_OWNER_PROOF_APP', 'WIZARD_OWNER_LOGINS', 'WIZARD_TRUSTED_ORIGINS', 'WIZARD_SWITCHES_DIR']
 
 function sign(method: string, target: string, { key = KEY, app = APP, ts = Math.floor(Date.now() / 1000) } = {}) {
