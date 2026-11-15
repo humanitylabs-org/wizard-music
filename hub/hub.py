@@ -2021,7 +2021,10 @@ def fetch_audio(vid: str) -> Path:
         if hit:
             # Songs cached before the fix are still fragmented; fix each once, on its next play.
             return remux_plain(hit)
-        tmp = CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.m4a"
+        full = os.path.realpath(str(CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.m4a"))
+        if not full.startswith(os.path.realpath(str(CACHE)) + os.sep):
+            raise LookupError("bad id")
+        tmp = Path(full)
         for attempt in range(len(AUDIO_RETRY_DELAYS) + 1):
             try:
                 with online_urlopen(source_for(f"yt:{vid}").rstrip("/") + f"/api/music/audio/{vid}", timeout=170) as r, tmp.open("wb") as out:
