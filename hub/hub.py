@@ -1978,8 +1978,13 @@ _dl_guard = threading.Lock()
 
 
 def _cache_path(vid: str) -> Path | None:
+    base = os.path.realpath(str(CACHE)) + os.sep
     for ext in ("m4a", "webm", "opus", "mp3"):
-        p = CACHE / f"{vid}.{ext}"
+        # Checked inline (not via a helper) so code scanning sees the guard on every caller.
+        full = os.path.realpath(str(CACHE / f"{vid}.{ext}"))
+        if not full.startswith(base):
+            return None
+        p = Path(full)
         if p.exists() and p.stat().st_size > 0:
             return p
     return None
