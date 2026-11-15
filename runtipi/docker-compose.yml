@@ -1,7 +1,7 @@
 services:
   wizard-music:
-    # Published by .github/workflows/image.yml from 34512a40739f83aee8a2fa0154293ba2556d473c (amd64 + arm64).
-    image: ghcr.io/humanitylabs-org/wizard-music:sha-34512a40739f83aee8a2fa0154293ba2556d473c@sha256:b3995bacf2f2a59ce0ed30b371c3314a5ed7dcfc21efbabc7a228c2806895b8d
+    # Published by .github/workflows/image.yml from ccd92e85dea056eb9945533738e78b1afb58be00 (amd64 + arm64).
+    image: ghcr.io/humanitylabs-org/wizard-music:sha-ccd92e85dea056eb9945533738e78b1afb58be00@sha256:6d086469a82a58027a9901dc81e41fcc456d9c1d2da53e3b008498b330889487
     restart: unless-stopped
     # start.py prepares /data as root, then drops to 1000:1000. No separate init container:
     # Runtipi reports an app with an exited container as stopped, which hid Music's icon link.
