@@ -8,7 +8,7 @@ import { Playlists } from './Playlists'
 import { AddGlyph, SongPlaylists } from './SongPlaylists'
 import { SONG_PLAYLISTS_SWITCH, songPlaylistControl } from './songPlaylists'
 import { cacheSwitches, cachedSwitches, fetchSwitches, LEVEL_SWITCH, LEVEL_MIN, readLevel, writeLevel, type SwitchStates } from './level'
-import { leaveEntry, searchBack } from './back'
+import { leaveEntry, likedBack, searchBack } from './back'
 import './music.css'
 
 const BASE = new URL('./', document.baseURI).pathname
@@ -25,6 +25,8 @@ async function musicJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 export const musicApi = {
   home: () => musicJson<MusicHome>(BASE + 'api/home'),
+  /** Every liked song (wizard-music#63); served only while the liked-view-all switch is on. */
+  liked: () => musicJson<{ tracks: MusicTrack[] }>(BASE + 'api/liked'),
   settings: (online: boolean) => musicJson<{online: boolean}>(BASE + 'api/settings', { method: 'POST', body: JSON.stringify({online}) }),
   search: (q: string, signal?: AbortSignal) => musicJson<{ tracks: MusicTrack[] }>(`${BASE}api/search?q=${encodeURIComponent(q)}`, { signal }),
   station: (seed: { trackId?: string; query?: string; label?: string }) => musicJson<{ station: MusicStation; tracks: MusicTrack[] }>(BASE + 'api/station', { method: 'POST', body: JSON.stringify(seed) }),
@@ -224,6 +226,7 @@ const SearchGlyph = () => <svg width="18" height="18" viewBox="0 0 24 24" aria-h
 const PlayNextGlyph = () => <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h11M4 11h11M4 16h6M17 13v8m-4-4h8" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" /></svg>
 // The same share glyph as Copy · Share under a chat reply.
 const ShareGlyph = () => <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4M7.5 8.5 12 4l4.5 4.5M5 13v5a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" /></svg>
+const BackGlyph = () => <svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true"><path d="m14.5 6-6 6 6 6" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></svg>
 const CloseGlyph = ({ size = 22 }: { size?: number }) => <svg width={size} height={size} viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" /></svg>
 /** The X: end this song and session (YouTube Music style). Minimising keeps it; this does not. */
 export function endListening() {
@@ -267,6 +270,9 @@ export function usePendingStart(): MusicTrack | null {
 }
 /** A saved long mix (no known length yet, or 20 minutes and more) downloads whole before it plays. */
 export const longStart = (track: MusicTrack) => track.id.startsWith('yt:') && (!track.durationMs || track.durationMs >= 20 * 60_000)
+/** Liked > View all (wizard-music#63): the full Liked list. */
+export const LIKED_ALL_SWITCH = 'liked-view-all'
+
 const LoadingWheel = ({ label }: { label: string }) => <span className="music-wheel" role="progressbar" aria-label={label} />
 
 /** `lead` is the one Identify entry, first on the home page (kept out of this module so Identify stays its own). */
@@ -313,6 +319,36 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
     // Leave the results' history entry now, inside the Back press (as Now Playing does), not in a later effect.
     clear: () => { resultsRef.current = null; clearSearch(); leaveEntry('search') },
   }), [clearSearch])
+
+  // Liked > View all (issue 63): the full Liked list replaces the home sections until Back (its own history entry,
+  // like search results; part of the one Back order in back.ts, after search results).
+  const likedAllOn = useSwitchOn(LIKED_ALL_SWITCH)
+  const [likedAll, setLikedAll] = useState<{ tracks: MusicTrack[] | null; error: string } | null>(null)
+  const likedOpenRef = useRef(false)
+  likedOpenRef.current = likedAll !== null
+  const likedSeq = useRef(0)
+  const loadLikedAll = useCallback(() => {
+    const seq = ++likedSeq.current
+    setLikedAll({ tracks: null, error: '' })
+    musicApi.liked().then(({ tracks }) => { if (seq === likedSeq.current) setLikedAll({ tracks, error: '' }) })
+      .catch((error: Error) => { if (seq === likedSeq.current) setLikedAll({ tracks: null, error: error.message }) })
+  }, [])
+  const openLikedAll = useCallback(() => {
+    if (history.state?.wizardMusic !== 'liked') history.pushState({ wizardMusic: 'liked' }, '')
+    loadLikedAll()
+    const main = document.querySelector('.music-shell-main'); if (main) main.scrollTop = 0 // open at the top of the list
+  }, [loadLikedAll])
+  const closeLikedAll = useCallback(() => { ++likedSeq.current; likedOpenRef.current = false; setLikedAll(null); leaveEntry('liked') }, [])
+  useEffect(() => {
+    const onPop = () => {
+      const at = history.state?.wizardMusic
+      if (at !== 'liked' && at !== 'search' && at !== 'now' && likedOpenRef.current) { ++likedSeq.current; likedOpenRef.current = false; setLikedAll(null) }
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
+  useEffect(() => { if (!likedAllOn && likedOpenRef.current) closeLikedAll() }, [likedAllOn, closeLikedAll])
+  useLayoutEffect(() => likedBack.attach({ open: () => likedOpenRef.current, clear: closeLikedAll }), [closeLikedAll])
 
   const loadHome = useCallback(() => {
     setHomeError('')
@@ -416,6 +452,13 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
       <div className="music-section-head"><h3>{searching ? 'Searching…' : `Results for “${query.trim()}”`}</h3>{query.trim() && <button type="button" className="music-pill" onClick={() => void startStation({ query: query.trim(), label: query.trim() }, 'vibe:query')}><PlayGlyph size={16} />Station from this</button>}</div>
       {!searching && !results.length && <p className="music-empty">Nothing matched. Try an artist, a song, or a mood.</p>}
       <div className="music-list">{results.map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} onAdd={songPlaylistsOn ? () => songPlaylistControl.startAdding(track) : undefined} />)}</div>
+    </section> : likedAll !== null ? <section className="music-section music-liked-all" aria-label="All liked songs">
+      <div className="music-section-head"><div className="music-liked-title"><button type="button" className="music-round" aria-label="Back to Music home" onClick={() => { likedBack.back() }}><BackGlyph /></button><h3>Liked</h3>{likedAll.tracks && <small>{likedAll.tracks.length} song{likedAll.tracks.length === 1 ? '' : 's'}</small>}</div>
+        {likedAll.tracks && likedAll.tracks.length > 0 && <button type="button" className="music-pill music-pill-solid" onClick={async () => { await startEngine().load(likedAll.tracks!, 0, null); noteEngineStarted(); onOpenNowPlaying() }}><PlayGlyph size={16} />Play all</button>}</div>
+      {likedAll.error ? <div className="music-card music-error"><p>{likedAll.error}</p><button type="button" className="music-pill" onClick={loadLikedAll}>Try again</button></div>
+        : !likedAll.tracks ? <p className="music-status" role="status">Loading your liked songs…</p>
+        : !likedAll.tracks.length ? <p className="music-empty">No liked songs yet. Tap the thumbs up on a song you love.</p>
+        : <div className="music-list">{likedAll.tracks.map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} onAdd={songPlaylistsOn ? () => songPlaylistControl.startAdding(track) : undefined} />)}</div>}
     </section> : <>
       {lead}
       {homeError && <div className="music-card music-error"><p>{homeError}</p><button type="button" className="music-pill" onClick={loadHome}>Try again</button></div>}
@@ -445,7 +488,10 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
       <Playlists notify={notify} onPlay={async (track) => { await musicControl.play([track], null); onOpenNowPlaying() }} />
 
       {home && home.liked.length > 0 && <section className="music-section" aria-label="Liked songs">
-        <div className="music-section-head"><h3>Liked</h3><button type="button" className="music-pill music-pill-solid" onClick={async () => { const station: MusicStation | null = null; await startEngine().load(home.liked, 0, station); noteEngineStarted(); onOpenNowPlaying() }}><PlayGlyph size={16} />Play all</button></div>
+        <div className="music-section-head"><h3>Liked</h3>{(() => {
+          const playAll = <button type="button" className="music-pill music-pill-solid" onClick={async () => { const station: MusicStation | null = null; await startEngine().load(home.liked, 0, station); noteEngineStarted(); onOpenNowPlaying() }}><PlayGlyph size={16} />Play all</button>
+          return likedAllOn ? <div className="music-section-actions">{playAll}<button type="button" className="music-pill music-pill-solid" onClick={openLikedAll}>View all</button></div> : playAll
+        })()}</div>
         <div className="music-list">{home.liked.slice(0, 8).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}</div>
       </section>}
 

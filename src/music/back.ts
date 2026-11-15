@@ -1,6 +1,6 @@
 // Music's one Back order (phone Back, Android Back, Escape), issue 47. The shell asks WizardApp.back once per press
 // and the app answers "handled" or "at root". Music answers from one place, newest layer first:
-//   Identify → Now Playing → search results → root (the shell's own next step, e.g. leaving Music).
+//   Identify → Now Playing → search results → all liked songs (#63) → root (the shell's own next step, e.g. leaving Music).
 // Search results used to register their own handler inside MusicApp while main.tsx told the shell Music was at its
 // root (useHistory isRoot / canGoBack knew nothing about results), and they stepped back over their history entry
 // later, in an effect. On the phone that left Music instead of clearing the search. Now the results are part of the
@@ -42,18 +42,27 @@ export const searchBack = {
   back(): boolean { if (!searchBack.open()) return false; searchLayer!.clear(); return true },
 }
 
+/** The full Liked list (wizard-music#63, switch liked-view-all), attached by MusicApp while it is mounted. */
+export const likedBack = {
+  attach(layer: SearchLayer): () => void { likedLayer = layer; return () => { if (likedLayer === layer) likedLayer = null } },
+  open(): boolean { try { return likedLayer?.open() === true } catch { return false } },
+  /** Close the full Liked list back to Music's home; false when it was not open. */
+  back(): boolean { if (!likedBack.open()) return false; likedLayer!.clear(); return true },
+}
+let likedLayer: SearchLayer | null = null
+
 type Layers = { identifyOpen(): boolean; identifyBack(): boolean; nowPlaying(): boolean; closeNowPlaying(): void }
 
 /** What Music tells the shell: at its root only when nothing is open, search results included. */
 export function musicAtRoot(layers: Pick<Layers, 'identifyOpen' | 'nowPlaying'>): boolean {
-  return !layers.nowPlaying() && !layers.identifyOpen() && !searchBack.open()
+  return !layers.nowPlaying() && !layers.identifyOpen() && !searchBack.open() && !likedBack.open()
 }
 
 /** One Back press: close the newest open layer. True = handled (Music stays open), false = at root. */
 export function musicBack(layers: Layers): boolean {
   if (layers.identifyBack()) return true
   if (layers.nowPlaying()) { layers.closeNowPlaying(); return true }
-  return searchBack.back()
+  return searchBack.back() || likedBack.back()
 }
 
 type BackApi = { register(options: { canGoBack: () => boolean; back: () => boolean }): () => void; useHistory(options: { isRoot: () => boolean }): (() => void) | unknown }
