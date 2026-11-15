@@ -264,6 +264,8 @@ function setPendingStart(track: MusicTrack | null) { pendingStart = track; pendi
 export function usePendingStart(): MusicTrack | null {
   return useSyncExternalStore((listener) => { pendingListeners.add(listener); return () => { pendingListeners.delete(listener) } }, () => pendingStart, () => null)
 }
+/** A saved long mix (no known length yet, or 20 minutes and more) downloads whole before it plays. */
+export const longStart = (track: MusicTrack) => track.id.startsWith('yt:') && (!track.durationMs || track.durationMs >= 20 * 60_000)
 const LoadingWheel = ({ label }: { label: string }) => <span className="music-wheel" role="progressbar" aria-label={label} />
 
 /** `lead` is the one Identify entry, first on the home page (kept out of this module so Identify stays its own). */
@@ -723,7 +725,9 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
         <button type="button" className="music-icon-button big" data-wz-key="k" data-wz-key-label="Next" aria-label="Next" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
         <button type="button" className={`music-icon-button music-thumb music-like${liked ? ' on' : ''}`} aria-pressed={liked} aria-label={liked ? 'Thumbs up (on)' : 'Thumbs up'} onClick={like}><ThumbUpGlyph filled={liked} /></button>
       </div>
+      {snapshot.buffering && (snapshot.wantPlaying ?? true) && !snapshot.error && longStart(track) && <p className="music-status music-long-note" role="status">Getting this mix ready. Long mixes can take up to a minute the first time.</p>}
       {snapshot.error && <p className="music-status" role="status">{snapshot.error}</p>}
+      {snapshot.error && !(snapshot.wantPlaying ?? snapshot.playing) && !snapshot.buffering && <button type="button" className="music-pill music-retry" onClick={() => engine.jump(snapshot.index)}>Try again</button>}
       {levelOn && <MusicLevel engine={engine} />}
       <section className="music-upnext" aria-label="Queue">
         {played.length > 0 && <button type="button" className={`music-played-toggle${showPlayed ? ' open' : ''}`} aria-expanded={showPlayed} onClick={() => setShowPlayed(!showPlayed)}>

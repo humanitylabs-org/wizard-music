@@ -46,6 +46,8 @@ HOME = Path(os.environ.get("WIZARD_MUSIC_HUB_HOME", str(Path.home() / ".wizard-h
 LIBRARY = Path(os.environ.get("WIZARD_MUSIC_LIBRARY", str(Path.home() / "Music/WizardMusic/Library")))
 CACHE = Path(os.environ.get("WIZARD_MUSIC_CACHE", str(HOME / "cache")))
 CACHE_MAX_BYTES = int(os.environ.get("WIZARD_MUSIC_CACHE_MAX_BYTES", str(3 * 1024**3)))
+# A source answering "blocked" (502) is often a blip: ask again after these pauses (seconds) before giving up.
+AUDIO_RETRY_DELAYS = tuple(float(x) for x in os.environ.get("WIZARD_MUSIC_AUDIO_RETRY_DELAYS", "2,5").split(",") if x.strip())
 PUBLIC_PREFIX = "/wizard/music"
 AUDIO_EXT = {".mp3", ".m4a", ".flac", ".ogg", ".opus", ".wav", ".aac"}
 ART_HOSTS = re.compile(r"^(?:[a-z0-9-]+\.)*(?:googleusercontent\.com|ytimg\.com|ggpht\.com)$")
@@ -230,6 +232,7 @@ def playlist_track(key):
     db('INSERT OR IGNORE INTO tracks VALUES(?,?,?,?,?,?,?,?,?)',
        (tid, item['title'], item['author'] or 'YouTube', '', 0,
         item['thumbnail'] or f"https://i.ytimg.com/vi/{item['providerId']}/hqdefault.jpg", 'youtube', '', time.time()))
+    prefetch(tid)  # a long mix downloads whole before it plays: start now, not when the player asks
     return track(tid)
 
 
@@ -2018,17 +2021,26 @@ def fetch_audio(vid: str) -> Path:
         if hit:
             # Songs cached before the fix are still fragmented; fix each once, on its next play.
             return remux_plain(hit)
-        tmp = CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.m4a"
-        try:
-            with online_urlopen(source_for(f"yt:{vid}").rstrip("/") + f"/api/music/audio/{vid}", timeout=170) as r, tmp.open("wb") as out:
-                shutil.copyfileobj(r, out, 262144)
-        except urllib.error.HTTPError as exc:
-            tmp.unlink(missing_ok=True)
-            _source_status.clear()  # the connector recorded why; re-read it for the home screen
-            raise RuntimeError("blocked" if exc.code == 502 else f"source answered {exc.code}") from None
-        except Exception:
-            tmp.unlink(missing_ok=True)
-            raise
+        full = os.path.realpath(str(CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.m4a"))
+        if not full.startswith(os.path.realpath(str(CACHE)) + os.sep):
+            raise LookupError("bad id")
+        tmp = Path(full)
+        for attempt in range(len(AUDIO_RETRY_DELAYS) + 1):
+            try:
+                with online_urlopen(source_for(f"yt:{vid}").rstrip("/") + f"/api/music/audio/{vid}", timeout=170) as r, tmp.open("wb") as out:
+                    shutil.copyfileobj(r, out, 262144)
+                break
+            except urllib.error.HTTPError as exc:
+                tmp.unlink(missing_ok=True)
+                _source_status.clear()  # the connector recorded why; re-read it for the home screen
+                if exc.code == 502 and attempt < len(AUDIO_RETRY_DELAYS):
+                    print("audio blocked, retrying", vid, attempt + 1, file=sys.stderr)
+                    time.sleep(AUDIO_RETRY_DELAYS[attempt])
+                    continue
+                raise RuntimeError("blocked" if exc.code == 502 else f"source answered {exc.code}") from None
+            except Exception:
+                tmp.unlink(missing_ok=True)
+                raise
         if not ONLINE or tmp.stat().st_size == 0:
             tmp.unlink(missing_ok=True)
             raise RuntimeError("download failed")

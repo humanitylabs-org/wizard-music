@@ -319,3 +319,22 @@ describe('playback failures', () => {
     vi.useRealTimers()
   })
 })
+
+describe('a saved mix that fails to load (wizard-music#40)', () => {
+  it('stops with a retry instead of a silent no-load, and Try again loads it again', async () => {
+    const audio = new FakeAudio()
+    const engine = new WebEngine(audio as unknown as HTMLAudioElement, (async () => new Response('{"tracks":[]}')) as typeof fetch)
+    const mix = { ...track(1), durationMs: 0 }
+    await engine.load([mix], 0, null)
+    audio.dispatchEvent(new Event('error'))
+    expect(engine.snapshot().playing).toBe(false)
+    expect(engine.snapshot().buffering).toBe(false)
+    expect(engine.snapshot().error).toMatch(/Couldn.t reach YouTube.*Try again/)
+    audio.src = ''
+    engine.jump(engine.snapshot().index)
+    expect(audio.src).toContain('/wizard-music/stream/yt:t1')
+    expect(engine.snapshot().buffering).toBe(true)
+    audio.dispatchEvent(new Event('playing'))
+    expect(engine.snapshot().error).toBe('')
+  })
+})

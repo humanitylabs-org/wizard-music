@@ -122,6 +122,10 @@ export function playedTracks(snapshot: Pick<MusicSnapshot, 'queue' | 'index'>, m
 /** Failed tracks in a row before playback stops and says so. */
 export const MAX_SKIPS = 2
 export const SOURCE_DOWN = 'Songs aren\u2019t playing on this Wizard right now. See Online sources on Music\u2019s home.'
+/** Said when a song fails and nothing follows it; Now Playing shows a Try again button under it. */
+export function couldNotPlay(track?: MusicTrack) {
+  return track?.source === 'youtube' || track?.id.startsWith('yt:') ? 'Couldn\u2019t reach YouTube for this one. Tap Try again.' : 'This track could not be played. Tap Try again.'
+}
 export const EMPTY_SNAPSHOT: MusicSnapshot = { queue: [], index: -1, playing: false, buffering: false, positionMs: 0, durationMs: 0, station: null, error: '', engine: 'web' }
 
 export function absoluteMusicUrl(path: string): string {
@@ -190,6 +194,12 @@ export class WebEngine implements MusicEngine {
     audio.addEventListener('playing', () => { this.failures = 0 })
     audio.addEventListener('error', () => {
       if (!audio.src) return
+      // Nothing to skip to (a saved mix, the last song of a queue): stop with a retry instead of a silent no-load.
+      if (this.state.index >= this.state.queue.length - 1 && !this.state.station) {
+        this.wantPlaying = false
+        this.set({ playing: false, buffering: false, error: couldNotPlay(this.current()) })
+        return
+      }
       // One bad song skips; a run of failures means the source itself is down. Stop
       // instead of silently clicking through the whole queue.
       if (++this.failures >= MAX_SKIPS) {
