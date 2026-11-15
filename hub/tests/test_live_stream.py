@@ -152,3 +152,16 @@ def test_a_download_cut_short_breaks_the_live_answer_instead_of_ending_it_cleanl
             got = r.read()
             assert len(got) == len(BODY) - 1
     assert hub._cache_path(VID) is None
+
+
+def test_cache_lookup_stays_inside_the_audio_cache(hub, tmp_path):
+    """Issue 58: the cache lookup checks its real path inside the cache dir (code scanning guard)."""
+    vid = 'aBcDeFgHiJk'
+    (hub.CACHE / f'{vid}.m4a').write_bytes(b'audio')
+    hit = hub._cache_path(vid)
+    assert hit is not None and hit.read_bytes() == b'audio'
+    outside = tmp_path / 'outside.m4a'
+    outside.write_bytes(b'secret')
+    (hub.CACHE / 'zZzZzZzZzZz.m4a').symlink_to(outside)
+    assert hub._cache_path('zZzZzZzZzZz') is None
+    assert hub._cache_path('../outside') is None
