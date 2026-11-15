@@ -10,6 +10,8 @@ import pytest
 
 class Fake(BaseHTTPRequestHandler):
     state = 'ok'
+    blips = 0  # how many audio requests answer 502 before the source recovers
+    audio_calls = 0
 
     def log_message(self, *a):
         pass
@@ -20,6 +22,10 @@ class Fake(BaseHTTPRequestHandler):
         elif self.path.startswith('/api/music/search'):
             body = {'tracks': [{'videoId': 'sWcLccMuCA8', 'title': 'Xtal', 'artists': [{'name': 'Aphex Twin'}]}]}
         elif self.path.startswith('/api/music/audio/'):
+            Fake.audio_calls += 1
+            if Fake.blips > 0:
+                Fake.blips -= 1
+                self.send_response(502); self.send_header('Content-Length', '2'); self.end_headers(); self.wfile.write(b'{}'); return
             if Fake.state == 'blocked':
                 self.send_response(502); self.send_header('Content-Length', '2'); self.end_headers(); self.wfile.write(b'{}'); return
             self.send_response(200); self.send_header('Content-Length', '5'); self.end_headers(); self.wfile.write(b'audio'); return
@@ -41,6 +47,8 @@ def hub(monkeypatch, tmp_path):
     sys.modules[spec.name] = mod
     spec.loader.exec_module(mod)
     mod.set_online(True)
+    mod.AUDIO_RETRY_DELAYS = (0, 0)
+    Fake.blips = Fake.audio_calls = 0
     yield mod
     srv.shutdown()
     mod._db.close()
@@ -67,3 +75,18 @@ def test_offline_never_calls_connectors(hub, monkeypatch):
     monkeypatch.setattr(hub.urllib.request, 'urlopen', lambda *a, **k: (_ for _ in ()).throw(AssertionError('network')))
     hub._source_status.clear()
     assert all(c['status'] in ('off', 'connected') for c in hub.home()['sources'])
+
+
+def test_a_blocked_blip_is_retried_before_the_mix_fails(hub):
+    # wizard-music#40: the first request for a saved mix got 'blocked' once and the player showed nothing.
+    Fake.state = 'ok'
+    Fake.blips = 1
+    assert hub.fetch_audio('HW0otI10RrM').read_bytes() == b'audio'
+    assert Fake.audio_calls == 2
+
+
+def test_a_source_that_stays_blocked_still_fails_after_the_retries(hub):
+    Fake.state = 'blocked'
+    with pytest.raises(RuntimeError, match='blocked'):
+        hub.fetch_audio('In0Nofy0kx8')
+    assert Fake.audio_calls == 3
