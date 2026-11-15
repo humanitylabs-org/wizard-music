@@ -1343,6 +1343,66 @@ def style_station(style: str, said: str, q: str) -> dict | None:
 
 
 # ---------------------------------------------------------------- Search
+# YouTube Music's "songs" filter only returns official tracks, so full-length versions that live on YouTube as
+# uploads (extended mixes, remixes, live takes) never showed up. Videos are asked for too and woven in after
+# the first songs, minus copies of a song already listed and anything too short or too long to be a track.
+SEARCH_SONGS, SEARCH_VIDEOS = 20, 10
+VIDEO_MIN_S, VIDEO_MAX_S = 60, 20 * 60
+_VIDEO_NOISE = re.compile(
+    r"[(\[][^)\]]*\b(?:official|video|audio|lyrics?|visuali[sz]er|hd|hq|4k|m/?v)\b[^)\]]*[)\]]"
+    r"|\b(?:official\s+(?:music\s+)?video|official\s+audio|lyric\s+video|lyrics|visuali[sz]er)\b",
+    re.I,
+)
+
+
+def _words(text: str) -> frozenset:
+    text = unicodedata.normalize("NFKD", text or "").encode("ascii", "ignore").decode().lower()
+    return frozenset(w for w in re.findall(r"[a-z0-9]+", text) if w not in {"the", "ft", "feat", "featuring", "x"})
+
+
+def _video_track(item: dict) -> bool:
+    secs = item.get("duration_seconds") or _secs(item.get("length") or item.get("duration"))
+    return VIDEO_MIN_S <= int(secs or 0) <= VIDEO_MAX_S
+
+
+def _online_search(q: str) -> list[dict]:
+    def ask(kind: str, limit: int) -> list[dict]:
+        try:
+            return list(ytm().search(q, filter=kind, limit=limit) or [])[:limit]
+        except Exception as exc:
+            print(f"ytm search failed ({kind})", exc, file=sys.stderr)
+            return []
+
+    found: dict[str, list[dict]] = {}
+    threads = [threading.Thread(target=lambda k=k, n=n: found.__setitem__(k, ask(k, n)), daemon=True)
+               for k, n in (("songs", SEARCH_SONGS), ("videos", SEARCH_VIDEOS))]
+    for th in threads:
+        th.start()
+    for th in threads:
+        th.join(30)
+    songs = [t for t in (remember_yt(i) for i in found.get("songs", [])) if t]
+    known = {_words(f"{t['artist']} {t['title']}") for t in songs}
+    videos = []
+    for item in found.get("videos", []):
+        if not _video_track(item):
+            continue  # DJ sets, hour-long loops, short clips
+        artists = ", ".join(a.get("name", "") for a in item.get("artists") or [] if isinstance(a, dict))
+        title = _VIDEO_NOISE.sub(" ", item.get("title") or "")
+        if _words(title) in known or _words(f"{artists} {title}") in known:
+            continue  # the official video of a song already listed
+        t = remember_yt(item)
+        if t:
+            videos.append(t)
+    # Two songs first (a plain song search still starts with the official song), then a video after each song.
+    out, songs_left = songs[:2], songs[2:]
+    while songs_left or videos:
+        if videos:
+            out.append(videos.pop(0))
+        if songs_left:
+            out.append(songs_left.pop(0))
+    return out
+
+
 def search(q: str) -> list[dict]:
     q = q.strip()
     out: list[dict] = []
@@ -1352,13 +1412,7 @@ def search(q: str) -> list[dict]:
         (like, like, like),
     ):
         out.append(track(tid))
-    try:
-        for item in ytm().search(q, filter="songs", limit=20)[:20]:
-            t = remember_yt(item)
-            if t:
-                out.append(t)
-    except Exception as exc:
-        print("ytm search failed", exc, file=sys.stderr)
+    out += _online_search(q)
     seen, uniq = set(), []
     for t in out:
         if t and t["id"] not in seen:
