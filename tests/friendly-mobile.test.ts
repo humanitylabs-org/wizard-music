@@ -22,11 +22,11 @@ describe('friendly on a phone', () => {
     expect(appearance).toContain(':root[data-wz-hosted]:not([data-presentation="immersive"]) .music-now-body { padding-bottom: 24px; }')
   })
   it('lets Back leave search results for Music home through the shared WizardApp back stack', () => {
-    expect(source).toMatch(/useLayoutEffect\(\(\) => window\.WizardApp\?\.back\?\.register\?\.\(\{\s*canGoBack: \(\) => resultsRef\.current !== null,/)
-    expect(source).toContain('back: () => { if (resultsRef.current === null) return false; clearSearch(); return true }')
+    // behaviour: tests/back-search.test.tsx (issue 47); results are a layer of Music's one Back order
+    expect(source).toContain('useLayoutEffect(() => searchBack.attach({')
     // the phone's Back pops Music's own history entry for the results, never the shell's
     expect(source).toContain("if (showingResults && at !== 'search' && at !== 'now') history.pushState({ wizardMusic: 'search' }, '')")
-    expect(source).toContain("if (!showingResults && at === 'search') history.back()")
+    expect(source).toContain("if (!showingResults) leaveEntry('search')")
     expect(source).toContain('aria-label="Clear search" onClick={clearSearch}')
   })
 })

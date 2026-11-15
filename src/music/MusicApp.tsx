@@ -8,6 +8,7 @@ import { Playlists } from './Playlists'
 import { AddGlyph, SongPlaylists } from './SongPlaylists'
 import { SONG_PLAYLISTS_SWITCH, songPlaylistControl } from './songPlaylists'
 import { cacheSwitches, cachedSwitches, fetchSwitches, LEVEL_SWITCH, LEVEL_MIN, readLevel, writeLevel, type SwitchStates } from './level'
+import { leaveEntry, searchBack } from './back'
 import './music.css'
 
 const BASE = new URL('./', document.baseURI).pathname
@@ -285,8 +286,9 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
   const searchAbort = useRef<AbortController | null>(null)
   const current = snapshot.queue[snapshot.index]
   // Back (phone Back, Android Back, Escape) on search results returns to Music's home, like the search box's ×.
-  // Results own one history entry (like Now Playing), so the phone's Back pops it instead of leaving Music. The
-  // WizardApp handler is registered before the app shell's own, so an open Now Playing still closes first.
+  // Results own one history entry (like Now Playing). They are part of Music's one Back order (src/music/back.ts,
+  // issue 47): main.tsx answers the shell, so an open Now Playing still closes first and Music is never "at root"
+  // while results show.
   const resultsRef = useRef<MusicTrack[] | null>(null)
   resultsRef.current = results
   const clearSearch = useCallback(() => { ++searchSeq.current; window.clearTimeout(searchTimer.current); searchAbort.current?.abort(); setQuery(''); setResults(null); setSearching(false) }, [])
@@ -294,8 +296,9 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
   useEffect(() => {
     const at = history.state?.wizardMusic
     if (showingResults && at !== 'search' && at !== 'now') history.pushState({ wizardMusic: 'search' }, '')
-    // results gone by ×, an emptied box or Online sources off: step back over the results' own entry
-    if (!showingResults && at === 'search') history.back()
+    // results gone by ×, Back, an emptied box or Online sources off: step back over the results' own entry, only
+    // when the entry behind is Music's (else the shell's guard would pop and Music would close)
+    if (!showingResults) leaveEntry('search')
   }, [showingResults])
   useEffect(() => {
     const onPop = () => {
@@ -305,9 +308,10 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
-  useLayoutEffect(() => window.WizardApp?.back?.register?.({
-    canGoBack: () => resultsRef.current !== null,
-    back: () => { if (resultsRef.current === null) return false; clearSearch(); return true }
+  useLayoutEffect(() => searchBack.attach({
+    open: () => resultsRef.current !== null,
+    // Leave the results' history entry now, inside the Back press (as Now Playing does), not in a later effect.
+    clear: () => { resultsRef.current = null; clearSearch(); leaveEntry('search') },
   }), [clearSearch])
 
   const loadHome = useCallback(() => {

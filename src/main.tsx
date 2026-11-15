@@ -6,6 +6,7 @@ import { installAppKeys } from './music/appKeys'
 import { IdentifyEntry, IdentifyView } from './music/IdentifyView'
 import { identifyControl, type CapturePort } from './music/identify'
 import { AddToPlaylistSheet } from './music/SongPlaylists'
+import { installMusicBack, leaveEntry } from './music/back'
 import { useSyncExternalStore } from 'react'
 
 function musicIsPlaying() {
@@ -43,16 +44,6 @@ async function newerBuildLive(): Promise<boolean> {
   return newerSeen
 }
 
-/** True when the history entry just behind this one is Music's own (same document), so Back stays in Music. */
-function ownEntryBehind(): boolean {
-  try {
-    const nav = (window as Window & { navigation?: { currentEntry?: { index: number } | null; entries(): { index: number }[] } }).navigation
-    if (!nav?.currentEntry) return true // no Navigation API: keep the old behaviour
-    const at = nav.currentEntry.index
-    return at > 0 && nav.entries().some((entry) => entry.index === at - 1)
-  } catch { return true }
-}
-
 function App() {
   const identify = useSyncExternalStore(identifyControl.subscribe, identifyControl.snapshot)
   const [nowPlayingOpen, setNowPlayingOpen] = useState(false)
@@ -81,12 +72,10 @@ function App() {
     nowPlayingRef.current = false
     setNowPlayingOpen(false)
     rememberView('home')
-    if (history.state?.wizardMusic !== 'now') return
     // Step back only over Music's own entry. If the entry before this one is not Music's (or the shell's
     // guard sits above it), history.back() would leave Music and the Wizard shell would treat it as Back
-    // and go Home. Then just mark this entry as the library instead.
-    if (ownEntryBehind()) history.back()
-    else history.replaceState({ ...(history.state || {}), wizardMusic: 'root' }, '')
+    // and go Home. Then just mark this entry as the library instead (src/music/back.ts).
+    leaveEntry('now')
   }, [])
   const dismissNowPlaying = useCallback(() => { dismissedRef.current = true; closeNowPlaying() }, [closeNowPlaying])
   const autoOpenNowPlaying = useCallback(() => { if (identifyControl.busy()) { musicControl.engine()?.pause(); return }; if (!dismissedRef.current && !identifyControl.snapshot().open) openNowPlaying() }, [openNowPlaying])
@@ -164,12 +153,14 @@ function App() {
     window.WizardApp.ready({ name: 'Music', version: '1' })
     // A cold document opens on Home; consume a stale previous player marker.
     if (!nowPlayingRef.current) history.replaceState({ ...(history.state || {}), wizardMusic: 'root' }, '')
-    const detachHistory = window.WizardApp.back.useHistory({ isRoot: () => !nowPlayingRef.current && !identifyControl.snapshot().open })
-    const unregister = window.WizardApp.back.register({
-      canGoBack: () => nowPlayingRef.current || identifyControl.snapshot().open,
-      back: () => { if (identifyControl.back()) return true; if (!nowPlayingRef.current) return false; closeNowPlaying(); return true }
+    // One Back order for the whole app (src/music/back.ts): Identify, Now Playing, then search results; Music is at its
+    // root only when none is open, so the shell never leaves Music while results are showing (issue 47).
+    return installMusicBack(window.WizardApp.back, {
+      identifyOpen: () => identifyControl.snapshot().open,
+      identifyBack: () => identifyControl.back(),
+      nowPlaying: () => nowPlayingRef.current,
+      closeNowPlaying,
     })
-    return () => { unregister(); if (typeof detachHistory === 'function') detachHistory() }
   }, [closeNowPlaying])
 
   return <div className="music-shell">
