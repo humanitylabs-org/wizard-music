@@ -25,7 +25,7 @@ async function musicJson<T>(path: string, init?: RequestInit): Promise<T> {
 }
 export const musicApi = {
   home: () => musicJson<MusicHome>(BASE + 'api/home'),
-  /** Every liked song (wizard-music#63); served only while the liked-view-all switch is on. */
+  /** Every liked song (wizard-music#63, on for everyone since #72). */
   liked: () => musicJson<{ tracks: MusicTrack[] }>(BASE + 'api/liked'),
   settings: (online: boolean) => musicJson<{online: boolean}>(BASE + 'api/settings', { method: 'POST', body: JSON.stringify({online}) }),
   search: (q: string, signal?: AbortSignal) => musicJson<{ tracks: MusicTrack[] }>(`${BASE}api/search?q=${encodeURIComponent(q)}`, { signal }),
@@ -270,8 +270,6 @@ export function usePendingStart(): MusicTrack | null {
 }
 /** A saved long mix (no known length yet, or 20 minutes and more) downloads whole before it plays. */
 export const longStart = (track: MusicTrack) => track.id.startsWith('yt:') && (!track.durationMs || track.durationMs >= 20 * 60_000)
-/** Liked > View all (wizard-music#63): the full Liked list. */
-export const LIKED_ALL_SWITCH = 'liked-view-all'
 
 const LoadingWheel = ({ label }: { label: string }) => <span className="music-wheel" role="progressbar" aria-label={label} />
 
@@ -322,7 +320,6 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
 
   // Liked > View all (issue 63): the full Liked list replaces the home sections until Back (its own history entry,
   // like search results; part of the one Back order in back.ts, after search results).
-  const likedAllOn = useSwitchOn(LIKED_ALL_SWITCH)
   const [likedAll, setLikedAll] = useState<{ tracks: MusicTrack[] | null; error: string } | null>(null)
   const likedOpenRef = useRef(false)
   likedOpenRef.current = likedAll !== null
@@ -347,7 +344,6 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
     window.addEventListener('popstate', onPop)
     return () => window.removeEventListener('popstate', onPop)
   }, [])
-  useEffect(() => { if (!likedAllOn && likedOpenRef.current) closeLikedAll() }, [likedAllOn, closeLikedAll])
   useLayoutEffect(() => likedBack.attach({ open: () => likedOpenRef.current, clear: closeLikedAll }), [closeLikedAll])
 
   const loadHome = useCallback(() => {
@@ -494,7 +490,7 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
       {home && home.liked.length > 0 && <section className="music-section" aria-label="Liked songs">
         <div className="music-section-head"><h3>Liked</h3>{(() => {
           const playAll = <button type="button" className="music-pill music-pill-solid" onClick={async () => { const station: MusicStation | null = null; await startEngine().load(home.liked, 0, station); noteEngineStarted(); onOpenNowPlaying() }}><PlayGlyph size={16} />Play all</button>
-          return likedAllOn ? <div className="music-section-actions">{playAll}<button type="button" className="music-pill music-pill-solid" onClick={openLikedAll}>View all</button></div> : playAll
+          return <div className="music-section-actions">{playAll}<button type="button" className="music-pill music-pill-solid" onClick={openLikedAll}>View all</button></div>
         })()}</div>
         <div className="music-list">{home.liked.slice(0, 8).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}</div>
       </section>}

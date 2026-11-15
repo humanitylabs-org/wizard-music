@@ -2411,7 +2411,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, online_settings())
             if path == "/api/home":
                 return self._json(200, home())
-            if path == "/api/liked":  # all liked songs (wizard-music#63); the app serves it only while liked-view-all is on
+            if path == "/api/liked":  # all liked songs (wizard-music#63, on for everyone since #72)
                 return self._json(200, {"tracks": liked_all()})
             if path == "/api/scores":  # points per song, with the raw counts behind them
                 return self._json(200, scores(int(qs.get("limit", ["0"])[0] or 0)))

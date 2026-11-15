@@ -77,7 +77,6 @@ const server = createServer(async (request, response) => {
       if (!consent.online) { sendJson(response, 403, { error: 'online_sources_disabled' }); return }
       await handleCatalog(request, response, url, sendJson); return
     }
-    if (sub === '/api/liked' && !switchOn('liked-view-all')) { sendJson(response, 404, { error: 'switched_off' }); return }
     if (sub.startsWith('/api/song-playlists') && !switchOn('song-playlists')) { sendJson(response, 404, { error: 'switched_off' }); return }
     if (/^\/(api|stream|art)\//.test(sub)) { await handleMusic(request, response, url, sendJson); return }
     if (request.method !== 'GET' && request.method !== 'HEAD') { sendJson(response, 405, { error: 'method' }); return }
