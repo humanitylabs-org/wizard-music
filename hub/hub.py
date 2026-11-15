@@ -2057,7 +2057,73 @@ def remux_plain(path: Path) -> Path:
     return path
 
 
-def fetch_audio(vid: str) -> Path:
+# ---- Progressive play (wizard-music#46, switch live-mixes) ----
+# With the switch on, the app server asks for a song with X-Wizard-Music-Live: 1. The hub then answers as soon as the
+# first bytes of the download are on disk and keeps sending while the rest arrives (seeking ahead waits for its bytes).
+# A song a live player has open keeps its downloaded bytes: the plain-MP4 rewrite waits until nobody has asked for it
+# for LIVE_KEEP_SECONDS, so the bytes under a playing song never change.
+LIVE_FIRST_BYTES = 64 * 1024
+LIVE_KEEP_SECONDS = float(os.environ.get("WIZARD_MUSIC_LIVE_KEEP_SECONDS", "1800"))
+LIVE_STALL_SECONDS = 120.0
+
+
+class LiveDownload:
+    """One running download that live players read while it grows."""
+
+    def __init__(self):
+        self.cond = threading.Condition()
+        self.path: Path | None = None
+        self.final: Path | None = None
+        self.total: int | None = None
+        self.written = 0
+        self.done = self.failed = self.attached = self.remuxing = False
+
+    def begin(self, path: Path, total: int | None):
+        with self.cond:
+            self.path, self.total, self.written = path, total, 0
+            self.cond.notify_all()
+
+    def grew(self, n: int):
+        with self.cond:
+            self.written += n
+            self.cond.notify_all()
+
+    def finish(self, final: Path | None = None):
+        with self.cond:
+            if not self.done:
+                self.final = final if final is not None else self.final
+                self.done, self.failed = True, final is None and self.final is None
+                self.cond.notify_all()
+
+    def attach(self) -> bool:
+        """Read it live, unless the finished file is already being rewritten."""
+        with self.cond:
+            if self.remuxing:
+                return False
+            self.attached = True
+            return True
+
+    def claim_remux(self, vid: str) -> bool:
+        with self.cond:
+            if self.attached or _live_kept(vid):
+                return False
+            self.remuxing = True
+            return True
+
+    def wait(self, test, timeout: float) -> bool:
+        with self.cond:
+            return self.cond.wait_for(lambda: test() or self.done, timeout)
+
+
+_live: dict[str, LiveDownload] = {}
+_live_read: dict[str, float] = {}
+
+
+def _live_kept(vid: str) -> bool:
+    return time.time() - _live_read.get(vid, 0.0) < LIVE_KEEP_SECONDS
+
+
+def fetch_audio(vid: str, live: bool = False) -> Path:
     if not ONLINE:
         raise LookupError("online sources disabled")
     m = YT_ID.fullmatch(vid or "")
@@ -2065,44 +2131,111 @@ def fetch_audio(vid: str) -> Path:
         raise LookupError("bad id")
     vid = m.group(0)  # only [A-Za-z0-9_-]{11} from here on; never a path
     hit = _cache_path(vid)
-    if hit and (hit.name in _remux_failed or not is_fragmented_mp4(hit)):
+    if hit and (hit.name in _remux_failed or _live_kept(vid) or not is_fragmented_mp4(hit)):
         os.utime(hit)
         return hit
     with _dl_guard:
         lock = _dl_locks.setdefault(vid, threading.Lock())
     with lock:
-        hit = _cache_path(vid)
-        if hit:
-            # Songs cached before the fix are still fragmented; fix each once, on its next play.
-            return remux_plain(hit)
-        full = os.path.realpath(str(CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.m4a"))
-        if not full.startswith(os.path.realpath(str(CACHE)) + os.sep):
-            raise LookupError("bad id")
-        tmp = Path(full)
-        for attempt in range(len(AUDIO_RETRY_DELAYS) + 1):
-            try:
-                with online_urlopen(source_for(f"yt:{vid}").rstrip("/") + f"/api/music/audio/{vid}", timeout=170) as r, tmp.open("wb") as out:
-                    shutil.copyfileobj(r, out, 262144)
-                break
-            except urllib.error.HTTPError as exc:
-                tmp.unlink(missing_ok=True)
-                _source_status.clear()  # the connector recorded why; re-read it for the home screen
-                if exc.code == 502 and attempt < len(AUDIO_RETRY_DELAYS):
-                    print("audio blocked, retrying", vid, attempt + 1, file=sys.stderr)
-                    time.sleep(AUDIO_RETRY_DELAYS[attempt])
-                    continue
-                raise RuntimeError("blocked" if exc.code == 502 else f"source answered {exc.code}") from None
-            except Exception:
-                tmp.unlink(missing_ok=True)
-                raise
-        if not ONLINE or tmp.stat().st_size == 0:
+        with _dl_guard:
+            dl = _live.setdefault(vid, LiveDownload())
+        made = None
+        try:
+            made = _download_locked(vid, live, dl)
+            return made
+        finally:
+            with _dl_guard:
+                if _live.get(vid) is dl:
+                    del _live[vid]
+            dl.finish(made)
+
+
+def _download_locked(vid: str, live: bool, dl: LiveDownload) -> Path:
+    hit = _cache_path(vid)
+    if hit:
+        # Songs cached before the fix are still fragmented; fix each once, on its next play.
+        return remux_plain(hit) if dl.claim_remux(vid) else hit
+    full = os.path.realpath(str(CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.m4a"))
+    if not full.startswith(os.path.realpath(str(CACHE)) + os.sep):
+        raise LookupError("bad id")
+    tmp = Path(full)
+    url = source_for(f"yt:{vid}").rstrip("/") + f"/api/music/audio/{vid}" + ("?live=1" if live else "")
+    for attempt in range(len(AUDIO_RETRY_DELAYS) + 1):
+        try:
+            with online_urlopen(url, timeout=170) as r, tmp.open("wb") as out:
+                length = r.headers.get("Content-Length") or ""
+                dl.begin(tmp, int(length) if length.isdigit() else None)
+                read = getattr(r, "read1", r.read)
+                while chunk := read(262144):
+                    out.write(chunk)
+                    out.flush()
+                    dl.grew(len(chunk))
+            if dl.total is not None and dl.written != dl.total:
+                raise RuntimeError("download cut short")
+            break
+        except urllib.error.HTTPError as exc:
             tmp.unlink(missing_ok=True)
+            _source_status.clear()  # the connector recorded why; re-read it for the home screen
+            if exc.code == 502 and attempt < len(AUDIO_RETRY_DELAYS):
+                print("audio blocked, retrying", vid, attempt + 1, file=sys.stderr)
+                time.sleep(AUDIO_RETRY_DELAYS[attempt])
+                continue
+            raise RuntimeError("blocked" if exc.code == 502 else f"source answered {exc.code}") from None
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
+    if not ONLINE or tmp.stat().st_size == 0:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError("download failed")
+    made = [remux_plain(tmp) if dl.claim_remux(vid) else tmp]
+    final = CACHE / f"{vid}{made[0].suffix}"
+    with dl.cond:
+        dl.final = final  # set before the rename, so a reader that misses the temp name finds this one
+    made[0].replace(final)
+    _evict()
+    return final
+
+
+def live_audio(vid: str) -> Path | LiveDownload:
+    """The song file, or its running download once the first bytes are in (wizard-music#46)."""
+    if not ONLINE:
+        raise LookupError("online sources disabled")
+    m = YT_ID.fullmatch(vid or "")
+    if not m:
+        raise LookupError("bad id")
+    vid = m.group(0)
+    _live_read[vid] = time.time()  # first: no rewrite may start under this player from now on
+    with _dl_guard:
+        dl = _live.get(vid)
+        if dl is None and not _cache_path(vid):
+            dl = _live[vid] = LiveDownload()
+            threading.Thread(target=_live_worker, args=(vid, dl), daemon=True).start()
+    if dl is None or not dl.attach():
+        if dl is not None:
+            dl.wait(lambda: False, 300)
+        return fetch_audio(vid)
+    dl.wait(lambda: dl.written >= LIVE_FIRST_BYTES, 300)
+    if dl.total is None or not dl.written:
+        dl.wait(lambda: False, 300)  # no size known: the whole file first, as before
+        if dl.failed or not dl.final:
             raise RuntimeError("download failed")
-        made = [remux_plain(tmp)]
-        final = CACHE / f"{vid}{made[0].suffix}"
-        made[0].replace(final)
-        _evict()
-        return final
+        return dl.final
+    if dl.failed:
+        raise RuntimeError("download failed")
+    return dl.final if dl.done else dl
+
+
+def _live_worker(vid: str, dl: LiveDownload):
+    made = None
+    try:
+        made = fetch_audio(vid, live=True)
+    except Exception as exc:
+        print("live download failed", vid, exc, file=sys.stderr)
+    finally:
+        with _dl_guard:
+            if _live.get(vid) is dl:
+                del _live[vid]
+        dl.finish(made)
 
 
 def _evict():
@@ -2413,14 +2546,63 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(502, {"error": "source_unavailable"})
 
     def _stream(self, tid: str):
+        if tid.startswith("yt:") and self.headers.get("X-Wizard-Music-Live") == "1":
+            got = live_audio(tid[3:])
+            return self._stream_live(got) if isinstance(got, LiveDownload) else self._stream_file(got)
         path = audio_path(tid)
         return self._stream_file(path)
+
+    def _stream_live(self, dl: LiveDownload):
+        """Like _stream_file, for a song still downloading: its full size up front, bytes as they arrive."""
+        size = dl.total
+        span = self._send_range_head(size, "audio/mp4")
+        if span is None:
+            return
+        pos, end = span
+        try:
+            fh = dl.path.open("rb")
+        except FileNotFoundError:  # renamed into the cache between our checks
+            fh = dl.final.open("rb")
+        with fh:
+            while pos <= end:
+                if not dl.wait(lambda: dl.written > pos or dl.failed, LIVE_STALL_SECONDS) or dl.failed or dl.written <= pos:
+                    self.close_connection = True  # cut short: the player sees a broken answer and retries
+                    return
+                fh.seek(pos)
+                chunk = fh.read(min(256 * 1024, end + 1 - pos, dl.written - pos))
+                if not chunk:
+                    self.close_connection = True
+                    return
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                pos += len(chunk)
 
     def _stream_file(self,path):
         size = path.stat().st_size
         ctype = {".m4a": "audio/mp4", ".webm": "audio/webm", ".opus": "audio/ogg", ".mp3": "audio/mpeg",
                  ".flac": "audio/flac", ".wav": "audio/wav", ".ogg": "audio/ogg", ".aac": "audio/aac"}.get(
             path.suffix.lower(), mimetypes.guess_type(path.name)[0] or "application/octet-stream")
+        span = self._send_range_head(size, ctype)
+        if span is None:
+            return
+        start, end = span
+        with path.open("rb") as fh:
+            fh.seek(start)
+            left = end - start + 1
+            while left > 0:
+                chunk = fh.read(min(256 * 1024, left))
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
+                left -= len(chunk)
+
+    def _send_range_head(self, size: int, ctype: str):
+        """Status and headers for a byte-range answer; (start, end) to send, or None when nothing follows."""
         start, end = 0, size - 1
         rng = self.headers.get("Range")
         m = re.match(r"bytes=(\d*)-(\d*)$", rng or "")
@@ -2449,19 +2631,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "private, max-age=86400")
         self.end_headers()
         if self.command == "HEAD":
-            return
-        with path.open("rb") as fh:
-            fh.seek(start)
-            left = end - start + 1
-            while left > 0:
-                chunk = fh.read(min(256 * 1024, left))
-                if not chunk:
-                    break
-                try:
-                    self.wfile.write(chunk)
-                except (BrokenPipeError, ConnectionResetError):
-                    return
-                left -= len(chunk)
+            return None
+        return start, end
 
 
 def main():
