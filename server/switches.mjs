@@ -16,7 +16,6 @@ export const SWITCHES = [
   { id: 'music-level', name: 'Music level', description: 'A Music level slider on the player: Music plays quieter than the phone volume, so the phone volume buttons give finer steps at low volume. Kept on each device.', default: false, issues: ['humanitylabs-org/wizard-music#35'] },
   { id: 'song-playlists', name: 'Your playlists', description: 'Make your own playlists from single songs: Home > Your playlists, an Add to playlist button on search results and the player, Play and Shuffle in order. Your agent can build one for you too.', default: false, issues: ['humanitylabs-org/wizard-music#39'] },
   { id: 'live-mixes', name: 'Start long mixes sooner', description: 'A song that is not on this Wizard yet starts playing while it is still downloading, so an hour-long mix starts in a few seconds instead of after the whole file. Seeking ahead waits until that part has arrived.', default: false, issues: ['humanitylabs-org/wizard-music#46'] },
-  { id: 'liked-view-all', name: 'View all liked songs', description: 'A View all button next to Play all on the Liked header: it opens every song you liked, each one playable, and Back returns to the Music home.', default: false, issues: ['humanitylabs-org/wizard-music#63'] },
 ]
 const CONTRACT = 'wizard.app-switches/1'
 const ROUTE = /^(?:\/[a-z0-9][a-z0-9-]{0,62})?\/api\/switches\/?$/

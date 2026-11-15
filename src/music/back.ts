@@ -42,7 +42,7 @@ export const searchBack = {
   back(): boolean { if (!searchBack.open()) return false; searchLayer!.clear(); return true },
 }
 
-/** The full Liked list (wizard-music#63, switch liked-view-all), attached by MusicApp while it is mounted. */
+/** The full Liked list (wizard-music#63, on for everyone since #72), attached by MusicApp while it is mounted. */
 export const likedBack = {
   attach(layer: SearchLayer): () => void { likedLayer = layer; return () => { if (likedLayer === layer) likedLayer = null } },
   open(): boolean { try { return likedLayer?.open() === true } catch { return false } },
