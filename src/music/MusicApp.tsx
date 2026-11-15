@@ -5,6 +5,7 @@ if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNat
 import { shareSong } from './share'
 import { SwipeDeck, type SwipeDirection } from './swipe'
 import { Playlists } from './Playlists'
+import { cacheSwitches, cachedSwitches, fetchSwitches, LEVEL_SWITCH, LEVEL_MIN, readLevel, writeLevel, type SwitchStates } from './level'
 import './music.css'
 
 const BASE = new URL('./', document.baseURI).pathname
@@ -102,6 +103,47 @@ export function restoreMusicSession(): boolean {
   engine.resume(session)
   noteEngineStarted()
   return true
+}
+
+/** Box switches for this page (wizard.app-switches/1, read through api/view/switches), cached on the device. */
+let switchStates: SwitchStates = cachedSwitches(browserSessionStore())
+const switchListeners = new Set<() => void>()
+let switchesAsked = 0
+export function refreshSwitches(): Promise<void> {
+  const ticket = ++switchesAsked
+  return fetchSwitches(BASE).then((states) => {
+    if (!states || ticket !== switchesAsked) return
+    switchStates = states
+    cacheSwitches(browserSessionStore(), states)
+    // Switch on: the stored level applies; switch off: back to full level.
+    createdEngine?.setLevel?.(states[LEVEL_SWITCH] === true ? readLevel(browserSessionStore()) : 1)
+    switchListeners.forEach((listener) => listener())
+  })
+}
+export function useSwitchOn(id: string): boolean {
+  useEffect(() => {
+    void refreshSwitches()
+    const again = () => { if (document.visibilityState === 'visible') void refreshSwitches() }
+    document.addEventListener('visibilitychange', again)
+    return () => document.removeEventListener('visibilitychange', again)
+  }, [])
+  return useSyncExternalStore((listener) => { switchListeners.add(listener); return () => { switchListeners.delete(listener) } }, () => switchStates[id] === true, () => false)
+}
+
+/** Music level (wizard-music#35): how loud Music plays at most, below the phone's own volume. Kept on this device. */
+export function MusicLevel({ engine }: { engine: MusicEngine }) {
+  const [level, setLevelState] = useState(() => readLevel(browserSessionStore()))
+  const change = (value: number) => {
+    const next = writeLevel(browserSessionStore(), value)
+    setLevelState(next)
+    engine.setLevel(next)
+  }
+  return <label className="music-level">
+    <span className="music-level-head"><span>Music level</span><output>{Math.round(level * 100)}%</output></span>
+    <input type="range" min={Math.round(LEVEL_MIN * 100)} max={100} step={1} value={Math.round(level * 100)} aria-label="Music level" aria-valuetext={`${Math.round(level * 100)}%`}
+      onChange={(event) => change(Number(event.target.value) / 100)} />
+    <small>Lower it so the phone volume buttons give finer steps when you listen quietly.</small>
+  </label>
 }
 
 /** Which screen you were on (Now Playing or the library), so Music reopens there. */
@@ -602,6 +644,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
   const [showPlayed, setShowPlayedState] = useState(() => { try { return localStorage.getItem(SHOW_PLAYED_KEY) === '1' } catch { return false } })
   const sheet = useRef<HTMLDivElement>(null)
   useSwipeDownToClose(sheet, onClose)
+  const levelOn = useSwitchOn(LEVEL_SWITCH)
   // Opened for a tap whose start then failed: close back to the library rather than leave an empty layer.
   // Only the tap → failure transition closes; restores and stale native snapshots keep their old behaviour.
   // A started song can reach the snapshot a beat after the station loads (the phone's native player answers
@@ -673,6 +716,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
         <button type="button" className={`music-icon-button music-thumb music-like${liked ? ' on' : ''}`} aria-pressed={liked} aria-label={liked ? 'Thumbs up (on)' : 'Thumbs up'} onClick={like}><ThumbUpGlyph filled={liked} /></button>
       </div>
       {snapshot.error && <p className="music-status" role="status">{snapshot.error}</p>}
+      {levelOn && <MusicLevel engine={engine} />}
       <section className="music-upnext" aria-label="Queue">
         {played.length > 0 && <button type="button" className={`music-played-toggle${showPlayed ? ' open' : ''}`} aria-expanded={showPlayed} onClick={() => setShowPlayed(!showPlayed)}>
           <span>{showPlayed ? 'Hide played' : `Played · ${played.length}`}</span><ChevronDown />

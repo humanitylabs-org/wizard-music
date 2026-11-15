@@ -223,3 +223,10 @@ a.music-source:hover { background: color-mix(in srgb, var(--text) 5%, transparen
   .music-mini-down, .music-mini-toggle, .music-mini-next, .music-mini-close { width: 44px; height: 48px; }
 }
 
+
+/* Music level (wizard-music#35): a ceiling under the phone volume, on the player while the switch is on. */
+.music-level { display: grid; gap: 6px; margin: 4px 0 8px; padding: 12px 14px; border-radius: 14px; background: color-mix(in srgb, var(--text) 5%, transparent); }
+.music-level-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: var(--wz-text-md, .875rem); font-weight: 600; }
+.music-level-head output { color: var(--text-2); font-variant-numeric: tabular-nums; }
+.music-level input[type=range] { width: 100%; min-height: 44px; accent-color: var(--wiz); }
+.music-level small { color: var(--text-2); font-size: var(--wz-text-sm, .8125rem); line-height: 1.4; }

@@ -12,7 +12,9 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-export const SWITCHES = []
+export const SWITCHES = [
+  { id: 'music-level', name: 'Music level', description: 'A Music level slider on the player: Music plays quieter than the phone volume, so the phone volume buttons give finer steps at low volume. Kept on each device.', default: false, issues: ['humanitylabs-org/wizard-music#35'] },
+]
 const CONTRACT = 'wizard.app-switches/1'
 const ROUTE = /^(?:\/[a-z0-9][a-z0-9-]{0,62})?\/api\/switches\/?$/
 const LOCAL = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'])
