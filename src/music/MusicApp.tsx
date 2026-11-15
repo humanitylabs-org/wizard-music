@@ -419,11 +419,15 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
 
   const playRow = (track: MusicTrack) => void startStation({ trackId: track.id }, track.id, track)
 
-  const online = Boolean(home?.settings?.online)
+  // Issue 68: an older hub (before the consent switch) sends no settings and cannot change it from here; its own
+  // online source row says whether it runs online. Then Music hides the switch instead of showing a wrong, broken one,
+  // and the account library too: such a hub predates it (no /api/account-library), so it could only show an error.
+  const fixedHub = Boolean(home && !home.settings)
+  const online = fixedHub ? Boolean(home?.sources?.some((s) => s.id === 'youtube' && s.status === 'enabled')) : Boolean(home?.settings?.online)
   const nothingYet = Boolean(home && home.library.length === 0 && home.liked.length === 0)
   // The switch is the first step while Music is offline (or empty); once it is on it moves to the quiet footer.
   const consentFirst = Boolean(home && (!online || nothingYet))
-  const consent = home && <section className={`music-card music-consent${consentFirst ? ' first' : ''}`} aria-label="Online sources">
+  const consent = home && !fixedHub && <section className={`music-card music-consent${consentFirst ? ' first' : ''}`} aria-label="Online sources">
     <label><span>Online sources</span><input type="checkbox" role="switch" aria-label="Online sources" checked={online} disabled={savingConsent} onChange={async (event) => {
       const enabled = event.target.checked
       setSavingConsent(true)
@@ -495,14 +499,14 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
         <div className="music-list">{home.liked.slice(0, 8).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}</div>
       </section>}
 
-      {online && <AccountLibrarySection onOpenNowPlaying={onOpenNowPlaying} notify={notify} />}
+      {online && !fixedHub && <AccountLibrarySection onOpenNowPlaying={onOpenNowPlaying} notify={notify} />}
 
       {home && home.library.length > 0 && <section className="music-section" aria-label="Your library">
         <div className="music-section-head"><h3>On your Wizard</h3><button type="button" className="music-pill music-pill-solid" onClick={async () => { await startEngine().load([...home.library].sort(() => Math.random() - 0.5), 0, null); noteEngineStarted(); onOpenNowPlaying() }}><ShuffleGlyph />Shuffle</button></div>
         <div className="music-list">{home.library.slice(0, 12).map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}</div>
       </section>}
 
-      {nothingYet && <p className="music-empty">Your music starts here. Turn on Online sources above, search for a song and tap it to play. Or ask your Wizard to add your own MP3, M4A, FLAC, OGG or WAV files to Music’s library folder; they appear automatically. No music or account is bundled.</p>}
+      {nothingYet && <p className="music-empty">Your music starts here. {fixedHub ? (online ? 'Search for a song and tap it to play.' : '') : 'Turn on Online sources above, search for a song and tap it to play.'} Or ask your Wizard to add your own MP3, M4A, FLAC, OGG or WAV files to Music’s library folder; they appear automatically. No music or account is bundled.</p>}
       {!home && !homeError && <p className="music-status">Loading your music…</p>}
 
       {/* Where the music comes from and what you turned down: there when you look, never ahead of the music. */}

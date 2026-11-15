@@ -68,7 +68,12 @@ const server = createServer(async (request, response) => {
     const sub = url.pathname.slice(BASE.length)
 
     if (sub === '/api/catalog') {
-      const consent = await fetch(`${process.env.WIZARD_MUSIC_HUB_ORIGIN}/api/settings`, { headers: { Authorization: `Bearer ${process.env.WIZARD_MUSIC_HUB_TOKEN}` }, signal: AbortSignal.timeout(3000) }).then(r => r.json())
+      const hubGet = (path) => fetch(`${process.env.WIZARD_MUSIC_HUB_ORIGIN}${path}`, { headers: { Authorization: `Bearer ${process.env.WIZARD_MUSIC_HUB_TOKEN}` }, signal: AbortSignal.timeout(3000) })
+      const settings = await hubGet('/api/settings')
+      // Issue 68: an older hub has no /api/settings; its home's online source row says whether it runs online.
+      const consent = settings.status === 404
+        ? { online: ((await hubGet('/api/home').then(r => r.json())).sources || []).some(s => s.id === 'youtube' && s.status === 'enabled') }
+        : await settings.json()
       if (!consent.online) { sendJson(response, 403, { error: 'online_sources_disabled' }); return }
       await handleCatalog(request, response, url, sendJson); return
     }
