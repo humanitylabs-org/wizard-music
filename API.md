@@ -3,6 +3,7 @@ The Wizard authenticated gateway is the authorization boundary. Never publish th
 
 - `GET /health`: app process and configuration only, not backend health.
 - `GET /wizard-music/api/status`: same status, no secrets.
+- `GET /wizard-music/api/view/switches`: which app switches are on (`{switches: [{id, on}]}`), for the page itself; read only. Owners change them at `/api/switches` (wizard.app-switches/1).
 - `GET /wizard-music/api/home`: `{settings:{online:boolean},sources,vibes,liked,recent,library,taste}`.
 - `GET/POST /wizard-music/api/settings`: read consent or persist `{online:true|false}`; default off, revocation cancels downloader and gates every new outbound request.
 - `GET /wizard-music/api/search?q=...`: `{tracks:[...]}` (200-character query limit).

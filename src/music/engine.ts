@@ -1,4 +1,5 @@
 import { hostedAudioBridge } from './backgroundAudio'
+import { activeLevel, clampLevel } from './level'
 // Wizard Music playback engine.
 //
 // One interface, two implementations:
@@ -56,9 +57,12 @@ export interface MusicEngine {
   stop(): void
   /** Drop upcoming tracks (never the one playing). */
   removeUpcoming(ids: string[]): void
-  /** Player gain 0..1 on top of the phone's media volume. */
+  /** Player gain 0..1 on top of the phone's media volume, inside the Music level. */
   volume(): number
   setVolume(value: number): void
+  /** Music level (wizard-music#35): a ceiling 0.05..1 the player gain is scaled by. 1 = no ceiling. */
+  level(): number
+  setLevel(value: number): void
 }
 
 export const REFILL_THRESHOLD = 5
@@ -168,6 +172,7 @@ export class WebEngine implements MusicEngine {
     this.fetchImpl = fetchImpl
     this.store = store
     this.saver = new SessionSaver(store)
+    this.gain = Number.isFinite(audio.volume) ? audio.volume : 1
     audio.preload = 'auto'
     const sync = () => this.set({
       playing: this.markPlaying(!audio.paused && !audio.ended),
@@ -328,8 +333,13 @@ export class WebEngine implements MusicEngine {
     this.set({ queue })
     void this.maybeRefill()
   }
-  volume() { return this.audio.volume }
-  setVolume(value: number) { this.audio.volume = Math.min(1, Math.max(0, value)) }
+  private gain = 1
+  private ceiling = 1
+  volume() { return this.gain }
+  setVolume(value: number) { this.gain = Math.min(1, Math.max(0, value)); this.applyGain() }
+  level() { return this.ceiling }
+  setLevel(value: number) { this.ceiling = clampLevel(value); this.applyGain() }
+  private applyGain() { this.audio.volume = Math.min(1, Math.max(0, this.gain * this.ceiling)) }
 
   /** Media Session play state: Android's media controls read it, and the Wizard OS shell checks it before reloading. */
   private markPlaying(playing: boolean): boolean {
@@ -461,7 +471,12 @@ export class NativeEngine implements MusicEngine {
   private accept(value: NativeSnapshot) {
     const identity = value as NativeSnapshot & { sessionId?: string; volume?: number }
     if (identity.sessionId && identity.sessionId !== this.sessionId) { this.sessionId = identity.sessionId; this.queueRevision = -1; this.state = { ...EMPTY_SNAPSHOT, engine: "native" } }
-    if (typeof identity.volume === "number") this.gain = identity.volume
+    if (typeof identity.volume === "number") {
+      // The player reports what it plays (gain × level); keep the gain inside the level.
+      this.gain = Math.min(1, Math.max(0, identity.volume / this.ceiling))
+      // A fresh player (after an update or a restart) starts at full volume: hold it to the Music level.
+      if (this.ceiling < 1 && identity.volume > this.ceiling + 0.005) this.sendGain()
+    }
     const patch: Partial<MusicSnapshot> = {}
     if (Array.isArray(value.queue)) { patch.queue = value.queue; this.queueRevision = value.queueRevision ?? this.queueRevision }
     for (const key of ['index', 'playing', 'wantPlaying', 'buffering', 'positionMs', 'durationMs', 'error'] as const) {
@@ -471,7 +486,7 @@ export class NativeEngine implements MusicEngine {
     if (this.clearOnNextAccept && this.clearOnNextAccept === this.freshTicket) { this.clearOnNextAccept = 0; patch.stale = false }
     this.acceptCount++
     this.state = { ...this.state, ...patch }
-    if (identity.sessionId || Array.isArray(value.queue)) this.markAnswered()
+    if (identity.sessionId || Array.isArray(value.queue)) { this.heard = true; this.markAnswered() }
     this.emitter.emit(this.state)
     this.saveSession()
   }
@@ -517,8 +532,19 @@ export class NativeEngine implements MusicEngine {
   }
   removeUpcoming(ids: string[]) { this.send('removeUpcoming', { ids }) }
   private gain = 1
+  private ceiling = 1
   volume() { return this.gain }
-  setVolume(value: number) { this.gain = Math.min(1, Math.max(0, value)); this.send('volume', { value: this.gain }) }
+  setVolume(value: number) { this.gain = Math.min(1, Math.max(0, value)); this.sendGain() }
+  level() { return this.ceiling }
+  setLevel(value: number) {
+    const next = clampLevel(value)
+    if (next === this.ceiling) return
+    this.ceiling = next
+    // Before the player has answered its gain is unknown; its first answer is held to the level (see accept).
+    if (this.heard) this.sendGain()
+  }
+  private heard = false
+  private sendGain() { this.send('volume', { value: Math.round(this.gain * this.ceiling * 1000) / 1000 }) }
 }
 
 let engine: MusicEngine | null = null
@@ -526,6 +552,7 @@ export function musicEngine(): MusicEngine {
   if (engine) return engine
   const bridge = typeof window !== 'undefined' ? (window.WizardNativeMusic ||= hostedAudioBridge()) : undefined
   engine = bridge && typeof bridge.postMessage === 'function' ? new NativeEngine(bridge, browserSessionStore()) : new WebEngine(undefined, undefined, browserSessionStore())
+  engine.setLevel(activeLevel(browserSessionStore()))
   return engine
 }
 export function browserSessionStore(): SessionStore | null {
