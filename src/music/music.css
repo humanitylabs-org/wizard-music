@@ -23,6 +23,8 @@
 .music-section-head h3 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 1.3rem; font-weight: 750; letter-spacing: -.015em; color: var(--text); }
 .music-section-head small { color: var(--text-dim); font-size: var(--wz-text-sm, .8125rem); }
 .music-section-actions { display: flex; gap: 8px; }
+.music-liked-title { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.music-liked-title small { white-space: nowrap; }
 .music-results .music-section-head h3 { white-space: normal; line-height: 1.2; }
 
 /* Pills: solid ink like the player's play button; soft ones for secondary actions. */
