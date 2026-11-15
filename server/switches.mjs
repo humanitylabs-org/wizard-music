@@ -14,6 +14,7 @@ import { join } from 'node:path'
 
 export const SWITCHES = [
   { id: 'music-level', name: 'Music level', description: 'A Music level slider on the player: Music plays quieter than the phone volume, so the phone volume buttons give finer steps at low volume. Kept on each device.', default: false, issues: ['humanitylabs-org/wizard-music#35'] },
+  { id: 'song-playlists', name: 'Your playlists', description: 'Make your own playlists from single songs: Home > Your playlists, an Add to playlist button on search results and the player, Play and Shuffle in order. Your agent can build one for you too.', default: false, issues: ['humanitylabs-org/wizard-music#39'] },
 ]
 const CONTRACT = 'wizard.app-switches/1'
 const ROUTE = /^(?:\/[a-z0-9][a-z0-9-]{0,62})?\/api\/switches\/?$/

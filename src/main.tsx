@@ -5,6 +5,7 @@ import { installMusicVoice, installMusicRoute } from './music/voice'
 import { installAppKeys } from './music/appKeys'
 import { IdentifyEntry, IdentifyView } from './music/IdentifyView'
 import { identifyControl, type CapturePort } from './music/identify'
+import { AddToPlaylistSheet } from './music/SongPlaylists'
 import { useSyncExternalStore } from 'react'
 
 function musicIsPlaying() {
@@ -176,6 +177,7 @@ function App() {
     <main className="music-shell-main"><div hidden={identify.open}><MusicApp lead={<IdentifyEntry />} onOpenNowPlaying={openNowPlaying} notify={notify} /></div><IdentifyView notify={notify} /></main>
     <MiniPlayer onOpen={openNowPlaying} notify={notify} />
     {nowPlayingOpen && <NowPlaying onClose={dismissNowPlaying} notify={notify} />}
+    <AddToPlaylistSheet notify={notify} />
     {toast && <div className="music-toast" role="status">{toast}</div>}
   </div>
 }
