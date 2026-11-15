@@ -34,8 +34,8 @@ export function rewriteHubPaths(text, base = BASE) {
   return text.split(JSON.stringify(HUB_PREFIX).slice(1, -1)).join(`${base}/`).split(HUB_PREFIX).join(`${base}/`)
 }
 
-/** @param {{ origin?: string, token?: string, timeoutMs?: number, base?: string, tickets?: { addTickets(text: string): string } }} [options] */
-export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000, base: appBase = BASE, tickets } = {}) {
+/** @param {{ origin?: string, token?: string, timeoutMs?: number, base?: string, tickets?: { addTickets(text: string): string }, live?: () => boolean }} [options] */
+export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000, base: appBase = BASE, tickets, live = () => false } = {}) {
   const hub = origin ? new URL(origin) : null
   if (hub && (hub.protocol !== 'http:' || hub.hostname !== '127.0.0.1' || hub.pathname !== '/' || hub.search || hub.username)) {
     throw new Error('Wizard Music hub must be an exact loopback HTTP origin')
@@ -50,6 +50,8 @@ export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000,
     const upstreamPath = sub + (sub === '/api/search' || sub.startsWith('/api/identify/') || sub.startsWith('/api/account-library/') || sub.endsWith('/more') ? url.search : '')
     const headers = { Authorization: `Bearer ${token}`, Accept: route === 'api' ? 'application/json' : '*/*' }
     if (request.headers.range && route === 'media') headers.Range = String(request.headers.range).slice(0, 100)
+    // live-mixes switch (wizard-music#46): the hub starts a song while it is still downloading.
+    if (route === 'media' && sub.startsWith('/stream/') && live()) headers['X-Wizard-Music-Live'] = '1'
     let body = null
     if (request.method === 'POST') {
       const type = String(request.headers['content-type'] ?? '').toLowerCase()
