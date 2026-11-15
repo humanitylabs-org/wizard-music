@@ -5,6 +5,8 @@ if (typeof window !== 'undefined' && !window.WizardNativeMusic) window.WizardNat
 import { shareSong } from './share'
 import { SwipeDeck, type SwipeDirection } from './swipe'
 import { Playlists } from './Playlists'
+import { AddGlyph, SongPlaylists } from './SongPlaylists'
+import { SONG_PLAYLISTS_SWITCH, songPlaylistControl } from './songPlaylists'
 import { cacheSwitches, cachedSwitches, fetchSwitches, LEVEL_SWITCH, LEVEL_MIN, readLevel, writeLevel, type SwitchStates } from './level'
 import './music.css'
 
@@ -241,13 +243,14 @@ function Art({ track, size }: { track?: MusicTrack; size: 'row' | 'card' | 'hero
   return <span className={`music-art music-art-${size}`}>{track && !failed ? <img src={track.art} alt="" loading="lazy" onError={() => setFailed(true)} /> : <span className="music-art-fallback">♪</span>}</span>
 }
 
-function TrackRow({ track, active, played, onPlay, onPlayNext }: { track: MusicTrack; active?: boolean; played?: boolean; onPlay: () => void; onPlayNext?: () => void }) {
+function TrackRow({ track, active, played, onPlay, onPlayNext, onAdd }: { track: MusicTrack; active?: boolean; played?: boolean; onPlay: () => void; onPlayNext?: () => void; onAdd?: () => void }) {
   return <div className={`music-row${active ? ' active' : ''}${played ? ' played' : ''}`} aria-current={active ? 'true' : undefined}>
     <button type="button" className="music-row-main" onClick={onPlay}>
       <Art track={track} size="row" />
       <span className="music-row-text"><strong>{track.title}</strong><small>{track.artist}{track.source === 'library' ? <em className="music-source-badge">Library</em> : null}</small></span>
       {track.durationMs > 0 && <span className="music-row-time">{time(track.durationMs)}</span>}
     </button>
+    {onAdd && <button type="button" className="music-icon-button" aria-label={`Add ${track.title} to a playlist`} title="Add to playlist" onClick={onAdd}><AddGlyph /></button>}
     {onPlayNext && <button type="button" className="music-icon-button" aria-label={`Play ${track.title} next`} onClick={onPlayNext}><PlayNextGlyph /></button>}
   </div>
 }
@@ -267,6 +270,7 @@ const LoadingWheel = ({ label }: { label: string }) => <span className="music-wh
 export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying: () => void; notify: (message: string) => void; lead?: ReactNode }) {
   const snapshot = useMusicSnapshot()
   useFeedbackReporter(snapshot)
+  const songPlaylistsOn = useSwitchOn(SONG_PLAYLISTS_SWITCH)
   const [home, setHome] = useState<MusicHome | null>(null)
   const [savingConsent, setSavingConsent] = useState(false)
   const [homeError, setHomeError] = useState('')
@@ -405,7 +409,7 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
     {results !== null ? <section className="music-section music-results" aria-label="Search results">
       <div className="music-section-head"><h3>{searching ? 'Searching…' : `Results for “${query.trim()}”`}</h3>{query.trim() && <button type="button" className="music-pill" onClick={() => void startStation({ query: query.trim(), label: query.trim() }, 'vibe:query')}><PlayGlyph size={16} />Station from this</button>}</div>
       {!searching && !results.length && <p className="music-empty">Nothing matched. Try an artist, a song, or a mood.</p>}
-      <div className="music-list">{results.map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} />)}</div>
+      <div className="music-list">{results.map((track) => <TrackRow key={track.id} track={track} active={track.id === current?.id} onPlay={() => playRow(track)} onPlayNext={() => playNext(track)} onAdd={songPlaylistsOn ? () => songPlaylistControl.startAdding(track) : undefined} />)}</div>
     </section> : <>
       {lead}
       {homeError && <div className="music-card music-error"><p>{homeError}</p><button type="button" className="music-pill" onClick={loadHome}>Try again</button></div>}
@@ -429,6 +433,8 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
           </button>)}
         </div>
       </section>}
+
+      {songPlaylistsOn && <SongPlaylists notify={notify} onPlay={async (tracks, index) => { await playAccountTracks(tracks, index); onOpenNowPlaying() }} />}
 
       <Playlists notify={notify} onPlay={async (track) => { await musicControl.play([track], null); onOpenNowPlaying() }} />
 
@@ -645,6 +651,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
   const sheet = useRef<HTMLDivElement>(null)
   useSwipeDownToClose(sheet, onClose)
   const levelOn = useSwitchOn(LEVEL_SWITCH)
+  const songPlaylistsOn = useSwitchOn(SONG_PLAYLISTS_SWITCH)
   // Opened for a tap whose start then failed: close back to the library rather than leave an empty layer.
   // Only the tap → failure transition closes; restores and stale native snapshots keep their old behaviour.
   // A started song can reach the snapshot a beat after the station loads (the phone's native player answers
@@ -690,6 +697,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
     <header className="music-now-head">
       <button type="button" className="icon-button" aria-label="Close player" onClick={onClose}><ChevronDown /></button>
       <div><small>{snapshot.station ? 'Station' : 'Playing'}</small><strong>{snapshot.station?.title ?? sourceLabel(track.source)}</strong></div>
+      {songPlaylistsOn && <button type="button" className="icon-button music-add" aria-label={`Add ${track.title} to a playlist`} title="Add to playlist" onClick={() => songPlaylistControl.startAdding(track)}><AddGlyph /></button>}
       <button type="button" className="icon-button music-share" aria-label={`Share ${track.title}`} title="Share" onClick={() => void shareSong(track, notify)}><ShareGlyph /></button>
       <button type="button" className="icon-button music-end" aria-label="Close: stop this song and end the session" title="Stop and close" onClick={() => { onClose(); endListening() }}><CloseGlyph /></button>
     </header>

@@ -94,6 +94,9 @@ _db.executescript(
     CREATE TABLE IF NOT EXISTS saved_playlists (id TEXT PRIMARY KEY, url TEXT NOT NULL,
         kind TEXT NOT NULL, provider_id TEXT NOT NULL, title TEXT NOT NULL,
         author TEXT NOT NULL, author_url TEXT NOT NULL, thumbnail TEXT NOT NULL, created_at REAL NOT NULL);
+    -- Wizard-owned playlists of single songs (wizard-music#39): name, description, ordered JSON list of track ids.
+    CREATE TABLE IF NOT EXISTS song_playlists (id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+        ids TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL);
     """
 )
 _db.commit()
@@ -228,6 +231,114 @@ def playlist_track(key):
        (tid, item['title'], item['author'] or 'YouTube', '', 0,
         item['thumbnail'] or f"https://i.ytimg.com/vi/{item['providerId']}/hqdefault.jpg", 'youtube', '', time.time()))
     return track(tid)
+
+
+# ---------------------------------------------------------------- Song playlists (wizard-music#39)
+# Playlists the owner (or his agent) builds from single songs: yt:* and library tracks, in order. Stored only here;
+# nothing is written to a YouTube account. The app server serves these only while its `song-playlists` switch is on.
+SONG_PLAYLIST_MAX = 500
+SONG_ID = re.compile(r'(?:yt|lib):[A-Za-z0-9_-]{1,40}')
+SONG_PLAYLIST_ID = re.compile(r'[a-f0-9]{24}')
+_song_playlist_lock = threading.Lock()
+
+
+def _song_text(value, field, limit, required=False):
+    if value is None:
+        value = ''
+    if not isinstance(value, str) or len(value) > limit or re.search(r'[\x00-\x1f\x7f]', value):
+        raise ValueError(f'Invalid playlist {field}.')
+    value = value.strip()
+    if required and not value:
+        raise ValueError('Give the playlist a name.')
+    return value
+
+
+def _song_ids(value):
+    """Known songs in the given order, without repeats; unknown or malformed ids come back as skipped."""
+    if not isinstance(value, list) or len(value) > SONG_PLAYLIST_MAX:
+        raise ValueError(f'Track ids must be a list of at most {SONG_PLAYLIST_MAX}.')
+    known, skipped = [], []
+    for tid in value:
+        if not isinstance(tid, str) or not SONG_ID.fullmatch(tid):
+            raise ValueError('Track ids look like yt:<id> or lib:<id>.')
+        if tid in known:
+            continue
+        (known if track(tid) else skipped).append(tid)
+    return known, skipped
+
+
+def _song_row(row, with_tracks=False):
+    pid, name, description, ids, created, updated = row
+    ids = json.loads(ids or '[]')
+    out = {'id': pid, 'name': name, 'description': description, 'trackIds': ids, 'count': len(ids),
+           'createdAt': created, 'updatedAt': updated}
+    if with_tracks:
+        out['tracks'] = [t for t in (track(tid) for tid in ids) if t]
+    return out
+
+
+def song_playlists():
+    return [_song_row(r) for r in db('SELECT id,name,description,ids,created_at,updated_at FROM song_playlists ORDER BY updated_at DESC,id')]
+
+
+def song_playlist(pid):
+    if not isinstance(pid, str) or not SONG_PLAYLIST_ID.fullmatch(pid):
+        raise LookupError('Playlist not found.')
+    rows = db('SELECT id,name,description,ids,created_at,updated_at FROM song_playlists WHERE id=?', (pid,))
+    if not rows:
+        raise LookupError('Playlist not found.')
+    return _song_row(rows[0], True)
+
+
+def create_song_playlist(body):
+    if not isinstance(body, dict) or set(body) - {'name', 'description', 'trackIds'}:
+        raise ValueError('Invalid playlist fields.')
+    name = _song_text(body.get('name'), 'name', 100, True)
+    description = _song_text(body.get('description'), 'description', 500)
+    ids, skipped = _song_ids(body.get('trackIds', []))
+    pid, now = uuid.uuid4().hex[:24], time.time()
+    db('INSERT INTO song_playlists VALUES(?,?,?,?,?,?)', (pid, name, description, json.dumps(ids), now, now))
+    return {**song_playlist(pid), 'skipped': skipped}
+
+
+def update_song_playlist(pid, body, action='update'):
+    """update: name/description/trackIds (the full new order); add: trackIds [+ position]; remove: trackIds; delete."""
+    if not isinstance(body, dict):
+        raise ValueError('Invalid playlist fields.')
+    allowed = {'update': {'name', 'description', 'trackIds'}, 'add': {'trackIds', 'position'}, 'remove': {'trackIds'}, 'delete': set()}[action]
+    if set(body) - allowed:
+        raise ValueError('Invalid playlist fields.')
+    with _song_playlist_lock:
+        current = song_playlist(pid)
+        if action == 'delete':
+            db('DELETE FROM song_playlists WHERE id=?', (pid,))
+            return {'id': pid, 'deleted': True}
+        name, description, ids, skipped = current['name'], current['description'], current['trackIds'], []
+        if action == 'update':
+            if 'name' in body:
+                name = _song_text(body['name'], 'name', 100, True)
+            if 'description' in body:
+                description = _song_text(body['description'], 'description', 500)
+            if 'trackIds' in body:
+                ids, skipped = _song_ids(body['trackIds'])
+        elif action == 'add':
+            new, skipped = _song_ids(body.get('trackIds'))
+            new = [t for t in new if t not in ids]
+            position = body.get('position', len(ids))
+            if not isinstance(position, int) or isinstance(position, bool) or position < 0:
+                raise ValueError('Invalid position.')
+            position = min(position, len(ids))
+            ids = ids[:position] + new + ids[position:]
+            if len(ids) > SONG_PLAYLIST_MAX:
+                raise ValueError(f'A playlist holds at most {SONG_PLAYLIST_MAX} songs.')
+        else:
+            gone = body.get('trackIds')
+            if not isinstance(gone, list) or not all(isinstance(t, str) for t in gone):
+                raise ValueError('Track ids must be a list.')
+            ids = [t for t in ids if t not in set(gone)]
+        db('UPDATE song_playlists SET name=?,description=?,ids=?,updated_at=? WHERE id=?',
+           (name, description, json.dumps(ids), time.time(), pid))
+    return {**song_playlist(pid), 'skipped': skipped}
 
 
 # ---------------------------------------------------------------- YouTube Music
@@ -2081,6 +2192,11 @@ class Handler(BaseHTTPRequestHandler):
             if identify.handle(self,path,qs,sys.modules[__name__]): return
             if path == '/api/playlists':
                 return self._json(200, {'playlists': saved_playlists()})
+            if path == '/api/song-playlists':
+                return self._json(200, {'playlists': song_playlists()})
+            song = re.fullmatch(r'/api/song-playlists/([a-f0-9]{24})', path)
+            if song:
+                return self._json(200, song_playlist(song[1]))
             if path == "/api/settings":
                 return self._json(200, online_settings())
             if path == "/api/home":
@@ -2138,6 +2254,19 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == '/api/playlists':
                 try:
                     return self._json(200, save_playlist(body))
+                except ValueError as exc:
+                    return self._json(400, {'error': str(exc)})
+            if url.path == '/api/song-playlists':
+                try:
+                    return self._json(200, create_song_playlist(body))
+                except ValueError as exc:
+                    return self._json(400, {'error': str(exc)})
+            song = re.fullmatch(r'/api/song-playlists/([a-f0-9]{24})(?:/(add|remove|delete))?', url.path)
+            if song:
+                try:
+                    return self._json(200, update_song_playlist(song[1], body, song[2] or 'update'))
+                except LookupError:
+                    return self._json(404, {'error': 'Playlist not found.'})
                 except ValueError as exc:
                     return self._json(400, {'error': str(exc)})
             playlist_play = re.fullmatch(r'/api/playlists/([a-f0-9]{24})/play', url.path)

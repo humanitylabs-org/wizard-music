@@ -1,13 +1,41 @@
 const tools = [
  ...[ ['identify_list','List active saved song hunts, including unsolved clips; excludes discarded.',{}], ['identify_get','Read a hunt, its candidates and attempts.',{id:{type:'string'}}], ['identify_retry','Retry recognition of a saved clip; preserves its audio.',{id:{type:'string'}}], ['identify_discard','Owner-requested: reversibly hide a finished no-match identification. Keeps audio, attempts and candidates.',{id:{type:'string'}}], ['identify_restore','Undo discard of an unmatched identification; restores the same record.',{id:{type:'string'}}], ['identify_confirm','Owner-approved: mark a candidate This is it, like its full track in Music and count it as a request.',{candidate_id:{type:'integer',minimum:1}}] ].map(([name,description,properties])=>({name,description,inputSchema:{type:'object',properties,required:Object.keys(properties),additionalProperties:false}})),
- {name:'playlist_list',description:'Read saved YouTube playlists and long mixes, including their exact original URLs. Not playback history.',inputSchema:{type:'object',properties:{},additionalProperties:false}},
+ {name:'playlist_list',description:'Read saved YouTube playlists and long mixes, including their exact original URLs, and (songPlaylists) the owner\'s own song playlists when that feature is on. Not playback history.',inputSchema:{type:'object',properties:{},additionalProperties:false}},
  {name:'playlist_save',description:'Owner-requested: save a YouTube playlist or long-mix video URL in Music. No playback, download, account playlist or import. Duplicate resources retain the first exact URL and metadata.',inputSchema:{type:'object',properties:{url:{type:'string',maxLength:2048},title:{type:'string',maxLength:2000},author:{type:'string',maxLength:300},authorUrl:{type:'string',maxLength:2048},thumbnail:{type:'string',maxLength:2048}},required:['url'],additionalProperties:false}},
  {name:'music_account_library', description:'Browse connected YouTube playlists and liked songs, read-only; does not sync Wizard taste or start playback.', inputSchema:{type:'object', properties:{kind:{type:'string',enum:['status','playlists','likes','playlist']},id:{type:'string',pattern:'^[A-Za-z0-9_-]{1,160}$'}},required:['kind'],additionalProperties:false}},
  {name:'music_status', description:'Read app configuration status; does not prove upstream connectivity.', inputSchema:{type:'object', properties:{}, additionalProperties:false}},
  {name:'music_home', description:'Read sources, library, liked tracks and recent history.', inputSchema:{type:'object', properties:{}, additionalProperties:false}},
  {name:'music_search', description:'Search configured library and optionally enabled online catalog.', inputSchema:{type:'object', properties:{query:{type:'string',maxLength:200}}, required:['query'], additionalProperties:false}}
 ]
-export async function handleMcp(req,res,send,port) {
+// Song playlists (wizard-music#39), listed and served only while the app's song-playlists switch is on.
+const SONG_ID={type:'string',pattern:'^(yt|lib):[A-Za-z0-9_-]{1,40}$'}, LIST_ID={type:'string',pattern:'^[a-f0-9]{24}$'}
+const TRACK_IDS={type:'array',items:SONG_ID,maxItems:500,description:'Track ids from music_search, music_home or playlist_get (yt:* and lib:*), in play order.'}
+const songTools=[
+ {name:'playlist_create',description:'Owner-requested: create a Music playlist of single songs, in order, stored on this Wizard (no YouTube account write). Returns the stored playlist read back, plus skipped ids Music does not know.',inputSchema:{type:'object',properties:{name:{type:'string',minLength:1,maxLength:100},description:{type:'string',maxLength:500},track_ids:TRACK_IDS},required:['name','track_ids'],additionalProperties:false}},
+ {name:'playlist_add_tracks',description:'Owner-requested: add songs to a Music playlist (at the end, or at position). Songs already in it stay where they are.',inputSchema:{type:'object',properties:{id:LIST_ID,track_ids:TRACK_IDS,position:{type:'integer',minimum:0}},required:['id','track_ids'],additionalProperties:false}},
+ {name:'playlist_remove_tracks',description:'Owner-requested: remove songs from a Music playlist.',inputSchema:{type:'object',properties:{id:LIST_ID,track_ids:TRACK_IDS},required:['id','track_ids'],additionalProperties:false}},
+ {name:'playlist_update',description:'Owner-requested: rename a Music playlist, change its description, or set its full song order (track_ids replaces the list).',inputSchema:{type:'object',properties:{id:LIST_ID,name:{type:'string',minLength:1,maxLength:100},description:{type:'string',maxLength:500},track_ids:TRACK_IDS},required:['id'],additionalProperties:false}},
+ {name:'playlist_get',description:'Read one Music playlist with its songs in order.',inputSchema:{type:'object',properties:{id:LIST_ID},required:['id'],additionalProperties:false}},
+]
+const SONG_ID_RE=/^(yt|lib):[A-Za-z0-9_-]{1,40}$/, LIST_ID_RE=/^[a-f0-9]{24}$/
+/** The hub request for a song-playlist tool, or null when the arguments are invalid. */
+export function songPlaylistRequest(name,a){
+ if(!a||typeof a!=='object'||Array.isArray(a)) return null
+ const tool=songTools.find(t=>t.name===name); if(!tool) return null
+ const props=tool.inputSchema.properties
+ if(Object.keys(a).some(k=>!Object.hasOwn(props,k))||tool.inputSchema.required.some(k=>a[k]===undefined)) return null
+ if(a.id!==undefined&&(typeof a.id!=='string'||!LIST_ID_RE.test(a.id))) return null
+ if(a.track_ids!==undefined&&(!Array.isArray(a.track_ids)||a.track_ids.length>500||a.track_ids.some(t=>typeof t!=='string'||!SONG_ID_RE.test(t)))) return null
+ if(a.name!==undefined&&(typeof a.name!=='string'||!a.name.trim()||a.name.length>100)) return null
+ if(a.description!==undefined&&(typeof a.description!=='string'||a.description.length>500)) return null
+ if(a.position!==undefined&&(!Number.isSafeInteger(a.position)||a.position<0)) return null
+ const body={...(a.name!==undefined?{name:a.name}:{}),...(a.description!==undefined?{description:a.description}:{}),...(a.track_ids!==undefined?{trackIds:a.track_ids}:{}),...(a.position!==undefined?{position:a.position}:{})}
+ if(name==='playlist_get') return {path:'/'+a.id}
+ if(name==='playlist_create') return {path:'',body}
+ if(name==='playlist_update') return Object.keys(body).length?{path:'/'+a.id,body}:null
+ return {path:'/'+a.id+(name==='playlist_add_tracks'?'/add':'/remove'),body}
+}
+export async function handleMcp(req,res,send,port,songs=false) {
  if(req.method !== 'POST') { send(res,405,{error:'method'}); return }
  if(!String(req.headers['content-type']).startsWith('application/json')) {send(res,415,{error:'json_required'});return}
  let size=0, chunks=[]
@@ -18,14 +46,34 @@ export async function handleMcp(req,res,send,port) {
  const answer=result=>send(res,200,{jsonrpc:'2.0',id:m.id,result})
  if(m.method==='initialize'){answer({protocolVersion:'2024-11-05',capabilities:{tools:{}},serverInfo:{name:'wizard-music',version:'0.1.0'}});return}
  if(m.method==='ping'){answer({});return}
- if(m.method==='tools/list'){answer({tools});return}
+ if(m.method==='tools/list'){answer({tools:songs?[...tools,...songTools]:tools});return}
  if(m.method!=='tools/call'){send(res,200,{jsonrpc:'2.0',id:m.id,error:{code:-32601,message:'Method not found'}});return}
  const name=m.params?.name, a=m.params?.arguments||{}
+ if(songs&&songTools.some(t=>t.name===name)){
+  const call=songPlaylistRequest(name,a)
+  if(!call){send(res,200,{jsonrpc:'2.0',id:m.id,error:{code:-32602,message:'Invalid playlist arguments'}});return}
+  const base=`http://127.0.0.1:${port}/wizard-music/api/song-playlists`
+  try{
+   const r=await fetch(base+call.path,{...(call.body?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(call.body)}:{}),signal:AbortSignal.timeout(150000)})
+   const text=await r.text()
+   if(!r.ok||!call.body){answer({content:[{type:'text',text}],isError:!r.ok});return}
+   // Read back after every write, so the agent reports what is really stored.
+   const written=JSON.parse(text), back=await fetch(base+'/'+written.id,{signal:AbortSignal.timeout(150000)})
+   answer({content:[{type:'text',text:JSON.stringify({playlist:await back.json(),skipped:written.skipped||[]})}],isError:!back.ok})
+  }catch{answer({content:[{type:'text',text:'Music backend unavailable'}],isError:true})}
+  return
+ }
  if(name==='playlist_list'||name==='playlist_save'){
   const write=name==='playlist_save'
   const allowed=['url','title','author','authorUrl','thumbnail']
   if(!a||Array.isArray(a)||typeof a!=='object'||Object.keys(a).some(k=>!allowed.includes(k))||(!write&&Object.keys(a).length)||(write&&(typeof a.url!=='string'||Object.values(a).some(v=>typeof v!=='string')))){send(res,200,{jsonrpc:'2.0',id:m.id,error:{code:-32602,message:'Invalid playlist arguments'}});return}
-  try{const r=await fetch(`http://127.0.0.1:${port}/wizard-music/api/playlists`,{...(write?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(a)}:{}),signal:AbortSignal.timeout(150000)});answer({content:[{type:'text',text:await r.text()}],isError:!r.ok})}catch{answer({content:[{type:'text',text:'Music backend unavailable'}],isError:true})}
+  try{
+   const r=await fetch(`http://127.0.0.1:${port}/wizard-music/api/playlists`,{...(write?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(a)}:{}),signal:AbortSignal.timeout(150000)})
+   let text=await r.text()
+   // With song playlists on, the list also carries the owner's own playlists (songPlaylists).
+   if(!write&&songs&&r.ok){const s=await fetch(`http://127.0.0.1:${port}/wizard-music/api/song-playlists`,{signal:AbortSignal.timeout(150000)});if(s.ok)text=JSON.stringify({...JSON.parse(text),songPlaylists:(await s.json()).playlists})}
+   answer({content:[{type:'text',text}],isError:!r.ok})
+  }catch{answer({content:[{type:'text',text:'Music backend unavailable'}],isError:true})}
   return
  }
  const identifyTool=name?.startsWith('identify_')
