@@ -2584,10 +2584,35 @@ class Handler(BaseHTTPRequestHandler):
         ctype = {".m4a": "audio/mp4", ".webm": "audio/webm", ".opus": "audio/ogg", ".mp3": "audio/mpeg",
                  ".flac": "audio/flac", ".wav": "audio/wav", ".ogg": "audio/ogg", ".aac": "audio/aac"}.get(
             path.suffix.lower(), mimetypes.guess_type(path.name)[0] or "application/octet-stream")
-        span = self._send_range_head(size, ctype)
-        if span is None:
+        start, end = 0, size - 1
+        rng = self.headers.get("Range")
+        m = re.match(r"bytes=(\d*)-(\d*)$", rng or "")
+        if m and (m.group(1) or m.group(2)):
+            if m.group(1):
+                start = int(m.group(1))
+                end = int(m.group(2)) if m.group(2) else size - 1
+            else:
+                start = max(0, size - int(m.group(2)))
+            end = min(end, size - 1)
+            if start > end:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{size}")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            self.send_response(206)
+            self.send_header("Content-Range", f"bytes {start}-{end}/{size}")
+        else:
+            self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Accept-Ranges", "bytes")
+        # A rewritten song (fragmented -> plain) changes size, so players never splice old and new bytes.
+        self.send_header("ETag", f'"{size:x}"')
+        self.send_header("Content-Length", str(end - start + 1))
+        self.send_header("Cache-Control", "private, max-age=86400")
+        self.end_headers()
+        if self.command == "HEAD":
             return
-        start, end = span
         with path.open("rb") as fh:
             fh.seek(start)
             left = end - start + 1
