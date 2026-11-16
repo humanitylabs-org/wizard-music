@@ -3,7 +3,8 @@
 .music-playlists-heading h3 { color: inherit; }
 .music-playlists-heading small { color: var(--wz-text-muted, var(--text-dim)); }
 .music-playlists-list { display: grid; gap: 2px; }
-.music-playlist-row a { text-decoration: none; }
+.music-playlist-row .music-row-main { flex: 1; }
+.music-playlist-play { display: grid; place-items: center; width: 44px; height: 44px; margin-left: auto; flex: none; color: var(--wz-text, var(--text)); }
 .music-playlist-row .music-row-text strong { white-space: normal; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .music-playlist-mark { display: grid; place-items: center; color: var(--wiz); font-size: 1.4375rem; }
 .music-playlist-pending { color: var(--wz-text-secondary, var(--text-2)); font-size: 0.875rem; }

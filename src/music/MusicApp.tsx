@@ -485,7 +485,7 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
 
       {songPlaylistsOn && <SongPlaylists notify={notify} onPlay={async (tracks, index) => { await playAccountTracks(tracks, index); onOpenNowPlaying() }} />}
 
-      <Playlists notify={notify} onPlay={async (track) => { await musicControl.play([track], null); onOpenNowPlaying() }} />
+      <Playlists onPlay={async (tracks) => { await musicControl.play(tracks, null); onOpenNowPlaying() }} />
 
       {home && home.liked.length > 0 && <section className="music-section" aria-label="Liked songs">
         <div className="music-section-head"><h3>Liked</h3>{(() => {

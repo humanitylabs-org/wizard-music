@@ -4,10 +4,12 @@ import { playlistControl, playlistJson, type Playlist } from './playlists'
 import type { MusicTrack } from './engine'
 import './playlists.css'
 
-export function Playlists({ onPlay, notify }: { onPlay(track: MusicTrack): Promise<void>; notify(message: string): void }) {
+// A saved row always plays inside Music (wizard-os#654): never a link out to YouTube.
+export function Playlists({ onPlay }: { onPlay(tracks: MusicTrack[]): Promise<void> }) {
   const state = useSyncExternalStore(playlistControl.subscribe, playlistControl.snapshot)
   const [expanded, setExpanded] = useState(true), [editing, setEditing] = useState(false)
   const [url, setUrl] = useState(''), [title, setTitle] = useState(''), [playing, setPlaying] = useState('')
+  const [playError, setPlayError] = useState<{ item: Playlist; message: string } | null>(null)
   const dialog = useRef<HTMLDialogElement>(null), playBusy = useRef(false)
   useEffect(() => { void playlistControl.load() }, [])
   useEffect(() => {
@@ -24,11 +26,11 @@ export function Playlists({ onPlay, notify }: { onPlay(track: MusicTrack): Promi
   }, [editing])
   const play = async (item: Playlist) => {
     if (playBusy.current) return
-    playBusy.current = true; setPlaying(item.id)
+    playBusy.current = true; setPlaying(item.id); setPlayError(null)
     try {
-      const { track } = await playlistJson<{ track: MusicTrack }>('/' + item.id + '/play', {})
-      await onPlay(track)
-    } catch (e) { notify((e as Error).message + ' You can also open it on YouTube.') }
+      const { track, tracks } = await playlistJson<{ track: MusicTrack; tracks?: MusicTrack[] }>('/' + item.id + '/play', {})
+      await onPlay(tracks?.length ? tracks : [track])
+    } catch (e) { setPlayError({ item, message: (e as Error).message }) }
     finally { playBusy.current = false; setPlaying('') }
   }
   const submit = () => {
@@ -48,12 +50,13 @@ export function Playlists({ onPlay, notify }: { onPlay(track: MusicTrack): Promi
       {state.loading && <p className="music-status">Loading playlists…</p>}
       {!state.loading && !state.items.length && !state.pending && !state.error && <p className="music-empty">Keep a YouTube playlist or a long mix here.</p>}
       {state.items.map(item => <div className="music-row music-playlist-row" key={item.id}>
-        <a className="music-row-main" href={item.url} target="_blank" rel="noopener noreferrer" aria-label={`Open on YouTube: ${item.title}`} title={item.title}>
+        <button type="button" className="music-row-main" disabled={!!playing} aria-busy={playing === item.id} aria-label={`Play ${item.title}`} title={item.title} onClick={() => void play(item)}>
           <span className="music-art music-art-row music-playlist-mark" aria-hidden="true">♫</span>
-          <span className="music-row-text"><strong>{item.title}</strong><small>{item.author ? item.author + ' · ' : ''}{item.kind === 'video' ? 'Long mix' : 'YouTube playlist'}</small></span>
-        </a>
-        {item.kind === 'video' && <button type="button" className="music-icon-button" disabled={!!playing} aria-label={`Play ${item.title} in Music`} title="Play in Music" onClick={() => void play(item)}>{playing === item.id ? <span className="music-wheel" role="progressbar" aria-label="Starting mix" /> : <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l12.5-7.5L7 4.5Z" fill="currentColor" /></svg>}</button>}
+          <span className="music-row-text"><strong>{item.title}</strong><small>{item.author ? item.author + ' · ' : ''}{item.kind === 'video' ? 'Long mix' : 'Playlist'}</small></span>
+          <span className="music-playlist-play" aria-hidden="true">{playing === item.id ? <span className="music-wheel" role="progressbar" aria-label="Starting" /> : <svg width="20" height="20" viewBox="0 0 24 24"><path d="M7 4.5v15l12.5-7.5L7 4.5Z" fill="currentColor" /></svg>}</span>
+        </button>
       </div>)}
+      {playError && <div className="music-playlist-error" role="alert"><p>{playError.message}</p><button type="button" className="music-section-action" disabled={!!playing} onClick={() => void play(playError.item)}>Retry</button></div>}
     </div>}
     {editing && createPortal(<dialog ref={dialog} className="wz-sheet music-playlist-sheet" aria-label="Add playlist">
       <h2>Add playlist</h2><p>Paste a YouTube playlist or long-mix link. Saving won’t start playback or download it.</p>
