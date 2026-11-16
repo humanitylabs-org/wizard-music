@@ -220,20 +220,42 @@ def save_playlist(body):
 
 
 def playlist_track(key):
+    """What a tap on a saved row plays, always inside Music (wizard-os#654: never send the owner to YouTube).
+    A long mix is one track; a YouTube playlist is its tracks in order, read through the music source."""
     item = next((p for p in saved_playlists() if p['id'] == key), None)
     if not item:
         raise LookupError('Playlist not found.')
-    if item['kind'] != 'video':
-        raise ValueError('Open this playlist on YouTube.')
     if not ONLINE:
-        raise ValueError('Online playback is not connected. Open this mix on YouTube.')
+        raise ValueError('Online playback is off. Turn on Online sources in Music, then try again.')
+    if item['kind'] != 'video':
+        return saved_playlist_tracks(item)
     tid = 'yt:' + item['providerId']
     # Only an explicit Play tap reaches this path. Do not mutate existing track metadata.
     db('INSERT OR IGNORE INTO tracks VALUES(?,?,?,?,?,?,?,?,?)',
        (tid, item['title'], item['author'] or 'YouTube', '', 0,
         item['thumbnail'] or f"https://i.ytimg.com/vi/{item['providerId']}/hqdefault.jpg", 'youtube', '', time.time()))
     prefetch(tid)  # a long mix downloads whole before it plays: start now, not when the player asks
-    return track(tid)
+    return [track(tid)]
+
+
+def saved_playlist_tracks(item):
+    pid = urllib.parse.quote(item['providerId'], safe='')
+    raw = None
+    # Public playlists need no account (connector 0.1.5+). Older connectors, or a private playlist, use the
+    # signed-in account library read when it is there.
+    for path in (f'/api/music/playlist?id={pid}&limit=200', f'/api/music/library/playlist?id={pid}&limit=100'):
+        try:
+            raw = _source_get(source_for(), path)
+            if raw.get('tracks'):
+                break
+        except Exception:
+            continue
+    if raw is None:
+        raise ValueError('Music couldn\u2019t load this playlist. Check that the YouTube Music connector is working, then try again.')
+    tracks = [t for t in (remember_yt(i) for i in (raw.get('tracks') or [])[:200] if isinstance(i, dict)) if t]
+    if not tracks:
+        raise ValueError('Music found no playable songs in this playlist. If it is private, connect your YouTube account in YouTube Music.')
+    return tracks
 
 
 # ---------------------------------------------------------------- Song playlists (wizard-music#39)
@@ -2484,7 +2506,8 @@ class Handler(BaseHTTPRequestHandler):
             playlist_play = re.fullmatch(r'/api/playlists/([a-f0-9]{24})/play', url.path)
             if playlist_play:
                 try:
-                    return self._json(200, {'track': playlist_track(playlist_play[1])})
+                    tracks = playlist_track(playlist_play[1])
+                    return self._json(200, {'track': tracks[0], 'tracks': tracks})
                 except LookupError:
                     return self._json(404, {'error': 'Playlist not found.'})
                 except ValueError as exc:
