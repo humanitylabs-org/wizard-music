@@ -14,7 +14,6 @@ import { join } from 'node:path'
 
 export const SWITCHES = [
   { id: 'music-level', name: 'Music level', description: 'A Music level slider on the player: Music plays quieter than the phone volume, so the phone volume buttons give finer steps at low volume. Kept on each device.', default: false, issues: ['humanitylabs-org/wizard-music#35'] },
-  { id: 'song-playlists', name: 'Your playlists', description: 'Make your own playlists from single songs: Home > Your playlists, an Add to playlist button on search results and the player, Play and Shuffle in order. Your agent can build one for you too.', default: false, issues: ['humanitylabs-org/wizard-music#39'] },
   { id: 'live-mixes', name: 'Start long mixes sooner', description: 'A song that is not on this Wizard yet starts playing while it is still downloading, so an hour-long mix starts in a few seconds instead of after the whole file. Seeking ahead waits until that part has arrived.', default: false, issues: ['humanitylabs-org/wizard-music#46'] },
 ]
 const CONTRACT = 'wizard.app-switches/1'
@@ -40,6 +39,15 @@ function setSwitch(id, on) {
   mkdirSync(join(f, '..'), { recursive: true })
   writeFileSync(f + '.tmp', JSON.stringify(next)); renameSync(f + '.tmp', f)
   return switchesDoc()
+}
+// Drop stored values of switches that are no longer listed (a feature that is now on for everyone, or dropped), so
+// switches.json holds only live switches. Run once at start; a missing or unreadable file is left alone.
+export function pruneSwitches() {
+  const ids = new Set(SWITCHES.map(x => x.id)), s = saved()
+  if (Object.keys(s).every(k => ids.has(k))) return false
+  const f = file()
+  try { writeFileSync(f + '.tmp', JSON.stringify(Object.fromEntries(Object.entries(s).filter(([k]) => ids.has(k))))); renameSync(f + '.tmp', f) } catch { return false }
+  return true
 }
 // null when this app has no platform owner-proof key, else whether the request carries a valid, unused proof.
 function proof(req) {

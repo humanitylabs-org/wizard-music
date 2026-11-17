@@ -21,7 +21,7 @@ export function musicRoute(method, sub) {
   if (method === 'POST' && /^\/api\/identify\/(captures(?:\/[a-f0-9-]{36}\/(retry|candidates|discard|restore))?|candidates\/[0-9]+\/(verdict|resolve|download))$/.test(sub)) return 'api'
   if ((method === 'GET' || method === 'HEAD') && sub === '/api/playlists') return 'api'
   if (method === 'POST' && (sub === '/api/playlists' || /^\/api\/playlists\/[a-f0-9]{24}\/play$/.test(sub))) return 'api'
-  // Song playlists (wizard-music#39); the app server serves them only while the song-playlists switch is on.
+  // Song playlists (wizard-music#39); on for everyone since wizard-music#39 was approved.
   if ((method === 'GET' || method === 'HEAD') && /^\/api\/song-playlists(?:\/[a-f0-9]{24})?$/.test(sub)) return 'api'
   if (method === 'POST' && /^\/api\/song-playlists(?:\/[a-f0-9]{24}(?:\/(?:add|remove|delete))?)?$/.test(sub)) return 'api'
   if ((method === 'GET' || method === 'HEAD') && API_GET.test(sub)) return 'api'
