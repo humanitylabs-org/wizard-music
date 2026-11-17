@@ -260,7 +260,7 @@ def saved_playlist_tracks(item):
 
 # ---------------------------------------------------------------- Song playlists (wizard-music#39)
 # Playlists the owner (or his agent) builds from single songs: yt:* and library tracks, in order. Stored only here;
-# nothing is written to a YouTube account. The app server serves these only while its `song-playlists` switch is on.
+# nothing is written to a YouTube account. On for everyone (the song-playlists switch was removed).
 SONG_PLAYLIST_MAX = 500
 SONG_ID = re.compile(r'(?:yt|lib):[A-Za-z0-9_-]{1,40}')
 SONG_PLAYLIST_ID = re.compile(r'[a-f0-9]{24}')

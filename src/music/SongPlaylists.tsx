@@ -1,4 +1,4 @@
-// Your playlists (wizard-music#39): playlists you make from single songs, behind the `song-playlists` switch.
+// Your playlists (wizard-music#39): playlists you make from single songs, on for everyone.
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { songPlaylistControl, type SongPlaylist } from './songPlaylists'

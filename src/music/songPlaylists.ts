@@ -1,8 +1,7 @@
-// Your own playlists of single songs (wizard-music#39), behind the box switch `song-playlists`.
+// Your own playlists of single songs (wizard-music#39), on for everyone.
 // Stored in the Music hub (song_playlists); every write is read back from the hub before the list shows it.
 import type { MusicTrack } from './engine'
 
-export const SONG_PLAYLISTS_SWITCH = 'song-playlists'
 export type SongPlaylist = { id: string; name: string; description: string; trackIds: string[]; count: number; createdAt: number; updatedAt: number; tracks?: MusicTrack[] }
 type Written = SongPlaylist & { skipped?: string[] }
 

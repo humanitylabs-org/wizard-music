@@ -11,16 +11,16 @@ const track = (n: number) => ({ id: `yt:song${String(n).padStart(7, '0')}`, titl
 const list = (n: number) => ({ id: ID, name: 'Argy workout', description: '', trackIds: Array.from({ length: n }, (_, i) => track(i).id), count: n, createdAt: 1, updatedAt: 1, tracks: Array.from({ length: n }, (_, i) => track(i)) })
 const response = (data: unknown, ok = true, status = ok ? 200 : 502) => ({ ok, status, json: async () => data, text: async () => JSON.stringify(data) })
 
-async function mcp(method: string, params: object, songs = true) {
+async function mcp(method: string, params: object) {
   const req = Readable.from([Buffer.from(JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }))]) as Readable & { method: string; headers: object }
   req.method = 'POST'; req.headers = { 'content-type': 'application/json' }
   let result: any
-  await handleMcp(req, {}, (_res: unknown, _status: number, body: unknown) => { result = body }, 9205, songs)
+  await handleMcp(req, {}, (_res: unknown, _status: number, body: unknown) => { result = body }, 9205)
   return result
 }
 
-it('ships off by default, linked to its issue, with the hub routes proxied', () => {
-  expect(SWITCHES.find((s) => s.id === 'song-playlists')).toMatchObject({ default: false, issues: ['humanitylabs-org/wizard-music#39'] })
+it('is on for everyone (no song-playlists switch), with the hub routes proxied', () => {
+  expect(SWITCHES.find((s) => s.id === 'song-playlists')).toBeUndefined()
   expect(musicRoute('GET', '/api/song-playlists')).toBe('api')
   expect(musicRoute('GET', `/api/song-playlists/${ID}`)).toBe('api')
   for (const sub of ['', `/${ID}`, `/${ID}/add`, `/${ID}/remove`, `/${ID}/delete`]) expect(musicRoute('POST', '/api/song-playlists' + sub)).toBe('api')
@@ -28,11 +28,26 @@ it('ships off by default, linked to its issue, with the hub routes proxied', () 
   expect(musicRoute('GET', '/api/song-playlists/../settings')).toBeNull()
 })
 
-it('lists the agent tools only while the switch is on', async () => {
+it('always lists the agent tools', async () => {
   const names = (r: any) => r.result.tools.map((t: { name: string }) => t.name)
-  expect(names(await mcp('tools/list', {}, false))).not.toContain('playlist_create')
   expect(names(await mcp('tools/list', {}))).toEqual(expect.arrayContaining(['playlist_create', 'playlist_add_tracks', 'playlist_remove_tracks', 'playlist_get', 'playlist_update', 'playlist_list']))
-  expect((await mcp('tools/call', { name: 'playlist_create', arguments: { name: 'x', track_ids: [] } }, false)).error.code).toBe(-32602)
+})
+
+it('clears a stored song-playlists value and keeps the live switches', async () => {
+  const { mkdtempSync, readFileSync, writeFileSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const { tmpdir } = await import('node:os')
+  const dir = mkdtempSync(join(tmpdir(), 'wm-sw-'))
+  const before = process.env.WIZARD_SWITCHES_DIR
+  process.env.WIZARD_SWITCHES_DIR = dir
+  try {
+    writeFileSync(join(dir, 'switches.json'), JSON.stringify({ 'song-playlists': true, 'music-level': true }))
+    const { pruneSwitches, switchesDoc } = await import('../server/switches.mjs')
+    expect(pruneSwitches()).toBe(true)
+    expect(JSON.parse(readFileSync(join(dir, 'switches.json'), 'utf8'))).toEqual({ 'music-level': true })
+    expect(pruneSwitches()).toBe(false)
+    expect(switchesDoc().switches.map((s: { id: string }) => s.id)).not.toContain('song-playlists')
+  } finally { if (before === undefined) delete process.env.WIZARD_SWITCHES_DIR; else process.env.WIZARD_SWITCHES_DIR = before }
 })
 
 it('playlist_create writes once, then reads the playlist back', async () => {
