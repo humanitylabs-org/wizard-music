@@ -2084,8 +2084,8 @@ def remux_plain(path: Path) -> Path:
     return path
 
 
-# ---- Progressive play (wizard-music#46, switch live-mixes) ----
-# With the switch on, the app server asks for a song with X-Wizard-Music-Live: 1. The hub then answers as soon as the
+# ---- Progressive play (wizard-music#46, on for everyone) ----
+# The app server asks for every song with X-Wizard-Music-Live: 1. The hub then answers as soon as the
 # first bytes of the download are on disk and keeps sending while the rest arrives (seeking ahead waits for its bytes).
 # A song a live player has open keeps its downloaded bytes: the plain-MP4 rewrite waits until nobody has asked for it
 # for LIVE_KEEP_SECONDS, so the bytes under a playing song never change.

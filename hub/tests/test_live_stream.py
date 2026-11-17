@@ -1,6 +1,6 @@
-"""wizard-music#46 (switch live-mixes): a long mix starts while the hub is still downloading it.
+"""wizard-music#46 (on for everyone): a long mix starts while the hub is still downloading it.
 
-The app server sends X-Wizard-Music-Live: 1 only while the switch is on. The hub then answers once the first bytes are
+The app server sends X-Wizard-Music-Live: 1 with every song stream. The hub then answers once the first bytes are
 on disk, keeps sending while the rest arrives, serves byte ranges inside the part it has, and leaves the bytes under a
 live player alone (no plain-MP4 rewrite while it may still be playing).
 """
