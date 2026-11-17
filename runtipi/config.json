@@ -10,8 +10,8 @@
   "categories": [
     "media"
   ],
-  "tipi_version": 21,
-  "version": "0.2.0-test.21",
+  "tipi_version": 22,
+  "version": "0.2.0-test.22",
   "source": "https://github.com/humanitylabs-org/wizard-music",
   "exposable": false,
   "supported_architectures": [
