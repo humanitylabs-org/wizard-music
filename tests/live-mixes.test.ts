@@ -1,16 +1,16 @@
-// wizard-music#46 (switch live-mixes): with the switch on, the app server asks the hub to start a song while it is
-// still downloading; with it off, the hub request is exactly as before.
+// wizard-music#46: progressive play is on for everyone (its live-mixes switch was removed once approved). The app
+// server always asks the hub to start a song while it is still downloading, and only for song streams.
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { describe, expect, it } from 'vitest'
 import { createMusicProxy } from '../server/music.mjs'
 import { SWITCHES } from '../server/switches.mjs'
 
-async function hubSaw(live: () => boolean, path: string) {
+async function hubSaw(path: string) {
   const seen: (string | undefined)[] = []
   const hub = createServer((req, res) => { seen.push(req.headers['x-wizard-music-live'] as string | undefined); res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}') })
   await new Promise<void>((resolve) => hub.listen(0, '127.0.0.1', resolve))
-  const handle = createMusicProxy({ origin: `http://127.0.0.1:${(hub.address() as AddressInfo).port}`, token: 't', live })
+  const handle = createMusicProxy({ origin: `http://127.0.0.1:${(hub.address() as AddressInfo).port}`, token: 't' })
   const front = createServer((req, res) => { void handle(req, res, new URL(req.url ?? '/', 'http://x'), (r: import('node:http').ServerResponse, s: number, v: unknown) => { r.writeHead(s); r.end(JSON.stringify(v)) }) })
   await new Promise<void>((resolve) => front.listen(0, '127.0.0.1', resolve))
   try {
@@ -19,16 +19,15 @@ async function hubSaw(live: () => boolean, path: string) {
   return seen[0]
 }
 
-describe('live-mixes switch', () => {
-  it('is declared off by default and linked to its issue', () => {
-    const sw = SWITCHES.find(s => s.id === 'live-mixes')
-    expect(sw).toMatchObject({ default: false, issues: ['humanitylabs-org/wizard-music#46'] })
+describe('progressive play (wizard-music#46)', () => {
+  it('has no switch any more', () => {
+    expect(SWITCHES.find(s => s.id === 'live-mixes')).toBeUndefined()
   })
 
-  it('asks the hub for a live start only for songs and only while the switch is on', async () => {
-    expect(await hubSaw(() => true, '/stream/yt:HW0otI10RrM')).toBe('1')
-    expect(await hubSaw(() => false, '/stream/yt:HW0otI10RrM')).toBe(undefined)  // a browser cannot ask for it itself
-    expect(await hubSaw(() => true, '/art/yt:HW0otI10RrM')).toBe(undefined)
-    expect(await hubSaw(() => true, '/api/home')).toBe(undefined)
+  it('always asks the hub for a live start for songs, never for art or the API', async () => {
+    expect(await hubSaw('/stream/yt:HW0otI10RrM')).toBe('1')
+    expect(await hubSaw('/stream/lib:0123456789abcdef0123')).toBe('1')
+    expect(await hubSaw('/art/yt:HW0otI10RrM')).toBe(undefined)
+    expect(await hubSaw('/api/home')).toBe(undefined)
   })
 })

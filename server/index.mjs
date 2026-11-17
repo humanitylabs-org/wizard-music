@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { BASE, createMusicProxy } from './music.mjs'
 import { handleMcp } from './mcp.mjs'
 import { createCatalogLookup } from './catalog.mjs'
-import { handleSwitches, pruneSwitches, switchOn, switchesDoc } from './switches.mjs'
+import { handleSwitches, pruneSwitches, switchesDoc } from './switches.mjs'
 import { createMediaTickets } from './media-ticket.mjs'
 
 const handleCatalog = createCatalogLookup({ origin: process.env.WIZARD_MUSIC_CONNECTORS_URL || '', token: process.env.MUSIC_ADAPTER_TOKEN || '' })
@@ -24,7 +24,7 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 
 const tickets = createMediaTickets({ secret: process.env.WIZARD_MUSIC_HUB_TOKEN || '', base: BASE })
-const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '', tickets, live: () => switchOn('live-mixes') })
+const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '', tickets })
 
 function sendJson(response, status, value) {
   const raw = Buffer.from(JSON.stringify(value))
