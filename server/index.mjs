@@ -61,7 +61,7 @@ const server = createServer(async (request, response) => {
     if (await handleSwitches(request, response)) return   // wizard.app-switches/1 (Tracker Try it)
     // The page's own read of which switches are on (no names, no writes): same rules as every other page call.
     if (url.pathname === `${BASE}/api/view/switches` && (request.method === 'GET' || request.method === 'HEAD')) { sendJson(response, 200, { switches: switchesDoc().switches.map(({ id, on }) => ({ id, on })) }); return }
-    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.22', release: process.env.WIZARD_MUSIC_RELEASE || 'development', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
+    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.23', release: process.env.WIZARD_MUSIC_RELEASE || 'development', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
     if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT); return }
     if (url.pathname === BASE) { response.writeHead(308, { Location: `${BASE}/` }); response.end(); return }
     if (!url.pathname.startsWith(`${BASE}/`)) { sendJson(response, 404, { error: 'not_found' }); return }
