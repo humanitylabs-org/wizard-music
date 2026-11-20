@@ -126,6 +126,22 @@ export const SOURCE_DOWN = 'Songs aren\u2019t playing on this Wizard right now. 
 export function couldNotPlay(track?: MusicTrack) {
   return track?.source === 'youtube' || track?.id.startsWith('yt:') ? 'Couldn\u2019t reach YouTube for this one. Tap Try again.' : 'This track could not be played. Tap Try again.'
 }
+/** How long past a song's known length the player may run before Music treats the rest as silence. */
+export const END_GRACE_MS = 1500
+
+/**
+ * The song's real length when the player reports a much longer one, else null.
+ *
+ * YouTube audio arrives as fragmented MP4. While a song plays as it downloads (wizard-music#46) the hub cannot
+ * rewrite it yet, and Safari/the Mac app read such a file as about twice its real length, so the song ended
+ * halfway along the bar and a minute or more of silence followed. The catalogue length is right, so trust it
+ * whenever the player claims far more. Ordinary files (within 40% + 5 s of it) and unknown lengths are untouched.
+ */
+export function trueEndMs(knownMs: number, playerSeconds: number): number | null {
+  if (!(knownMs > 0) || !Number.isFinite(playerSeconds)) return null
+  return playerSeconds * 1000 > knownMs * 1.4 + 5000 ? knownMs : null
+}
+
 export const EMPTY_SNAPSHOT: MusicSnapshot = { queue: [], index: -1, playing: false, buffering: false, positionMs: 0, durationMs: 0, station: null, error: '', engine: 'web' }
 
 export function absoluteMusicUrl(path: string): string {
@@ -178,11 +194,20 @@ export class WebEngine implements MusicEngine {
     this.saver = new SessionSaver(store)
     this.gain = Number.isFinite(audio.volume) ? audio.volume : 1
     audio.preload = 'auto'
-    const sync = () => this.set({
-      playing: this.markPlaying(!audio.paused && !audio.ended),
-      positionMs: this.pendingSeekMs ?? Math.round(audio.currentTime * 1000),
-      durationMs: Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : this.current()?.durationMs ?? 0,
-    })
+    const sync = () => {
+      const realMs = trueEndMs(this.current()?.durationMs ?? 0, audio.duration)
+      // Past the song's real end in a file the player misreads as longer: what follows is silence, so move on.
+      if (realMs !== null && this.pendingSeekMs === null && !audio.paused && audio.currentTime * 1000 >= realMs + END_GRACE_MS) {
+        audio.pause()  // as if it had ended: no more silence, then the same next step as 'ended'
+        this.advance(1, true)
+        return
+      }
+      this.set({
+        playing: this.markPlaying(!audio.paused && !audio.ended),
+        positionMs: this.pendingSeekMs ?? Math.round(audio.currentTime * 1000),
+        durationMs: realMs ?? (Number.isFinite(audio.duration) ? Math.round(audio.duration * 1000) : this.current()?.durationMs ?? 0),
+      })
+    }
     audio.addEventListener('timeupdate', sync)
     audio.addEventListener('durationchange', sync)
     audio.addEventListener('play', sync)
