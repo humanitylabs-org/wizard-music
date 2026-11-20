@@ -117,3 +117,38 @@ def test_files_outside_the_audio_cache_are_never_rewritten(hub, tmp_path):
     raw = outside.read_bytes()
     assert not hub.is_fragmented_mp4(outside)
     assert hub.remux_plain(outside).read_bytes() == raw
+
+
+def test_songs_left_fragmented_by_a_live_player_are_rewritten_once_idle(hub, tmp_path, monkeypatch):
+    """try-wizard#141: every play is live, so a play never rewrites its song; the idle pass must."""
+    import os
+    import time
+    song = make_fragmented(hub.CACHE / f'{VID}.m4a')
+    hub._live_read[VID] = time.time()  # a player just had it open
+    assert hub.remux_idle() == 0 and hub.is_fragmented_mp4(song)
+    hub._live_read[VID] = time.time() - hub.LIVE_KEEP_SECONDS - 1  # the player left long ago...
+    assert hub.remux_idle() == 0 and hub.is_fragmented_mp4(song)  # ...but the file was touched just now
+    old = time.time() - hub.LIVE_KEEP_SECONDS - 5
+    os.utime(song, (old, old))
+    with hub._dl_guard:
+        hub._live[VID] = hub.LiveDownload()  # a download for it is running
+    assert hub.remux_idle() == 0 and hub.is_fragmented_mp4(song)
+    with hub._dl_guard:
+        del hub._live[VID]
+    assert hub.remux_idle() == 1
+    assert not hub.is_fragmented_mp4(song)
+    assert hub.remux_idle() == 0  # plain files are left alone
+
+
+def test_the_idle_pass_fixes_the_old_cache_after_a_restart_and_skips_other_files(hub, tmp_path):
+    import os
+    import time
+    old = time.time() - hub.LIVE_KEEP_SECONDS - 5
+    songs = [make_fragmented(hub.CACHE / f'{v}.m4a', 4) for v in ('aaaaaaaaaaa', 'bbbbbbbbbbb')]
+    temp = make_fragmented(hub.CACHE / '.ccccccccccc.123456.m4a', 4)  # a download still in progress
+    other = make_fragmented(hub.CACHE / 'not-a-song.m4a', 4)
+    for p in songs + [temp, other]:
+        os.utime(p, (old, old))
+    assert hub.remux_idle() == 2  # no player is known after a restart, so the quiet file time decides
+    assert not any(hub.is_fragmented_mp4(p) for p in songs)
+    assert hub.is_fragmented_mp4(temp) and hub.is_fragmented_mp4(other)

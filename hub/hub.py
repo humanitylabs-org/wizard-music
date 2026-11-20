@@ -2265,6 +2265,61 @@ def _live_worker(vid: str, dl: LiveDownload):
         dl.finish(made)
 
 
+REMUX_IDLE_EVERY = float(os.environ.get("WIZARD_MUSIC_REMUX_IDLE_SECONDS", "300"))
+
+
+def remux_idle() -> int:
+    """Rewrite cached songs that live players left fragmented, once nobody is playing them (try-wizard#141).
+
+    Every play is live since 0.2.0-test.22, so a play never rewrites the song it opens (see LiveDownload). Without
+    this pass those songs stayed fragmented for good and Safari/the Mac app kept playing a minute of silence at their
+    end. A song is idle when no live download runs for it, no player asked for it for LIVE_KEEP_SECONDS and its file
+    was not touched for that long either (that last test also covers the first pass after a hub restart).
+    Returns how many songs were rewritten.
+    """
+    fixed = 0
+    quiet_since = time.time() - LIVE_KEEP_SECONDS
+    try:
+        names = sorted(p.name for p in CACHE.iterdir())
+    except OSError:
+        return 0
+    for name in names:
+        stem, dot, ext = name.rpartition(".")
+        if not dot or ext.lower() != "m4a" or not YT_ID.fullmatch(stem) or name in _remux_failed:
+            continue
+        with _dl_guard:
+            if stem in _live:
+                continue
+            lock = _dl_locks.setdefault(stem, threading.Lock())
+        if not lock.acquire(blocking=False):
+            continue  # a download or play holds it right now; try again next pass
+        try:
+            hit = _cache_path(stem)
+            if hit is None or hit.suffix != ".m4a" or _live_kept(stem) or hit.stat().st_mtime > quiet_since:
+                continue
+            if not is_fragmented_mp4(hit):
+                continue
+            remux_plain(hit)
+            if not is_fragmented_mp4(hit):
+                fixed += 1
+        except OSError:
+            continue
+        finally:
+            lock.release()
+    return fixed
+
+
+def _remux_loop():
+    while True:
+        time.sleep(REMUX_IDLE_EVERY)
+        try:
+            n = remux_idle()
+            if n:
+                print("rewrote", n, "songs as plain audio", file=sys.stderr, flush=True)
+        except Exception as exc:  # keep going
+            print("idle rewrite failed", exc, file=sys.stderr)
+
+
 def _evict():
     files = [p for p in CACHE.iterdir() if p.is_file() and not p.name.startswith(".")]
     total = sum(p.stat().st_size for p in files)
@@ -2708,6 +2763,7 @@ def main():
     threading.Thread(target=_library_loop, daemon=True).start()
     threading.Thread(target=_info_loop, daemon=True).start()
     threading.Thread(target=_style_loop, daemon=True).start()
+    threading.Thread(target=_remux_loop, daemon=True).start()
     _quiet(backfill_requests)
     threading.Thread(target=lambda: _quiet(backfill_styles), daemon=True).start()
     for tid, value in db("SELECT id, value FROM likes WHERE value != 0"):

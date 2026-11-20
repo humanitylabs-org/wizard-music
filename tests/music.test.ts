@@ -338,3 +338,53 @@ describe('a saved mix that fails to load (wizard-music#40)', () => {
     expect(engine.snapshot().error).toBe('')
   })
 })
+
+describe('songs end on time when the player misreads their length', () => {
+  it('trusts the catalogue length only when the player claims far more', async () => {
+    const { trueEndMs } = await import('../src/music/engine')
+    expect(trueEndMs(200_000, 400)).toBe(200_000) // fragmented YouTube audio in Safari: double length
+    expect(trueEndMs(200_000, 201)).toBe(null) // ordinary file
+    expect(trueEndMs(0, 3600)).toBe(null) // long mix with no known length
+    expect(trueEndMs(200_000, Number.NaN)).toBe(null)
+  })
+
+  it('moves to the next song at the real end instead of playing the silence', async () => {
+    const { END_GRACE_MS } = await import('../src/music/engine')
+    const audio = new FakeAudio()
+    const engine = new WebEngine(audio as unknown as HTMLAudioElement, vi.fn() as unknown as typeof fetch)
+    const song = (n: number) => ({ ...track(n), durationMs: 180_000 })
+    await engine.load([song(1), song(2)], 0, null)
+    audio.duration = 360 // what WebKit reports for the fragmented file
+    audio.dispatchEvent(new Event('durationchange'))
+    expect(engine.snapshot().durationMs).toBe(180_000) // the bar shows the real length
+    audio.currentTime = 120
+    audio.dispatchEvent(new Event('timeupdate'))
+    expect(engine.snapshot().index).toBe(0)
+    audio.currentTime = 180 + END_GRACE_MS / 1000
+    audio.dispatchEvent(new Event('timeupdate'))
+    expect(engine.snapshot().index).toBe(1)
+    expect(audio.src).toContain('yt:t2')
+  })
+
+  it('the last song stops at its real end', async () => {
+    const audio = new FakeAudio()
+    const engine = new WebEngine(audio as unknown as HTMLAudioElement, vi.fn() as unknown as typeof fetch)
+    await engine.load([{ ...track(1), durationMs: 180_000 }], 0, null)
+    audio.duration = 360
+    audio.currentTime = 182
+    audio.dispatchEvent(new Event('timeupdate'))
+    expect(audio.paused).toBe(true)
+    expect(engine.snapshot().playing).toBe(false)
+  })
+
+  it('a normal file still ends on its own ended event', async () => {
+    const audio = new FakeAudio()
+    const engine = new WebEngine(audio as unknown as HTMLAudioElement, vi.fn() as unknown as typeof fetch)
+    await engine.load([{ ...track(1), durationMs: 180_000 }, track(2)], 0, null)
+    audio.duration = 180.4
+    audio.currentTime = 180.3
+    audio.dispatchEvent(new Event('timeupdate'))
+    expect(engine.snapshot().index).toBe(0)
+    expect(engine.snapshot().durationMs).toBe(180_400)
+  })
+})
