@@ -9,7 +9,8 @@ import { request as httpRequest } from 'node:http'
 
 export const BASE = '/wizard-music'
 const HUB_PREFIX = '/wizard/music/'
-const API_GET = /^\/api\/(home|liked|settings|scores|search|account-library\/(status|playlists|likes|playlist)|station\/[a-f0-9]{16}\/more)$/
+const API_GET = /^\/api\/(home|liked|settings|scores|search|account-library\/(status|playlists|likes|playlist)|station\/[a-f0-9]{16}(?:\/more)?)$/
+const STATION_VIEW = /^\/api\/station\/[a-f0-9]{16}$/
 const API_POST = /^\/api\/(settings|station|feedback|scan|play|keep|mixes)$/
 const MEDIA = /^\/(stream|art)\/((?:yt|lib)(?::|%3A)[A-Za-z0-9_-]{1,40})$/
 const FORWARD_HEADERS = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'cache-control', 'last-modified', 'etag']
@@ -34,8 +35,8 @@ export function rewriteHubPaths(text, base = BASE) {
   return text.split(JSON.stringify(HUB_PREFIX).slice(1, -1)).join(`${base}/`).split(HUB_PREFIX).join(`${base}/`)
 }
 
-/** @param {{ origin?: string, token?: string, timeoutMs?: number, base?: string, tickets?: { addTickets(text: string): string } }} [options] */
-export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000, base: appBase = BASE, tickets } = {}) {
+/** @param {{ origin?: string, token?: string, timeoutMs?: number, base?: string, tickets?: { addTickets(text: string): string }, curated?: () => boolean }} [options] */
+export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000, base: appBase = BASE, tickets, curated = () => false } = {}) {
   const hub = origin ? new URL(origin) : null
   if (hub && (hub.protocol !== 'http:' || hub.hostname !== '127.0.0.1' || hub.pathname !== '/' || hub.search || hub.username)) {
     throw new Error('Wizard Music hub must be an exact loopback HTTP origin')
@@ -47,12 +48,16 @@ export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000,
     const sub = url.pathname.slice(appBase.length)
     const route = musicRoute(request.method ?? 'GET', sub)
     if (!route) { sendJson(response, 404, { error: 'not_found' }); return }
-    const upstreamPath = sub + (sub === '/api/search' || sub.startsWith('/api/identify/') || sub.startsWith('/api/account-library/') || sub.endsWith('/more') ? url.search : '')
+    // More like this stations (wizard-music#90, switch curated-radio): nothing new is reachable while it is off.
+    const curatedOn = curated()
+    if (STATION_VIEW.test(sub) && !curatedOn) { sendJson(response, 404, { error: 'switched_off' }); return }
+    const upstreamPath = sub + (sub === '/api/search' || sub.startsWith('/api/identify/') || sub.startsWith('/api/account-library/') || sub.endsWith('/more') || STATION_VIEW.test(sub) ? url.search : '')
     const headers = { Authorization: `Bearer ${token}`, Accept: route === 'api' ? 'application/json' : '*/*' }
     if (request.headers.range && route === 'media') headers.Range = String(request.headers.range).slice(0, 100)
     // Progressive play (wizard-music#46, on for everyone since it was approved): the hub starts a song while it is
     // still downloading.
     if (route === 'media' && sub.startsWith('/stream/')) headers['X-Wizard-Music-Live'] = '1'
+    if (curatedOn && request.method === 'POST' && sub === '/api/station') headers['X-Wizard-Music-Curated'] = '1'
     let body = null
     if (request.method === 'POST') {
       const type = String(request.headers['content-type'] ?? '').toLowerCase()

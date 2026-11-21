@@ -163,6 +163,12 @@ a.music-source:hover { background: color-mix(in srgb, var(--text) 5%, transparen
 .music-now-head > div { flex: 1; display: grid; justify-items: center; gap: 2px; min-width: 0; }
 .music-now-head small { color: var(--text-dim); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
 .music-now-head strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+/* More like this stations (wizard-music#90): the sound profile under the station title. */
+.music-now-head .music-now-profile { max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; text-align: center; color: var(--text-dim); font-size: var(--wz-text-sm, .75rem); line-height: 1.3; }
+.music-upnext .music-section-head:has(.music-more-like) h3 { flex-shrink: 0; }
+.music-upnext .music-section-head:has(.music-more-like) small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.music-upnext .music-more-like { margin-left: auto; flex-shrink: 0; white-space: nowrap; }
+@media (max-width: 600px) { .music-upnext .music-section-head:has(.music-more-like) small { display: none; } }
 .music-now-spacer { width: 44px; }
 .music-now-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 8px 22px calc(var(--safe-area-bottom) + 24px); }
 .music-now-meta { display: flex; align-items: center; gap: 10px; margin-top: 26px; }

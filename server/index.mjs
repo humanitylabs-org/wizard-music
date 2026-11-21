@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { BASE, createMusicProxy } from './music.mjs'
 import { handleMcp } from './mcp.mjs'
 import { createCatalogLookup } from './catalog.mjs'
-import { handleSwitches, pruneSwitches, switchesDoc } from './switches.mjs'
+import { handleSwitches, pruneSwitches, switchesDoc, switchOn } from './switches.mjs'
 import { createMediaTickets } from './media-ticket.mjs'
 
 const handleCatalog = createCatalogLookup({ origin: process.env.WIZARD_MUSIC_CONNECTORS_URL || '', token: process.env.MUSIC_ADAPTER_TOKEN || '' })
@@ -24,7 +24,8 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 
 const tickets = createMediaTickets({ secret: process.env.WIZARD_MUSIC_HUB_TOKEN || '', base: BASE })
-const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '', tickets })
+const curated = () => switchOn('curated-radio')   // More like this stations (wizard-music#90)
+const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '', tickets, curated })
 
 function sendJson(response, status, value) {
   const raw = Buffer.from(JSON.stringify(value))
@@ -62,7 +63,7 @@ const server = createServer(async (request, response) => {
     // The page's own read of which switches are on (no names, no writes): same rules as every other page call.
     if (url.pathname === `${BASE}/api/view/switches` && (request.method === 'GET' || request.method === 'HEAD')) { sendJson(response, 200, { switches: switchesDoc().switches.map(({ id, on }) => ({ id, on })) }); return }
     if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.23', release: process.env.WIZARD_MUSIC_RELEASE || 'development', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
-    if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT); return }
+    if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT, { curated: curated() }); return }
     if (url.pathname === BASE) { response.writeHead(308, { Location: `${BASE}/` }); response.end(); return }
     if (!url.pathname.startsWith(`${BASE}/`)) { sendJson(response, 404, { error: 'not_found' }); return }
     const sub = url.pathname.slice(BASE.length)

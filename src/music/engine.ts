@@ -22,7 +22,8 @@ export type MusicTrack = {
   liked?: boolean
 }
 
-export type MusicStation = { id: string; title: string; more: string }
+/** picks/profile: a More like this station (wizard-music#90): 'pending' while the AI picks, 'ai', or 'radio' (no AI). */
+export type MusicStation = { id: string; title: string; more: string; picks?: 'pending' | 'ai' | 'radio'; profile?: string }
 
 export type MusicSnapshot = {
   queue: MusicTrack[]
