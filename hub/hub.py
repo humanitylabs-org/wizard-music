@@ -27,6 +27,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import weakref
 from collections import deque
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -113,6 +114,7 @@ except (ValueError, OSError):
     ONLINE = False
 _consent_lock = threading.RLock()
 _downloads = set()
+_responses = weakref.WeakSet()  # open outbound responses; Online off closes them (issue 91)
 
 
 def online_settings():
@@ -141,6 +143,12 @@ def set_online(value):
             for proc in list(_downloads):
                 if proc.poll() is None:
                     proc.terminate()
+            for resp in list(_responses):
+                try:
+                    resp.close()
+                except Exception:
+                    pass
+            _responses.clear()
             _ytm = _ytm_radio = None
             # Queued work is discarded; transport guards also cover already-running workers.
             with _info_cv:
@@ -150,9 +158,22 @@ def set_online(value):
 
 
 def online_urlopen(*args, **kwargs):
+    # Check consent under the lock, but never hold it across network I/O (issue 91): urlopen
+    # waits for response headers (seconds for a song's audio), and every other outbound call
+    # (art, search, the next song) queued behind it. Online off closes open responses, and a
+    # response whose headers arrive after Online went off is closed here and refused.
     with _consent_lock:
         require_online()
-        return urllib.request.urlopen(*args, **kwargs)
+    resp = urllib.request.urlopen(*args, **kwargs)
+    with _consent_lock:
+        if not ONLINE:
+            resp.close()
+            raise LookupError("online sources disabled")
+        try:
+            _responses.add(resp)
+        except TypeError:  # a stand-in without weakref support (tests)
+            pass
+    return resp
 
 
 identify.online = lambda: ONLINE  # Identify sends audio and song details out only with Online sources on
