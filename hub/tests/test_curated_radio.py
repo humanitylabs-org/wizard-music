@@ -106,10 +106,10 @@ def test_model_picks_resolve_or_drop(hub, monkeypatch):
     cand = hub.track(add(hub, vid(92), 'Arquipélago', 'Gui Boratto'))
     asked = []
 
-    def fake_search(q):
-        asked.append(q)
-        return [hub.track(wrong), hub.track(found)] if 'Bodzin' in q else [hub.track(wrong)]
-    monkeypatch.setattr(hub, 'search', fake_search)
+    def fake_search(artist, title):
+        asked.append(f'{artist} {title}')
+        return [hub.track(wrong), hub.track(found)] if 'Bodzin' in artist else [hub.track(wrong)]
+    monkeypatch.setattr(hub, '_pick_search', fake_search)
     answer = {'profile': ' Hypnotic  melodic techno ', 'songs': [
         {'ref': 'c0'}, {'artist': 'Stephan Bodzin', 'title': 'Lost Highway'},
         {'artist': 'Made Up Artist', 'title': 'Lost Highway'}, {'ref': 'c9'}, 'junk']}
@@ -117,7 +117,7 @@ def test_model_picks_resolve_or_drop(hub, monkeypatch):
     assert profile == 'Hypnotic melodic techno'
     assert ids == [cand['id'], found]  # the invented artist (found only as Bon Jovi) and the unknown ref are dropped
     assert missed == 1
-    assert sorted(asked) == ['Lost Highway', 'Made Up Artist Lost Highway', 'Stephan Bodzin Lost Highway']  # then the title alone
+    assert sorted(asked) == ['Made Up Artist Lost Highway', 'Stephan Bodzin Lost Highway']
 
 
 class FakeRouter(BaseHTTPRequestHandler):
@@ -160,7 +160,7 @@ def test_curated_station_plays_the_seed_at_once_then_queues_the_ais_picks(hub, r
              add(hub, vid(3), 'Bad Kingdom', 'Moderat')]
     pick = add(hub, vid(4), 'Rej', 'Âme')
     monkeypatch.setattr(hub, '_radio_from', lambda tid: list(radio))
-    monkeypatch.setattr(hub, 'search', lambda q: [hub.track(pick)] if 'Âme' in q else [])
+    monkeypatch.setattr(hub, '_pick_search', lambda artist, title: [hub.track(pick)] if 'Âme' in artist else [])
     router.reply = {'profile': 'Hypnotic melodic techno: warm arpeggios, slow builds',
                     'songs': [{'ref': 'c2'}, {'artist': 'Âme', 'title': 'Rej'}, {'ref': 'c1'}, {'artist': 'Nobody', 'title': 'Nothing'}]}
     started = hub.curated_station(hub.track(seed), note='it has a really unique sound')
@@ -246,9 +246,61 @@ def test_an_answer_with_nothing_new_pauses_asking(hub, router, monkeypatch):
     state['played'].append(old)
     hub.db('UPDATE stations SET state=? WHERE id=?', (json.dumps(state), sid))
     router.reply = {'profile': 'p', 'songs': [{'artist': 'Moderat', 'title': 'Bad Kingdom'}]}
-    monkeypatch.setattr(hub, 'search', lambda q: [hub.track(old)])
+    monkeypatch.setattr(hub, '_pick_search', lambda artist, title: [hub.track(old)])
     hub.curate(sid, first=False)
     _, after = hub._load_station(sid)
     assert after['dryAt'] > 0 and not hub.curate_due(after)
     hub.station_more(sid, 5)
     assert len(router.seen) == 1  # no second ask right away
+
+
+def test_the_first_picks_play_while_the_rest_are_looked_up(hub, monkeypatch):
+    seed = add(hub, 'EoJy_GR1Lb0', 'Trap', 'Gui Boratto')
+    picks = [add(hub, vid(100 + i), f'Pick {i}', f'Artist {i}') for i in range(14)]
+    sid, state = curated(hub, seed, [])
+    state['picks'] = 'pending'
+    hub.db('UPDATE stations SET state=? WHERE id=?', (json.dumps(state), sid))
+    gate = threading.Event()
+
+    def slow(artist, title):
+        if title in ('Pick 12', 'Pick 13'):
+            gate.wait(5)
+        return [hub.track(picks[int(title.split()[1])])]
+    monkeypatch.setattr(hub, '_pick_search', slow)
+    published = []
+    answer = {'profile': 'p', 'songs': [{'artist': f'Artist {i}', 'title': f'Pick {i}'} for i in range(14)]}
+    _, slots = hub.answer_slots(answer, [])
+    done = threading.Thread(target=lambda: published.append(hub.resolve_slots(slots, lambda got: (published.append(list(got)), hub._queue_picks(sid, got, 'p', False)))))
+    done.start()
+    for _ in range(100):
+        if published:
+            break
+        threading.Event().wait(0.05)
+    assert published[0] == picks[:10]  # the first ten are queued before the slow ones are found
+    assert hub._load_station(sid)[1]['queue'] == picks[:10]
+    gate.set()
+    done.join(5)
+    ids, missed = published[-1]
+    hub._queue_picks(sid, ids, 'p', True)
+    assert hub._load_station(sid)[1]['queue'] == picks and missed == 0
+
+
+def test_a_look_ahead_never_fills_with_radio(hub, monkeypatch):
+    seed = add(hub, 'EoJy_GR1Lb0', 'Trap', 'Gui Boratto')
+    radio = add(hub, vid(3), 'Radio song', 'Radio Artist')
+    monkeypatch.setattr(hub, '_radio_from', lambda tid: [radio])
+    sid, state = curated(hub, seed, [])
+    state['picks'] = 'pending'
+    hub.db('UPDATE stations SET state=? WHERE id=?', (json.dumps(state), sid))
+    assert hub.station_view(sid)['tracks'] == []
+
+
+def test_a_film_song_the_ai_picked_stays_but_a_radio_score_goes(hub, monkeypatch):
+    seed = add(hub, 'EoJy_GR1Lb0', 'Trap', 'Gui Boratto', 'Electronic')
+    sky = add(hub, vid(5), 'Sky and Sand', 'Paul Kalkbrenner', 'Soundtrack')
+    score = add(hub, vid(6), 'Main Theme', 'Composer', 'Soundtrack')
+    anime = add(hub, vid(7), 'Blue night', 'Yoshiaki Dewa', 'Anime')
+    monkeypatch.setattr(hub, '_radio_from', lambda tid: [])
+    sid, state = curated(hub, seed, [sky, score, anime])
+    state['ai'] = [sky, anime]  # the AI picked these two
+    assert [t['id'] for t in hub._take(sid, state, 3)] == [sky]
