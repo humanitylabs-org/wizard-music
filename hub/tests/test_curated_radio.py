@@ -236,3 +236,19 @@ def test_station_route_needs_the_curated_header(hub, monkeypatch):
     plain = hub.create_station({'trackId': seed})
     assert 'picks' not in plain['station']
     assert hub.create_station({'trackId': seed, 'curate': True})['station']['picks'] == 'radio'
+
+
+def test_an_answer_with_nothing_new_pauses_asking(hub, router, monkeypatch):
+    seed = add(hub, 'EoJy_GR1Lb0', 'Trap', 'Gui Boratto')
+    old = add(hub, vid(3), 'Bad Kingdom', 'Moderat')
+    monkeypatch.setattr(hub, '_radio_from', lambda tid: [])
+    sid, state = curated(hub, seed, [])
+    state['played'].append(old)
+    hub.db('UPDATE stations SET state=? WHERE id=?', (json.dumps(state), sid))
+    router.reply = {'profile': 'p', 'songs': [{'artist': 'Moderat', 'title': 'Bad Kingdom'}]}
+    monkeypatch.setattr(hub, 'search', lambda q: [hub.track(old)])
+    hub.curate(sid, first=False)
+    _, after = hub._load_station(sid)
+    assert after['dryAt'] > 0 and not hub.curate_due(after)
+    hub.station_more(sid, 5)
+    assert len(router.seen) == 1  # no second ask right away

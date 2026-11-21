@@ -1988,7 +1988,7 @@ def station_more(sid: str, n: int, request_id: str = "") -> list[dict]:
     if request_id and not re.fullmatch(r"[a-f0-9-]{36}", request_id):
         raise ValueError("invalid continuation key")
     loaded = _load_station(sid)
-    if loaded and loaded[1].get("curated") and loaded[1].get("picks") == "ai" and len(loaded[1]["queue"]) < n and router_target():
+    if loaded and loaded[1].get("picks") == "ai" and len(loaded[1]["queue"]) < n and curate_due(loaded[1]):
         start_curating(sid, False)  # the AI's list ran short: ask for more before falling back to plain radio
     wait_curating(sid)  # a curated station's picks (wizard-music#90); returns at once otherwise
     with _station_lock:
@@ -2009,7 +2009,7 @@ def station_more(sid: str, n: int, request_id: str = "") -> list[dict]:
             if request_id and tracks:
                 con.execute("INSERT INTO station_batches VALUES(?,?,?,?)", (request_id, sid, json.dumps(tracks), time.time()))
             con.execute("DELETE FROM station_batches WHERE at<?", (time.time() - 7*86400,))
-    if state.get("curated") and len(state["queue"]) < CURATE_LOW and router_target():
+    if len(state["queue"]) < CURATE_LOW and curate_due(state):
         start_curating(sid, False)  # endless, still curated: the next picks arrive before the queue runs out
     for t in tracks[:2]:
         prefetch(t["id"])
@@ -2314,7 +2314,8 @@ def curate(sid: str, first: bool) -> None:
             if not loaded:
                 return
             _, state = loaded
-            fresh = [i for i in ids if i not in state["played"]]
+            fresh = [i for i in ids if i not in state["played"] and i not in state["queue"]]
+            state["dryAt"] = 0 if fresh else time.time()  # nothing new: don't ask again for a while (curate_due)
             if picks == "ai":
                 state["queue"] = fresh + [i for i in state["queue"] if i not in fresh]
                 state["profile"] = state.get("profile") or profile
@@ -2335,6 +2336,11 @@ def curate(sid: str, first: bool) -> None:
             ev = _curating.pop(sid, None)
         if ev:
             ev.set()
+
+
+def curate_due(state: dict) -> bool:
+    """A curated station may ask the AI for more: it is curated, has a router, and the last answer brought news."""
+    return bool(state.get("curated")) and time.time() - float(state.get("dryAt") or 0) > 300 and bool(router_target())
 
 
 def start_curating(sid: str, first: bool) -> bool:
