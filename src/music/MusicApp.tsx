@@ -30,6 +30,8 @@ export const musicApi = {
   settings: (online: boolean) => musicJson<{online: boolean}>(BASE + 'api/settings', { method: 'POST', body: JSON.stringify({online}) }),
   search: (q: string, signal?: AbortSignal) => musicJson<{ tracks: MusicTrack[] }>(`${BASE}api/search?q=${encodeURIComponent(q)}`, { signal }),
   station: (seed: { trackId?: string; query?: string; label?: string }) => musicJson<{ station: MusicStation; tracks: MusicTrack[] }>(BASE + 'api/station', { method: 'POST', body: JSON.stringify(seed) }),
+  /** A More like this station's header and seed (wizard-music#90); wait=true waits for the AI's picks. */
+  stationView: (id: string, wait = false) => musicJson<{ station: MusicStation; seed: MusicTrack | null; tracks: MusicTrack[] }>(`${BASE}api/station/${id}?wait=${wait ? 1 : 0}&peek=0`),
   feedback: (id: string, action: FeedbackAction, upcoming: string[] = []) => musicJson<FeedbackResult>(BASE + 'api/feedback', { method: 'POST', body: JSON.stringify({ id, action, upcoming }) }),
   /** A spoken request as heard ("play music guy barato trap"): the hub fixes misheard names and picks a station. */
   play: (said: string) => fetch(BASE + 'api/play', { method: 'POST', credentials: 'include', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: JSON.stringify({ said }) })
@@ -274,6 +276,50 @@ export const longStart = (track: MusicTrack) => track.id.startsWith('yt:') && (!
 const LoadingWheel = ({ label }: { label: string }) => <span className="music-wheel" role="progressbar" aria-label={label} />
 
 /** `lead` is the one Identify entry, first on the home page (kept out of this module so Identify stays its own). */
+// ---- More like this stations (wizard-music#90, switch curated-radio) ----------------------------------------------
+export const CURATED_SWITCH = 'curated-radio'
+type StationHead = Pick<MusicStation, 'picks' | 'profile'>
+const stationHeads = new Map<string, StationHead>()
+const headListeners = new Set<() => void>()
+const headAsked = new Set<string>()
+/** The line under a station's title: its sound profile, "Picking songs like this…", or "Radio (no AI picks)". */
+export function stationLine(head: StationHead | null | undefined): string {
+  if (!head?.picks) return ''
+  if (head.picks === 'pending') return 'Picking songs like this…'
+  if (head.picks === 'radio') return 'Radio (no AI picks)'
+  return head.profile || ''
+}
+/** The station's header, kept up to date: a station still picking is asked once (the hub answers when the picks land). */
+export function useStationHead(station: MusicStation | null): StationHead | null {
+  const id = station?.picks ? station.id : ''
+  const head = useSyncExternalStore((listener) => { headListeners.add(listener); return () => { headListeners.delete(listener) } }, () => (id ? stationHeads.get(id) : undefined), () => undefined)
+  useEffect(() => {
+    if (!id || !station?.picks) return
+    if (!stationHeads.has(id)) { stationHeads.set(id, { picks: station.picks, profile: station.profile || '' }); headListeners.forEach((l) => l()) }
+    if (stationHeads.get(id)?.picks !== 'pending' || headAsked.has(id)) return
+    headAsked.add(id)
+    const ask = (tries: number): void => {
+      musicApi.stationView(id, true).then(({ station: next }) => {
+        stationHeads.set(id, { picks: next.picks, profile: next.profile || '' })
+        headListeners.forEach((l) => l())
+        if (next.picks === 'pending' && tries > 0) ask(tries - 1)
+      }).catch(() => { headAsked.delete(id) })
+    }
+    ask(3)
+  }, [id, station?.picks, station?.profile])
+  return id ? head ?? { picks: station!.picks, profile: station!.profile || '' } : null
+}
+/** ?station=<id>: play a station the agent started (station_curate), the seed first, the picks after it. */
+async function openStationRoute(onOpenNowPlaying: () => void): Promise<void> {
+  const id = new URL(location.href).searchParams.get('station') || ''
+  if (!/^[a-f0-9]{16}$/.test(id)) return
+  const view = await musicApi.stationView(id).catch(() => null)
+  if (!view?.seed) return
+  await startEngine().load([view.seed], 0, view.station)
+  noteEngineStarted()
+  onOpenNowPlaying()
+}
+
 export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying: () => void; notify: (message: string) => void; lead?: ReactNode }) {
   const snapshot = useMusicSnapshot()
   useFeedbackReporter(snapshot)
@@ -413,6 +459,7 @@ export function MusicApp({ onOpenNowPlaying, notify, lead }: { onOpenNowPlaying:
   }, [notify, snapshot.queue.length, startStation])
 
   const playRow = (track: MusicTrack) => void startStation({ trackId: track.id }, track.id, track)
+  useEffect(() => { void openStationRoute(onOpenNowPlaying) }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Issue 68: an older hub (before the consent switch) sends no settings and cannot change it from here; its own
   // online source row says whether it runs online. Then Music hides the switch instead of showing a wrong, broken one,
@@ -702,6 +749,10 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
   const sheet = useRef<HTMLDivElement>(null)
   useSwipeDownToClose(sheet, onClose)
   const levelOn = useSwitchOn(LEVEL_SWITCH)
+  const curatedOn = useSwitchOn(CURATED_SWITCH)
+  const head = useStationHead(snapshot.station)
+  const headLine = stationLine(head)
+  const [likeThis, setLikeThis] = useState('')
   // Opened for a tap whose start then failed: close back to the library rather than leave an empty layer.
   // Only the tap → failure transition closes; restores and stale native snapshots keep their old behaviour.
   // A started song can reach the snapshot a beat after the station loads (the phone's native player answers
@@ -736,6 +787,17 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
   const duration = snapshot.durationMs || track.durationMs
   const position = scrub ?? snapshot.positionMs
 
+  // More like this (switch curated-radio): a new station from this song, picked by the owner's AI.
+  const moreLikeThis = async () => {
+    if (likeThis) return
+    setLikeThis(track.id)
+    try {
+      const { station, tracks } = await musicApi.station({ trackId: track.id })
+      await startEngine().load(tracks, 0, station)
+      noteEngineStarted()
+    } catch (error) { notify((error as Error).message || 'Could not start that station.') } finally { setLikeThis('') }
+  }
+
   const like = () => {
     const next = !liked
     setLikes((value) => ({ ...value, [track.id]: next }))
@@ -746,7 +808,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
   return <div ref={sheet} className={`music-now${snapshot.stale ? ' music-stale' : ''}`} role="dialog" aria-modal="true" aria-label="Now playing">
     <header className="music-now-head">
       <button type="button" className="icon-button" aria-label="Close player" onClick={onClose}><ChevronDown /></button>
-      <div><small>{snapshot.station ? 'Station' : 'Playing'}</small><strong>{snapshot.station?.title ?? sourceLabel(track.source)}</strong></div>
+      <div><small>{snapshot.station ? 'Station' : 'Playing'}</small><strong>{snapshot.station?.title ?? sourceLabel(track.source)}</strong>{headLine && <span className="music-now-profile" title={headLine}>{headLine}</span>}</div>
       <button type="button" className="icon-button music-add" aria-label={`Add ${track.title} to a playlist`} title="Add to playlist" onClick={() => songPlaylistControl.startAdding(track)}><AddGlyph /></button>
       <button type="button" className="icon-button music-share" aria-label={`Share ${track.title}`} title="Share" onClick={() => void shareSong(track, notify)}><ShareGlyph /></button>
       <button type="button" className="icon-button music-end" aria-label="Close: stop this song and end the session" title="Stop and close" onClick={() => { onClose(); endListening() }}><CloseGlyph /></button>
@@ -785,9 +847,9 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
           {played.map(({ item, position: at }) => <TrackRow key={`${item.id}-${at}`} track={item} played onPlay={() => engine.jump(at)} />)}
           <TrackRow track={track} active onPlay={() => undefined} />
         </div>}
-        <div className="music-section-head"><h3>Up next</h3>{snapshot.station && <small>Endless · keeps going</small>}</div>
+        <div className="music-section-head"><h3>Up next</h3>{snapshot.station && <small>Endless · keeps going</small>}{curatedOn && <button type="button" className="music-pill music-more-like" disabled={Boolean(likeThis)} aria-busy={Boolean(likeThis)} onClick={() => void moreLikeThis()}>{likeThis ? <LoadingWheel label="Starting" /> : <PlayGlyph size={14} />}More like this</button>}</div>
         {upNext.map(({ item, position: at }) => <TrackRow key={`${item.id}-${at}`} track={item} onPlay={() => engine.jump(at)} />)}
-        {!upNext.length && <p className="music-empty">{snapshot.station ? 'Finding more…' : 'End of queue.'}</p>}
+        {!upNext.length && <p className="music-empty" role="status">{head?.picks === 'pending' ? 'Picking songs like this…' : snapshot.station ? 'Finding more…' : 'End of queue.'}</p>}
       </section>
     </div>
   </div>

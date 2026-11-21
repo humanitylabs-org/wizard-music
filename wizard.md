@@ -38,6 +38,19 @@ voice_routes:
     rest_param: q
 needs: []
 uses: [music-source]
+# More like this stations (wizard-music#90, switch curated-radio, off by default): the one AI need, reached through the
+# Connection Router (wizard-os spec/CONNECTION_ROUTER.md). Optional: without it a station is plain radio.
+requires:
+  models:
+    curated-radio:
+      label: Pick songs like this for a station
+      purpose: Pick songs that sound like the one you started a station from
+      tier: fast
+      tested_on: claude-haiku-4-5
+      swap: ask
+      private_data: false
+      required: false
+      abilities: []
 switches:
   contract: wizard.app-switches/1
   path: /api/switches

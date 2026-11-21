@@ -1783,6 +1783,16 @@ def _radio_from(tid: str) -> list[str]:
 def create_station(seed: dict) -> dict:
     tid = seed.get("trackId") or ""
     title = ""
+    if seed.get("curate"):  # switch curated-radio: a song station picked by the owner's AI (wizard-music#90)
+        if not tid and seed.get("query"):
+            results = search(str(seed["query"])[:200])
+            if not results:
+                raise LookupError("nothing matched that")
+            tid = results[0]["id"]
+        first = track(tid)
+        if not first:
+            raise LookupError("unknown track")
+        return curated_station(first, str(seed.get("note") or ""))
     if not tid and seed.get("query"):
         said = str(seed["query"]).strip()
         mine = re.fullmatch(r"(?:your )?(.+)", said.lower())
@@ -1901,10 +1911,14 @@ def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
     recent = recent_songs(state)
     out: list[dict] = []
     attempts = 0
+    curated = bool(state.get("curated"))  # wizard-music#90: the station rules (station_rule)
+    seed_t = track(state["seed"]) if curated else None
+    served = served_after_seed(state) if curated else []
     while len(out) < n and attempts < 4:
         attempts += 1
         allowed = station_scripts(state)
         pool = set(state.get("pool") or [])
+        later: list[str] = []
         while state["queue"] and len(out) < n:
             tid = state["queue"].pop(0)
             if tid in state["played"] and not (tid in pool and tid not in state["played"][-40:] and tid not in [t["id"] for t in out]):
@@ -1914,9 +1928,25 @@ def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
                 sig = song_sig(t)
                 if any(rid != tid and same_song(sig, rsig) for rid, rsig in recent):
                     continue  # another version of a song you just heard
+                if seed_t:
+                    rule = station_rule(t, state, served, seed_t)
+                    if rule == "drop":
+                        continue
+                    if rule == "later":
+                        later.append(tid)
+                        continue
+                    served.append(t)
+                    if later:  # what had to wait gets the next turn
+                        state["queue"] = later + state["queue"]
+                        later = []
                 out.append(t)
                 state["played"].append(tid)
                 recent.append((tid, sig))
+        state["queue"] = later + state["queue"]
+        if len(out) < n and later and len(later) == len(state["queue"]):
+            state["queue"] = state["queue"][len(later):]  # only songs that must wait are left: grow the station
+            state.setdefault("waiting", [])
+            state["waiting"] = (later + state["waiting"])[:30]
         if len(out) < n:
             # Endless: reseed from the most recent liked track in this station, else a recent track
             # that is not the kind of music you turned down.
@@ -1937,15 +1967,17 @@ def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
                     break
                 continue
             pool_ = [p for p in state["played"][-30:] if p in liked] or [p for p in state["played"][-8:] if fits(p, taste)]
+            if curated:  # a curated station grows only from its seed or songs you played through on it
+                pool_ = kept_ids(state)[-10:] + [state["seed"]]
             reseed = random.choice(pool_) if pool_ else state["seed"]
             state["lastSeed"] = reseed
-            state["queue"] = [c for c in _radio_from(reseed) if c not in state["played"]]
+            state["queue"] = [c for c in _radio_from(reseed) if c not in state["played"]] + state.pop("waiting", [])
             if not state["queue"]:
                 break
     state["played"] = state["played"][-400:]
     if persist:
         db("UPDATE stations SET state=?, at=? WHERE id=?", (json.dumps(state), time.time(), sid))
-    if any(score < 0 for score in taste.genre.values()):
+    if curated or any(score < 0 for score in taste.genre.values()):
         # Learn genres for what was just served and what comes next; the player prunes late finds via `drop`.
         for cid in [t["id"] for t in out] + state["queue"][:12]:
             queue_info(cid)
@@ -1955,6 +1987,10 @@ def _take(sid: str, state: dict, n: int, persist: bool = True) -> list[dict]:
 def station_more(sid: str, n: int, request_id: str = "") -> list[dict]:
     if request_id and not re.fullmatch(r"[a-f0-9-]{36}", request_id):
         raise ValueError("invalid continuation key")
+    loaded = _load_station(sid)
+    if loaded and loaded[1].get("curated") and loaded[1].get("picks") == "ai" and len(loaded[1]["queue"]) < n and router_target():
+        start_curating(sid, False)  # the AI's list ran short: ask for more before falling back to plain radio
+    wait_curating(sid)  # a curated station's picks (wizard-music#90); returns at once otherwise
     with _station_lock:
         if request_id:
             cached = db("SELECT station_id,tracks FROM station_batches WHERE request_id=?", (request_id,))
@@ -1973,9 +2009,385 @@ def station_more(sid: str, n: int, request_id: str = "") -> list[dict]:
             if request_id and tracks:
                 con.execute("INSERT INTO station_batches VALUES(?,?,?,?)", (request_id, sid, json.dumps(tracks), time.time()))
             con.execute("DELETE FROM station_batches WHERE at<?", (time.time() - 7*86400,))
+    if state.get("curated") and len(state["queue"]) < CURATE_LOW and router_target():
+        start_curating(sid, False)  # endless, still curated: the next picks arrive before the queue runs out
     for t in tracks[:2]:
         prefetch(t["id"])
     return tracks
+
+
+# ---------------------------------------------------------------- Curated stations (wizard-music#90)
+# Switch curated-radio (the app server sends X-Wizard-Music-Curated: 1 only while it is on). A song station asks the
+# owner's AI, through the Connection Router, for a short sound profile of the seed and songs that match it, picked
+# from YouTube Music's radio for the seed plus its own suggestions. Music resolves every suggestion with its own search
+# and drops what it cannot find, so nothing unplayable is queued. Coherence rules (station_rule) apply to the AI's list
+# and to the plain-radio fallback alike. Only the seed, genre/style tags and artist and song names go to the AI.
+CURATE_FEATURE = "curated-radio"
+CURATE_FIRST = 25          # songs asked for when a station starts
+CURATE_MORE = 15           # songs asked for on each refill
+CURATE_LOW = 12            # refill in the background once fewer than this are queued
+CURATE_WAIT = float(os.environ.get("WIZARD_MUSIC_CURATE_WAIT_SECONDS", "20"))
+CURATE_TIMEOUT = float(os.environ.get("WIZARD_MUSIC_CURATE_TIMEOUT_SECONDS", "25"))
+SEED_ARTIST_CAP = 2        # seed artist at most this often in any 15 after the seed
+LIKED_EVERY = 8            # at most one liked song in any 8
+ROUTER_SLOT = "slot:connection-router"
+_curating: dict[str, threading.Event] = {}
+_curating_lock = threading.Lock()
+
+# Families that never belong on a station whose seed is not one of them (anime in a techno station, the Backrooms
+# soundtrack in a Trap station). Matched against the genre Music knows, the artist's style tags and the title.
+ODD_FAMILIES = {
+    "anime": re.compile(r"\banime\b|\banimation\b|アニメ|\bost\b|\bvocaloid\b", re.I),
+    "score": re.compile(r"\bsoundtrack\b|\bscore\b|\bvideo game\b|\bgame music\b|\boriginal motion picture\b|"
+                        r"\bfrom the (?:game|film|movie|series)\b|\bbackrooms\b|\bkane parsons\b", re.I),
+    "lofi": re.compile(r"\blo-?fi\b(?! house)|\bchillhop\b|\bbeats to (?:study|relax|sleep)\b|\bstudy beats\b", re.I),
+    "children": re.compile(r"\bchildren'?s\b|\bkids\b|\bnursery\b|\blullab(?:y|ies)\b", re.I),
+    "comedy": re.compile(r"\bcomedy\b|\bstand-?up\b|\bparody\b", re.I),
+    "chart": re.compile(r"\bk-?pop\b|\bj-?pop\b|\bt-?pop\b|\bchristmas\b|\bholiday\b", re.I),
+}
+
+
+def odd_families(t: dict) -> set[str]:
+    """The off-profile families a track belongs to ('anime', 'score', ...), from what Music already knows."""
+    tags = " | ".join(sorted(track_styles(t)))
+    text = f"{genre_of(t['id'])} | {tags} | {t.get('title', '')} | {t.get('album', '')} | {t.get('artist', '')}"
+    return {name for name, rx in ODD_FAMILIES.items() if rx.search(text)}
+
+
+def _artist_keys(t: dict | None) -> set[str]:
+    return {_key(a) for a in artist_names((t or {}).get("artist", ""))} - NOT_ARTISTS
+
+
+def station_rule(t: dict, state: dict, served: list[dict], seed: dict) -> str:
+    """'ok', 'drop' (never on this station) or 'later' (fine, just not right now) for one candidate.
+
+    served: the songs this station served after the seed, oldest first, including this batch so far."""
+    allowed = state.setdefault("families", sorted(odd_families(seed)))
+    if odd_families(t) - set(allowed):
+        return "drop"
+    mine = _artist_keys(t)
+    if served and mine & _artist_keys(served[-1]):
+        return "later"  # no artist twice in a row
+    window = served[-14:]
+    if mine & _artist_keys(seed) and sum(1 for s in window if _artist_keys(s) & _artist_keys(seed)) >= SEED_ARTIST_CAP:
+        return "later"  # the seed artist at most 2 in every 15
+    if t.get("liked") and any(s.get("liked") for s in served[-(LIKED_EVERY - 1):]):
+        return "later"  # liked songs at most 1 in 8
+    return "ok"
+
+
+def served_after_seed(state: dict) -> list[dict]:
+    ids = [x for x in state["played"] if x != state["seed"]][-14:]
+    return [t for t in (track(x) for x in ids) if t]
+
+
+class CurateUnavailable(Exception):
+    """No AI connection for this app, or it failed: the station falls back to radio with the rules applied."""
+
+
+def router_target() -> tuple[str, str] | None:
+    """Where this app's Connection Router answers and its grant key (wizard-os spec/PERMISSIONS.md), else None."""
+    url = os.environ.get("WIZARD_MUSIC_ROUTER_URL", "").strip()
+    key = ""
+    path = os.environ.get("WIZARD_GRANTS_FILE", "").strip()
+    if path:
+        try:
+            grants = json.loads(Path(path).read_text())
+            key = str((grants.get("outgoing") or {}).get(ROUTER_SLOT) or "")
+            url = url or str((grants.get("provider_endpoints") or {}).get(ROUTER_SLOT) or "")
+        except (OSError, ValueError, AttributeError):
+            pass
+    if not url.startswith(("http://", "https://")):
+        return None
+    return url.rstrip("/"), key
+
+
+def ask_model(system: str, prompt: str, max_tokens: int = 1800) -> dict:
+    """One isolated run of this app's curated-radio feature through the Connection Router; the JSON it answered."""
+    target = router_target()
+    if not target:
+        raise CurateUnavailable("no AI connection")
+    url, key = target
+    headers = {"Content-Type": "application/json", "Accept": "text/event-stream", "X-Wizard-App": "wizard-music"}
+    if key:
+        headers["X-Wizard-Grant"] = key
+    body = json.dumps({"system": system, "messages": [{"role": "user", "content": prompt}],
+                       "max_tokens": max_tokens, "stream": True}).encode()
+    req = urllib.request.Request(f"{url}/v1/models/{CURATE_FEATURE}/run", data=body, headers=headers, method="POST")
+    text, done = [], False
+    try:
+        with urllib.request.urlopen(req, timeout=CURATE_TIMEOUT) as res:
+            for raw in res:
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                event = json.loads(line[5:].strip() or "{}")
+                kind = event.get("type")
+                if kind in ("delta", "text") and isinstance(event.get("text"), str):
+                    text.append(event["text"])
+                elif kind == "error":
+                    raise CurateUnavailable(str(event.get("code") or "provider_error"))
+                elif kind == "done":
+                    done = True
+                    break
+    except CurateUnavailable:
+        raise
+    except Exception as exc:  # router down, timeout, malformed stream
+        raise CurateUnavailable(type(exc).__name__) from None
+    if not done:
+        raise CurateUnavailable("no answer")  # provisional text without the router's done is discarded
+    answer = "".join(text)
+    start, end = answer.find("{"), answer.rfind("}")
+    try:
+        value = json.loads(answer[start:end + 1]) if 0 <= start < end else None
+    except ValueError:
+        value = None
+    if not isinstance(value, dict):
+        raise CurateUnavailable("not json")
+    return value
+
+
+CURATE_SYSTEM = (
+    "You are a music curator for one listener. They started a station from one song because they love its sound "
+    "and want more songs that sound like it: a curated list, not generic radio. Reply with one JSON object only.")
+
+
+def _liked_artists_like(seed: dict, limit: int = 15) -> list[str]:
+    """Names of artists you liked whose styles share one with the seed's (names only)."""
+    want = {tag for tag, w in track_styles(seed).items() if w >= 0.5}
+    out, seen = [], _artist_keys(seed)
+    for (artist,) in db("SELECT t.artist FROM likes l JOIN tracks t ON t.id=l.id WHERE l.value>0 ORDER BY l.at DESC LIMIT 300"):
+        for name in artist_names(artist or ""):
+            key = _key(name)
+            if key in seen:
+                continue
+            tags = artist_styles(key) or {}
+            if want and any(w >= 0.5 and tag in want for tag, w in tags.items()):
+                seen.add(key)
+                out.append(name)
+    return out[:limit]
+
+
+def _avoid_artists(limit: int = 15) -> list[str]:
+    out, seen = [], set()
+    for (artist,) in db("SELECT t.artist FROM likes l JOIN tracks t ON t.id=l.id WHERE l.value<0 ORDER BY l.at DESC LIMIT 60"):
+        for name in artist_names(artist or ""):
+            if _key(name) not in seen:
+                seen.add(_key(name))
+                out.append(name)
+    return out[:limit]
+
+
+def kept_ids(state: dict) -> list[str]:
+    """Songs on this station you played through (the only ones a curated station may grow from)."""
+    ids = set(state["played"])
+    rows = db("SELECT DISTINCT id FROM plays WHERE at>=? AND action='played'", (float(state.get("at0") or 0),))
+    return [r[0] for r in rows if r[0] in ids]
+
+
+def station_heard(state: dict) -> tuple[list[dict], list[dict]]:
+    """Songs on this station you played through, and songs you skipped (titles and artists, no times)."""
+    since = float(state.get("at0") or 0)
+    ids = set(state["played"]) - {state["seed"]}
+    kept, skipped, seen = [], [], set()
+    for tid, action in db("SELECT id, action FROM plays WHERE at>=? ORDER BY at", (since,)):
+        t = track(tid) if tid in ids and (tid, action) not in seen else None
+        seen.add((tid, action))
+        if t:
+            row = {"title": t["title"], "artist": t["artist"], "styles": sorted(track_styles(t))[:4]}
+            (kept if action == "played" else skipped).append(row)
+    return kept[-20:], skipped[-20:]
+
+
+def curate_prompt(seed: dict, candidates: list[dict], state: dict, want: int) -> str:
+    kept, skipped = station_heard(state)
+    styles = [tag for tag, w in sorted(track_styles(seed).items(), key=lambda x: -x[1]) if w >= 0.3][:8]
+    ask = {
+        "seed": {"title": seed["title"], "artist": seed["artist"], "genre": genre_of(seed["id"]), "styles": styles},
+        "listener_note": str(state.get("note") or "")[:500],
+        "profile_so_far": state.get("profile") or "",
+        "liked_artists_in_this_style": _liked_artists_like(seed),
+        "avoid_artists": _avoid_artists(),
+        "related_artists": related_artists(seed["artist"])[:12] if ONLINE else [],
+        "candidates": [{"ref": f"c{i}", "title": c["title"], "artist": c["artist"]} for i, c in enumerate(candidates)],
+        "played_through_on_this_station": kept,
+        "skipped_on_this_station": skipped,
+        "already_on_this_station": [f"{t['title']} · {t['artist']}" for t in served_after_seed(state)],
+    }
+    return (
+        f"Pick {want} songs that sound like the seed, in play order.\n"
+        "1. profile: one line (at most 90 characters) naming the seed's sound, e.g. "
+        "\"Hypnotic melodic techno: warm arpeggios, slow builds, Kompakt-style\". Keep profile_so_far if it is set.\n"
+        "2. songs: keep candidates that fit the profile ({\"ref\": \"c3\"}) and add real, released songs you know "
+        "({\"artist\": \"...\", \"title\": \"...\"}). Leave out every candidate that does not fit.\n"
+        "Rules: nothing from anime, game or film scores, lo-fi, children's music, comedy or chart filler unless the "
+        "seed is that itself; the seed's artist at most 2 times; never the same artist twice in a row; nothing by "
+        "avoid_artists; nothing in already_on_this_station. Lean towards what was played through; steer away from "
+        "the sound of skipped songs, and drop a sub-style entirely once two songs of it were skipped.\n"
+        "Reply exactly: {\"profile\": \"...\", \"songs\": [{\"ref\": \"c0\"}, {\"artist\": \"...\", \"title\": \"...\"}]}\n\n"
+        + json.dumps(ask, ensure_ascii=False))
+
+
+def resolve_pick(artist: str, title: str) -> dict | None:
+    """A model's suggestion as a playable track, or None when Music can't find that song by that artist."""
+    artist, title = str(artist or "").strip()[:120], str(title or "").strip()[:200]
+    if not artist or not title:
+        return None
+    mine: list[dict] = []
+    for q in (f"{artist} {title}", title):  # the title alone finds library files whose fields hold one or the other
+        try:
+            mine = [t for t in by_artist(search(q), artist) if t]
+        except Exception:
+            mine = []
+        if mine:
+            break
+    best, score = None, 0.0
+    for t in mine:
+        s = heard_like(_clean_title(title).lower(), _clean_title(t["title"]).lower())
+        if s > score:
+            best, score = t, s
+    return prefer_library(best) if best and score >= 0.6 else None
+
+
+def curated_list(answer: dict, candidates: list[dict]) -> tuple[str, list[str], int]:
+    """(profile, track ids in order, how many suggestions could not be found) from the model's answer."""
+    from concurrent.futures import ThreadPoolExecutor
+    profile = re.sub(r"\s+", " ", str(answer.get("profile") or "")).strip()[:140]
+    songs = answer.get("songs") if isinstance(answer.get("songs"), list) else []
+    refs = {f"c{i}": c for i, c in enumerate(candidates)}
+    slots: list = []
+    for item in songs[:40]:
+        if not isinstance(item, dict):
+            continue
+        if item.get("ref") in refs:
+            slots.append(refs[item["ref"]])
+        elif item.get("artist") and item.get("title"):
+            slots.append((item["artist"], item["title"]))
+    picks = [s for s in slots if isinstance(s, tuple)]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        found = dict(zip(picks, pool.map(lambda p: resolve_pick(*p), picks)))
+    ids, missed = [], 0
+    for s in slots:
+        t = s if isinstance(s, dict) else found.get(s)
+        if not t:
+            missed += 1
+            continue
+        if t["id"] not in ids:
+            ids.append(t["id"])
+    return profile, ids, missed
+
+
+def station_card(sid: str, title: str, state: dict) -> dict:
+    out = {"id": sid, "title": title, "more": f"{PUBLIC_PREFIX}/api/station/{sid}/more"}
+    if state.get("curated"):
+        out.update(picks=state.get("picks", "pending"), profile=state.get("profile", ""))
+    return out
+
+
+def _load_station(sid: str) -> tuple[str, dict] | None:
+    rows = db("SELECT title, state FROM stations WHERE id=?", (sid,))
+    return (rows[0][0], json.loads(rows[0][1])) if rows else None
+
+
+def curate(sid: str, first: bool) -> None:
+    """Ask the AI for this station's next songs and queue them (background thread; the seed is already playing)."""
+    try:
+        loaded = _load_station(sid)
+        if not loaded:
+            return
+        _, state = loaded
+        seed = track(state["seed"])
+        if not seed:
+            return
+        base = state["seed"] if first else random.choice(kept_ids(state) or [state["seed"]])
+        radio = [t for t in (track(c) for c in _radio_from(base)[:40]) if t and t["id"] not in state["played"]]
+        try:
+            answer = ask_model(CURATE_SYSTEM, curate_prompt(seed, radio, state, CURATE_FIRST if first else CURATE_MORE))
+            profile, ids, missed = curated_list(answer, radio)
+            picks = "ai" if ids else "radio"
+            print(f"curated station {sid}: {len(ids)} queued, {missed} not found", file=sys.stderr)
+        except CurateUnavailable as exc:
+            print(f"curated station {sid}: radio fallback ({exc})", file=sys.stderr)
+            profile, ids, picks = "", [], "radio"
+        with _station_lock:
+            loaded = _load_station(sid)
+            if not loaded:
+                return
+            _, state = loaded
+            fresh = [i for i in ids if i not in state["played"]]
+            if picks == "ai":
+                state["queue"] = fresh + [i for i in state["queue"] if i not in fresh]
+                state["profile"] = state.get("profile") or profile
+                state["picks"] = "ai"
+            else:
+                if first or state.get("picks") != "ai":
+                    state["picks"] = "radio"
+                # Plain radio for the seed (or a song you kept), with the station rules applied as it is served.
+                state["queue"] = state["queue"] + [t["id"] for t in radio if t["id"] not in state["queue"]]
+            db("UPDATE stations SET state=?, at=? WHERE id=?", (json.dumps(state), time.time(), sid))
+        for cid in state["queue"][:20]:
+            queue_info(cid)  # learn genres, so the family rule knows them by the time they are served
+            queue_styles_for(cid)
+    except Exception as exc:
+        print("curate failed", sid, repr(exc), file=sys.stderr)
+    finally:
+        with _curating_lock:
+            ev = _curating.pop(sid, None)
+        if ev:
+            ev.set()
+
+
+def start_curating(sid: str, first: bool) -> bool:
+    with _curating_lock:
+        if sid in _curating:
+            return False
+        _curating[sid] = threading.Event()
+    threading.Thread(target=curate, args=(sid, first), daemon=True).start()
+    return True
+
+
+def wait_curating(sid: str, timeout: float = CURATE_WAIT) -> None:
+    with _curating_lock:
+        ev = _curating.get(sid)
+    if ev:
+        ev.wait(timeout)
+
+
+def curated_station(first: dict, note: str = "") -> dict:
+    """Start a 'more like this' station: the seed plays at once; the AI's picks follow (wizard-music#90)."""
+    tid = first["id"]
+    title = f"Like {first['title']} · {first['artist']}"[:200]
+    state = {"seed": tid, "queue": [], "played": [tid], "lastSeed": tid, "curated": True, "at0": time.time(),
+             "note": str(note or "")[:500], "profile": "", "picks": "pending"}
+    state["families"] = sorted(odd_families(first))
+    sid = uuid.uuid4().hex[:16]
+    queue_styles_for(tid)
+    if not router_target():
+        # No AI connection: today's radio, with the station rules, and the header says so.
+        state.update(picks="radio", queue=[c for c in _radio_from(tid) if c != tid])
+        db("INSERT INTO stations(id,title,seed,state,at) VALUES(?,?,?,?,?)", (sid, title, tid, json.dumps(state), time.time()))
+        with _station_lock:
+            tracks = [first] + _take(sid, state, 14)
+        for t in tracks[:3]:
+            prefetch(t["id"])
+        return {"station": station_card(sid, title, state), "tracks": tracks}
+    db("INSERT INTO stations(id,title,seed,state,at) VALUES(?,?,?,?,?)", (sid, title, tid, json.dumps(state), time.time()))
+    start_curating(sid, True)
+    prefetch(tid)
+    return {"station": station_card(sid, title, state), "tracks": [first]}
+
+
+def station_view(sid: str, wait: bool = False, peek: int = 10) -> dict:
+    """A station's header (title, profile, picks), its seed and the next songs it will serve (not consumed)."""
+    if wait:
+        wait_curating(sid)
+    loaded = _load_station(sid)
+    if not loaded:
+        raise LookupError("unknown station")
+    title, state = loaded
+    with _station_lock:
+        upcoming = _take(sid, json.loads(json.dumps(state)), max(0, min(peek, 25)), persist=False) if peek else []
+    return {"station": station_card(sid, title, state), "seed": track(state["seed"]), "tracks": upcoming}
 
 
 def record_play(tid: str, action: str, event_id: str = "") -> bool:
@@ -2501,6 +2913,13 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/search":
                 q = (qs.get("q") or [""])[0][:200]
                 return self._json(200, {"tracks": search(q) if q.strip() else []})
+            m = re.match(r"^/api/station/([a-f0-9]{16})$", path)
+            if m:  # a curated station's header and next songs (wizard-music#90); ?wait=1 waits for the AI's picks
+                try:
+                    peek = int((qs.get("peek") or ["10"])[0] or 0)
+                    return self._json(200, station_view(m.group(1), qs.get("wait", [""])[0] == "1", peek))
+                except LookupError:
+                    return self._json(404, {"error": "unknown station"})
             m = re.match(r"^/api/station/([a-f0-9]{16})/more$", path)
             if m:
                 n = int((qs.get("n") or ["10"])[0])
@@ -2570,6 +2989,11 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/settings":
                 return self._json(200, set_online(body.get("online")))
             if url.path == "/api/station":
+                # The app server sends X-Wizard-Music-Curated only while the curated-radio switch is on: then a
+                # tapped song (or an explicit curate request) starts an AI-picked station (wizard-music#90).
+                plain_tap = bool(body.get("trackId")) and not any(body.get(k) for k in ("label", "queue", "pool", "query"))
+                curate_on = self.headers.get("X-Wizard-Music-Curated") == "1"
+                body["curate"] = curate_on and (plain_tap or bool(body.get("curate")))
                 out = create_station(body)
                 if body.get("trackId") and not body.get("label") and out.get("tracks"):
                     record_request(out["tracks"][0]["id"], "tap")  # you tapped this song

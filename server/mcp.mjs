@@ -35,7 +35,18 @@ export function songPlaylistRequest(name,a){
  if(name==='playlist_update') return Object.keys(body).length?{path:'/'+a.id,body}:null
  return {path:'/'+a.id+(name==='playlist_add_tracks'?'/add':'/remove'),body}
 }
-export async function handleMcp(req,res,send,port) {
+// More like this stations (wizard-music#90, switch curated-radio): listed and callable only while the switch is on.
+const curateTool={name:'station_curate',description:'Owner-requested: start a "more like this" station in Music from one song: the owner\'s AI writes a sound profile of it and Music queues matching songs it can really play. Give track_id (from music_search or music_home) or query ("Trap Gui Boratto"), and note with the owner\'s own words about what they love in it. Returns the station title, its profile, the first 10 tracks read back from Music and an open link that plays it in Music; give the owner that link.',inputSchema:{type:'object',properties:{track_id:SONG_ID,query:{type:'string',minLength:1,maxLength:200},note:{type:'string',maxLength:500}},additionalProperties:false}}
+/** The hub body for station_curate, or null when the arguments are invalid. */
+export function curateRequest(a){
+ if(!a||typeof a!=='object'||Array.isArray(a)||Object.keys(a).some(k=>!['track_id','query','note'].includes(k))) return null
+ if(a.track_id!==undefined&&(typeof a.track_id!=='string'||!SONG_ID_RE.test(a.track_id))) return null
+ if(a.query!==undefined&&(typeof a.query!=='string'||!a.query.trim()||a.query.length>200)) return null
+ if(a.note!==undefined&&(typeof a.note!=='string'||a.note.length>500)) return null
+ if(!a.track_id===!a.query) return null   // exactly one of track_id or query
+ return {curate:true,...(a.track_id?{trackId:a.track_id}:{query:a.query.trim()}),...(a.note?{note:a.note}:{})}
+}
+export async function handleMcp(req,res,send,port,{curated=false}={}) {
  if(req.method !== 'POST') { send(res,405,{error:'method'}); return }
  if(!String(req.headers['content-type']).startsWith('application/json')) {send(res,415,{error:'json_required'});return}
  let size=0, chunks=[]
@@ -46,9 +57,24 @@ export async function handleMcp(req,res,send,port) {
  const answer=result=>send(res,200,{jsonrpc:'2.0',id:m.id,result})
  if(m.method==='initialize'){answer({protocolVersion:'2024-11-05',capabilities:{tools:{}},serverInfo:{name:'wizard-music',version:'0.1.0'}});return}
  if(m.method==='ping'){answer({});return}
- if(m.method==='tools/list'){answer({tools:[...tools,...songTools]});return}
+ if(m.method==='tools/list'){answer({tools:[...tools,...songTools,...(curated?[curateTool]:[])]});return}
  if(m.method!=='tools/call'){send(res,200,{jsonrpc:'2.0',id:m.id,error:{code:-32601,message:'Method not found'}});return}
  const name=m.params?.name, a=m.params?.arguments||{}
+ if(name==='station_curate'&&curated){
+  const body=curateRequest(a)
+  if(!body){send(res,200,{jsonrpc:'2.0',id:m.id,error:{code:-32602,message:'Give track_id or query (one of them), and optionally note'}});return}
+  const base=`http://127.0.0.1:${port}/wizard-music/api/station`
+  try{
+   const r=await fetch(base,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(150000)})
+   const started=await r.json().catch(()=>({}))
+   if(!r.ok||!started.station?.id){answer({content:[{type:'text',text:JSON.stringify(started)}],isError:true});return}
+   // Read back what Music will really play: the seed, then the next 10 (waits for the AI's picks).
+   const back=await fetch(`${base}/${started.station.id}?wait=1`,{signal:AbortSignal.timeout(150000)}), view=await back.json()
+   const row=t=>({id:t.id,title:t.title,artist:t.artist})
+   answer({content:[{type:'text',text:JSON.stringify({station:{id:view.station.id,title:view.station.title,profile:view.station.profile||'',picks:view.station.picks},seed:view.seed&&row(view.seed),tracks:(view.tracks||[]).slice(0,10).map(row),open:`/wizard-music/?station=${view.station.id}`})}],isError:!back.ok})
+  }catch{answer({content:[{type:'text',text:'Music backend unavailable'}],isError:true})}
+  return
+ }
  if(songTools.some(t=>t.name===name)){
   const call=songPlaylistRequest(name,a)
   if(!call){send(res,200,{jsonrpc:'2.0',id:m.id,error:{code:-32602,message:'Invalid playlist arguments'}});return}
