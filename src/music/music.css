@@ -164,7 +164,7 @@ a.music-source:hover { background: color-mix(in srgb, var(--text) 5%, transparen
 .music-now-head small { color: var(--text-dim); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
 .music-now-head strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
 /* More like this stations (wizard-music#90): the sound profile under the station title. */
-.music-now-head .music-now-profile { max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; text-align: center; color: var(--text-dim); font-size: 12px; line-height: 1.3; }
+.music-now-head .music-now-profile { max-width: 100%; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; text-align: center; color: var(--text-dim); font-size: var(--wz-text-sm, .75rem); line-height: 1.3; }
 .music-upnext .music-section-head:has(.music-more-like) h3 { flex-shrink: 0; }
 .music-upnext .music-section-head:has(.music-more-like) small { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .music-upnext .music-more-like { margin-left: auto; flex-shrink: 0; white-space: nowrap; }
