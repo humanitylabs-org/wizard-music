@@ -1906,7 +1906,7 @@ def recent_songs(state: dict) -> list[tuple[str, tuple[list[list[str]], set[str]
     return out
 
 
-def _take(sid: str, state: dict, n: int, persist: bool = True, grow: bool = True) -> list[dict]:
+def _take(sid: str, state: dict, n: int, persist: bool = True, grow: bool = True, hold: bool = False) -> list[dict]:
     taste = taste_profile()
     recent = recent_songs(state)
     out: list[dict] = []
@@ -1949,7 +1949,7 @@ def _take(sid: str, state: dict, n: int, persist: bool = True, grow: bool = True
             state["waiting"] = (later + state["waiting"])[:30]
         if len(out) < n and not grow:
             break  # a look ahead (station_view) shows only what is queued
-        if len(out) < n and curated and state.get("picks") in ("ai", "pending") and sid in _curating:
+        if len(out) < n and hold:
             break  # the AI's next picks are on their way: never fill the gap with plain radio
         if len(out) < n:
             # Endless: reseed from the most recent liked track in this station, else a recent track
@@ -1992,11 +1992,14 @@ def station_more(sid: str, n: int, request_id: str = "") -> list[dict]:
     if request_id and not re.fullmatch(r"[a-f0-9-]{36}", request_id):
         raise ValueError("invalid continuation key")
     loaded = _load_station(sid)
-    short = bool(loaded) and len(loaded[1]["queue"]) < n
+    short = bool(loaded) and len(loaded[1].get("queue") or []) < n
     if loaded and ai_queued(loaded[1]) < n and loaded[1].get("picks") == "ai" and curate_due(loaded[1]):
         start_curating(sid, False)  # the AI's list ran short: ask for more before falling back to plain radio
+    in_time = True
     if loaded and (short or loaded[1].get("picks") == "pending"):
-        wait_curating(sid)  # a curated station's picks (wizard-music#90); returns at once when none are coming
+        in_time = wait_curating(sid)  # a curated station's picks (wizard-music#90); returns at once when none are coming
+    # While the AI's picks are coming (and came in time), a short answer beats padding it with plain radio.
+    hold = in_time and bool(loaded) and bool(loaded[1].get("curated")) and sid in _curating
     with _station_lock:
         if request_id:
             cached = db("SELECT station_id,tracks FROM station_batches WHERE request_id=?", (request_id,))
@@ -2008,7 +2011,7 @@ def station_more(sid: str, n: int, request_id: str = "") -> list[dict]:
         if not rows:
             raise LookupError("unknown station")
         state = json.loads(rows[0][0])
-        tracks = _take(sid, state, max(1, min(n, 25)), False)
+        tracks = _take(sid, state, max(1, min(n, 25)), False, **({"hold": True} if hold else {}))
         # Compute outside the DB transaction, commit advancement and receipt atomically.
         with _db_lock, _db as con:
             con.execute("UPDATE stations SET state=?,at=? WHERE id=?", (json.dumps(state), time.time(), sid))
@@ -2053,16 +2056,24 @@ ODD_FAMILIES = {
 }
 
 
+# A game's or film's original score, named on the album: never on a station whose seed is not one, AI pick or not.
+SCORE_ALBUM = re.compile(r"\boriginal (?:game |video game |motion picture |television |anime |series )?(?:sound ?track|score)\b|"
+                         r"\bgame sound ?track\b|\bost\b|\bsound ?track from\b", re.I)
+
+
 def odd_families(t: dict, picked: bool = False) -> set[str]:
     """The off-profile families a track belongs to ('anime', 'score', ...), from what Music already knows.
 
-    picked: the AI chose this song itself. A film's song (Sky and Sand, on Berlin Calling's soundtrack album) is filed
+    picked: the AI suggested this song itself (not a radio candidate it kept). A film's song (Sky and Sand, on Berlin Calling's soundtrack album) is filed
     under the genre Soundtrack, so for the AI's own picks only the title, the artist and strong style tags can make a
     song a score; the other families still count the genre."""
     tags = " | ".join(sorted(tag for name in artist_names(t.get("artist", "")) for tag, w in (artist_styles(_key(name)) or {}).items() if w >= 0.5))
     strong = f"{tags} | {t.get('title', '')} | {t.get('artist', '')}"
     weak = f"{genre_of(t['id'])} | {t.get('album', '')}"
-    return {name for name, rx in ODD_FAMILIES.items() if rx.search(strong) or (not (picked and name == "score") and rx.search(weak))}
+    found = {name for name, rx in ODD_FAMILIES.items() if rx.search(strong) or (not (picked and name == "score") and rx.search(weak))}
+    if SCORE_ALBUM.search(t.get("album", "")):
+        found.add("score")
+    return found
 
 
 def _artist_keys(t: dict | None) -> set[str]:
@@ -2074,7 +2085,7 @@ def station_rule(t: dict, state: dict, served: list[dict], seed: dict) -> str:
 
     served: the songs this station served after the seed, oldest first, including this batch so far."""
     allowed = state.setdefault("families", sorted(odd_families(seed)))
-    if odd_families(t, t["id"] in set(state.get("ai") or [])) - set(allowed):
+    if odd_families(t, t["id"] in set(state.get("aiOwn") or [])) - set(allowed):
         return "drop"
     mine = _artist_keys(t)
     if served and mine & _artist_keys(served[-1]):
@@ -2292,32 +2303,42 @@ def answer_slots(answer: dict, candidates: list[dict]) -> tuple[str, list]:
     return profile, slots
 
 
-def resolve_slots(slots: list, publish=None, batch: int = CURATE_BATCH) -> tuple[list[str], int]:
-    """Look the picks up in parallel, in order; publish(ids) once the first `batch` are known, so they can play
-    while the rest are found. Returns (all track ids in order, how many picks could not be found)."""
+RESOLVE_DEADLINE = float(os.environ.get("WIZARD_MUSIC_RESOLVE_SECONDS", "20"))
+
+
+def resolve_slots(slots: list, publish=None, batch: int = CURATE_BATCH) -> tuple[list[str], int, list[str]]:
+    """Look the picks up in parallel, in order; publish(ids, own) once the first `batch` are known, so they can play
+    while the rest are found. Picks not found within RESOLVE_DEADLINE are dropped. Returns (all track ids in order,
+    how many picks could not be found, the ids the AI suggested itself rather than kept from the radio candidates)."""
     from concurrent.futures import ThreadPoolExecutor
-    ids, missed, published = [], 0, False
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    ids, own, missed, published = [], [], 0, False
+    deadline = time.monotonic() + RESOLVE_DEADLINE
+    pool = ThreadPoolExecutor(max_workers=10)
+    try:
         futures = [pool.submit(resolve_pick, *s) if isinstance(s, tuple) else None for s in slots]
         for i, (s, fut) in enumerate(zip(slots, futures)):
             try:
-                t = s if fut is None else fut.result(timeout=30)
+                t = s if fut is None else fut.result(timeout=max(0.0, deadline - time.monotonic()))
             except Exception:
                 t = None
             if not t:
                 missed += 1
             elif t["id"] not in ids:
                 ids.append(t["id"])
+                if fut is not None:
+                    own.append(t["id"])
             if publish and not published and i + 1 >= min(batch, len(slots)):
                 published = True
-                publish(list(ids))
-    return ids, missed
+                publish(list(ids), list(own))
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
+    return ids, missed, own
 
 
 def curated_list(answer: dict, candidates: list[dict]) -> tuple[str, list[str], int]:
     """(profile, track ids in order, how many suggestions could not be found) from the model's answer."""
     profile, slots = answer_slots(answer, candidates)
-    ids, missed = resolve_slots(slots)
+    ids, missed, _ = resolve_slots(slots)
     return profile, ids, missed
 
 
@@ -2341,7 +2362,7 @@ def _release(sid: str) -> None:
         ev.set()
 
 
-def _queue_picks(sid: str, ids: list[str], profile: str, final: bool) -> None:
+def _queue_picks(sid: str, ids: list[str], profile: str, final: bool, own: list[str] | None = None) -> None:
     """Queue the AI's picks right after the ones already queued from this answer. Once the AI has picked, plain radio
     that filled a gap leaves the queue, so the station never drifts back to raw radio."""
     with _station_lock:
@@ -2356,6 +2377,7 @@ def _queue_picks(sid: str, ids: list[str], profile: str, final: bool) -> None:
             at = max((queued.index(i) + 1 for i in ids if i in queued), default=0)
             state["queue"] = queued[:at] + fresh + queued[at:]
             state["ai"] = (list(state.get("ai") or []) + [i for i in ids if i not in (state.get("ai") or [])])[-400:]
+            state["aiOwn"] = (list(state.get("aiOwn") or []) + [i for i in own or [] if i not in (state.get("aiOwn") or [])])[-400:]
             state["picks"] = "ai"
             state["profile"] = state.get("profile") or profile
         if final:
@@ -2366,10 +2388,11 @@ def _queue_picks(sid: str, ids: list[str], profile: str, final: bool) -> None:
 
 def ai_queued(state: dict) -> int:
     """How many of the AI's picks are still queued (all of the queue for a station without them)."""
+    queue = state.get("queue") or []
     if state.get("picks") != "ai":
-        return len(state["queue"])
+        return len(queue)
     ai = set(state.get("ai") or [])
-    return sum(1 for q in state["queue"] if q in ai)
+    return sum(1 for q in queue if q in ai)
 
 
 def curate(sid: str, first: bool) -> None:
@@ -2392,8 +2415,8 @@ def curate(sid: str, first: bool) -> None:
         try:
             answer = ask_model(CURATE_SYSTEM, curate_prompt(seed, radio, state, CURATE_FIRST if first else CURATE_MORE, related))
             profile, slots = answer_slots(answer, radio)
-            ids, missed = resolve_slots(slots, lambda got: (_queue_picks(sid, got, profile, False), got and _release(sid)))
-            _queue_picks(sid, ids, profile, True)
+            ids, missed, own = resolve_slots(slots, lambda got, mine: (_queue_picks(sid, got, profile, False, mine), got and _release(sid)))
+            _queue_picks(sid, ids, profile, True, own)
             print(f"curated station {sid}: {len(ids)} queued, {missed} not found", file=sys.stderr)
             if ids:
                 return
@@ -2435,11 +2458,21 @@ def start_curating(sid: str, first: bool) -> bool:
     return True
 
 
-def wait_curating(sid: str, timeout: float = CURATE_WAIT) -> None:
+def wait_curating(sid: str, timeout: float | None = None) -> bool:
+    """Wait for a station's AI picks to be queued; False when they did not come in time."""
     with _curating_lock:
         ev = _curating.get(sid)
-    if ev:
-        ev.wait(timeout)
+    return ev.wait(CURATE_WAIT if timeout is None else timeout) if ev else True
+
+
+def wait_curated(sid: str, timeout: float | None = None) -> None:
+    """Wait until the station's AI answer is fully looked up (station_curate reads back what will play)."""
+    end = time.monotonic() + (CURATE_WAIT if timeout is None else timeout)
+    while time.monotonic() < end:
+        with _curating_lock:
+            if sid not in _curating:
+                return
+        time.sleep(0.2)
 
 
 def curated_station(first: dict, note: str = "") -> dict:
@@ -2470,6 +2503,8 @@ def station_view(sid: str, wait: bool = False, peek: int = 10) -> dict:
     """A station's header (title, profile, picks), its seed and the next songs it will serve (not consumed)."""
     if wait:
         wait_curating(sid)
+        if peek:
+            wait_curated(sid)  # the read-back lists every song the AI's answer queued, not only the first ones
     loaded = _load_station(sid)
     if not loaded:
         raise LookupError("unknown station")

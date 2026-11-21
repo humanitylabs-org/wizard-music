@@ -22,6 +22,10 @@ def hub(monkeypatch, tmp_path):
     monkeypatch.setattr(module, 'queue_info', lambda *a, **k: None)
     monkeypatch.setattr(module, 'related_artists', lambda artist: ['Kompakt Friend'])
     yield module
+    for _ in range(100):  # let background curation finish before the database closes
+        if not module._curating:
+            break
+        threading.Event().wait(0.05)
     module._db.close()
     sys.path.remove(root)
 
@@ -270,7 +274,7 @@ def test_the_first_picks_play_while_the_rest_are_looked_up(hub, monkeypatch):
     published = []
     answer = {'profile': 'p', 'songs': [{'artist': f'Artist {i}', 'title': f'Pick {i}'} for i in range(14)]}
     _, slots = hub.answer_slots(answer, [])
-    done = threading.Thread(target=lambda: published.append(hub.resolve_slots(slots, lambda got: (published.append(list(got)), hub._queue_picks(sid, got, 'p', False)))))
+    done = threading.Thread(target=lambda: published.append(hub.resolve_slots(slots, lambda got, own: (published.append(list(got)), hub._queue_picks(sid, got, 'p', False, own)))))
     done.start()
     for _ in range(100):
         if published:
@@ -280,8 +284,9 @@ def test_the_first_picks_play_while_the_rest_are_looked_up(hub, monkeypatch):
     assert hub._load_station(sid)[1]['queue'] == picks[:10]
     gate.set()
     done.join(5)
-    ids, missed = published[-1]
-    hub._queue_picks(sid, ids, 'p', True)
+    ids, missed, own = published[-1]
+    assert own == ids
+    hub._queue_picks(sid, ids, 'p', True, own)
     assert hub._load_station(sid)[1]['queue'] == picks and missed == 0
 
 
@@ -302,5 +307,37 @@ def test_a_film_song_the_ai_picked_stays_but_a_radio_score_goes(hub, monkeypatch
     anime = add(hub, vid(7), 'Blue night', 'Yoshiaki Dewa', 'Anime')
     monkeypatch.setattr(hub, '_radio_from', lambda tid: [])
     sid, state = curated(hub, seed, [sky, score, anime])
-    state['ai'] = [sky, anime]  # the AI picked these two
+    state['ai'] = [sky, score, anime]
+    state['aiOwn'] = [sky, anime]  # the AI suggested these two itself; it only kept the score from the radio
     assert [t['id'] for t in hub._take(sid, state, 3)] == [sky]
+
+
+def test_a_kept_radio_track_from_a_game_or_anime_soundtrack_album_goes(hub, monkeypatch):
+    seed = add(hub, 'EoJy_GR1Lb0', 'Trap', 'Gui Boratto')
+    blue = add(hub, vid(8), '青い夜 - Blue night', 'Yoshiaki Dewa')  # a fresh hub: no genre known yet
+    hub.db('UPDATE tracks SET album=? WHERE id=?', ('「CALL OF THE NIGHT」Original Soundtrack', blue))
+    hoyo = add(hub, vid(9), "Treading on a Knife's Edge", 'HOYO-MiX')
+    hub.db('UPDATE tracks SET album=? WHERE id=?', ('Honkai: Star Rail - Out of Control (Original Game Soundtrack)', hoyo))
+    good = add(hub, vid(10), 'Bad Kingdom', 'Moderat')
+    monkeypatch.setattr(hub, '_radio_from', lambda tid: [])
+    sid, state = curated(hub, seed, [blue, hoyo, good])
+    state['ai'] = [blue, hoyo, good]
+    state['aiOwn'] = [hoyo]  # even the AI's own pick goes when its album is a game's original soundtrack
+    assert [t['id'] for t in hub._take(sid, state, 3)] == [good]
+
+
+def test_more_pads_with_radio_only_when_the_picks_are_late(hub, monkeypatch):
+    seed = add(hub, 'EoJy_GR1Lb0', 'Trap', 'Gui Boratto')
+    radio = add(hub, vid(11), 'Radio song', 'Radio Artist')
+    monkeypatch.setattr(hub, '_radio_from', lambda tid: [radio])
+    sid, state = curated(hub, seed, [])
+    hub.db('UPDATE stations SET state=? WHERE id=?', (json.dumps(state), sid))
+    monkeypatch.setattr(hub, 'CURATE_WAIT', 0.2)
+    ev = threading.Event()
+    hub._curating[sid] = ev  # an AI answer is being looked up
+    monkeypatch.setattr(hub, 'curate_due', lambda state: False)
+    ev.set()  # its first picks were queued in time: hold, no radio
+    assert hub.station_more(sid, 5) == []
+    hub._curating[sid] = threading.Event()  # this time they are late: radio, with the rules
+    assert [t['id'] for t in hub.station_more(sid, 5)] == [radio]
+    hub._curating.pop(sid)
