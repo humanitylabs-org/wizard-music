@@ -70,7 +70,7 @@ const server = createServer(async (request, response) => {
     if (url.pathname === `${BASE}/api/view/switches` && (request.method === 'GET' || request.method === 'HEAD')) { sendJson(response, 200, { switches: switchesDoc().switches.map(({ id, on }) => ({ id, on })) }); return }
     // The page's Phone music apps card (wizard-music#92): whether it shows, and the address to type into the app.
     if (url.pathname === `${BASE}/api/view/navidrome` && (request.method === 'GET' || request.method === 'HEAD')) { const on = navidromeOn(); sendJson(response, 200, { on, bundled: Boolean(NAVIDROME), server: on && NAVIDROME ? serverAddress(request, BASE) : '' }); return }
-    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.26', release: process.env.WIZARD_MUSIC_RELEASE || 'development', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
+    if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.27', release: process.env.WIZARD_MUSIC_RELEASE || 'development', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
     if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT, { curated: curated() }); return }
     if (url.pathname === BASE) { response.writeHead(308, { Location: `${BASE}/` }); response.end(); return }
     if (!url.pathname.startsWith(`${BASE}/`)) { sendJson(response, 404, { error: 'not_found' }); return }
