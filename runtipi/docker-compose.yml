@@ -25,12 +25,50 @@ services:
       WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
       # The App Manager's read-only /wizard grants directory: where the Connection Router answers (wizard-music#90).
       WIZARD_GRANTS_FILE: /wizard/grants.json
+      # Navidrome, below (wizard-music#92, switch navidrome, off by default): Music's library backend and the Subsonic
+      # API for phone music apps, at /wizard-music/rest/ behind Music's own address.
+      WIZARD_MUSIC_NAVIDROME_URL: http://navidrome:4533/wizard-music
     volumes:
       - ${APP_DATA_DIR}/data:/data
       - ${APP_DATA_DIR}/music:/music:ro
     x-runtipi:
       is_main: true
       internal_port: 9205
+  navidrome:
+    # Unmodified Navidrome (https://www.navidrome.org, GPL-3.0), pinned by digest (wizard-music#92). It reads the same
+    # music folder (read-only) and keeps its database in Music's data folder (start.py makes data/navidrome for it).
+    # No published port: only Music's own containers reach it, on the app's network. Music's app server passes the
+    # Subsonic API (/wizard-music/rest/*) on for the owner's phone apps; Navidrome's web pages are never passed on.
+    # It trusts the user header from those private addresses only, so no password is kept anywhere.
+    image: docker.io/deluan/navidrome:0.64.2@sha256:38dc2727bfcfd5ede290f8ada114fc90368146f265ae4701ddddbcbe2a44ee52
+    restart: unless-stopped
+    user: '1000:1000'
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+    pids_limit: 256
+    mem_limit: 768m
+    depends_on:
+      wizard-music: {condition: service_healthy}
+    environment:
+      ND_MUSICFOLDER: /music
+      ND_DATAFOLDER: /data
+      ND_BASEURL: /wizard-music
+      ND_EXTAUTH_USERHEADER: X-Wizard-Navidrome-User
+      ND_EXTAUTH_TRUSTEDSOURCES: 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+      # Real file paths, so Music gives each song the same id as before (likes, history and playlists stay put).
+      ND_SUBSONIC_DEFAULTREPORTREALPATH: 'true'
+      # Nothing leaves the box: no usage reports, no Last.fm, ListenBrainz or Spotify lookups.
+      ND_ENABLEINSIGHTSCOLLECTOR: 'false'
+      ND_ENABLEEXTERNALSERVICES: 'false'
+      ND_LASTFM_ENABLED: 'false'
+      ND_LISTENBRAINZ_ENABLED: 'false'
+      ND_ENABLESHARING: 'false'
+      ND_LOGLEVEL: warn
+    volumes:
+      - ${APP_DATA_DIR}/data/navidrome:/data
+      - ${APP_DATA_DIR}/music:/music:ro
 x-runtipi:
   schema_version: 2
   overrides: []

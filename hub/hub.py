@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # identify.py lives beside the hub, however it is loaded
 import identify  # noqa: E402
+import navidrome  # noqa: E402  (wizard-music#92: Navidrome as the library backend, switch navidrome)
 
 HOST = os.environ.get("WIZARD_MUSIC_HUB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("WIZARD_MUSIC_HUB_PORT", "8793"))
@@ -185,6 +186,9 @@ def db(sql: str, args: tuple = (), many: bool = False):
         rows = cur.fetchall()
         _db.commit()
         return rows
+
+
+navidrome.setup(sys.modules[__name__])
 
 
 # ---------------------------------------------------------------- Saved URL playlists / long mixes
@@ -567,13 +571,34 @@ def scan_library() -> int:
     return len(seen)
 
 
+_library_kick = threading.Event()
+
+
+def refresh_library() -> int:
+    """Navidrome's library while its switch is on (wizard-music#92), else Music's own scan of the folder. When
+    Navidrome doesn't answer, Music scans the folder itself, so the library never goes away."""
+    if navidrome.active():
+        try:
+            return navidrome.sync(sys.modules[__name__])
+        except navidrome.Unavailable as exc:
+            print("navidrome sync failed, scanning the folder", exc, file=sys.stderr)
+    return scan_library()
+
+
+def kick_library():
+    """A playlist or like changed: copy it to Navidrome now, not at the next minute."""
+    if navidrome.active():
+        _library_kick.set()
+
+
 def _library_loop():
     while True:
         try:
-            scan_library()
+            refresh_library()
         except Exception as exc:  # keep scanning
             print("library scan failed", exc, file=sys.stderr)
-        time.sleep(60)
+        _library_kick.wait(60)
+        _library_kick.clear()
 
 
 # ---------------------------------------------------------------- Track model
@@ -2928,6 +2953,8 @@ def art_bytes(tid: str) -> tuple[bytes, str] | None:
             return None
         with online_urlopen(urllib.request.Request(url, headers={"User-Agent": "WizardMusic/1"}), timeout=10) as r:
             data = r.read(2_000_000)
+    elif tid.startswith("lib:") and navidrome.active() and LIB_ID.match(tid[4:]) and (data := navidrome.art(sys.modules[__name__], tid)):
+        pass  # the cover Navidrome found (embedded or a folder image), wizard-music#92
     elif tid.startswith("lib:"):
         try:
             from tinytag import TinyTag
@@ -2977,6 +3004,7 @@ def home() -> dict:
     return {
         "settings": online_settings(),
         "sources": [source_card(x) for x in sources_status()] + [
+            navidrome.card(count) if navidrome.switch_on() else
             {"id": "library", "name": "Wizard Library", "status": "connected", "detail": f"{count} track{'s' if count != 1 else ''} on your Wizard", "ok": True},
         ],
         "vibes": ([{"id": f"mix-{m['key'].replace(' ', '-')}", "label": m["name"], "count": len(m["ids"])} for m in mixes()]
@@ -3111,13 +3139,17 @@ class Handler(BaseHTTPRequestHandler):
                     return self._json(400, {'error': str(exc)})
             if url.path == '/api/song-playlists':
                 try:
-                    return self._json(200, create_song_playlist(body))
+                    made = create_song_playlist(body)
+                    kick_library()
+                    return self._json(200, made)
                 except ValueError as exc:
                     return self._json(400, {'error': str(exc)})
             song = re.fullmatch(r'/api/song-playlists/([a-f0-9]{24})(?:/(add|remove|delete))?', url.path)
             if song:
                 try:
-                    return self._json(200, update_song_playlist(song[1], body, song[2] or 'update'))
+                    changed = update_song_playlist(song[1], body, song[2] or 'update')
+                    kick_library()
+                    return self._json(200, changed)
                 except LookupError:
                     return self._json(404, {'error': 'Playlist not found.'})
                 except ValueError as exc:
@@ -3175,6 +3207,8 @@ class Handler(BaseHTTPRequestHandler):
                     db("INSERT INTO feedback_log(id,at,action) VALUES(?,?,?)", (tid, time.time(), action))
                     _collections_cache["at"] = 0.0
                     taste_changed()
+                    if tid.startswith("lib:"):
+                        kick_library()
                     if action == "dislike":
                         learned = learn_dislike(tid)
                     elif action == "like":
@@ -3195,7 +3229,7 @@ class Handler(BaseHTTPRequestHandler):
                         drop.append(uid)
                 return self._json(200, {"ok": True, "track": track(tid), "drop": drop, "learned": learned})
             if url.path == "/api/scan":
-                return self._json(200, {"tracks": scan_library()})
+                return self._json(200, {"tracks": refresh_library()})
             return self._json(404, {"error": "not_found"})
         except LookupError as exc:
             return self._json(404, {"error": str(exc)})
@@ -3209,8 +3243,35 @@ class Handler(BaseHTTPRequestHandler):
         if tid.startswith("yt:") and self.headers.get("X-Wizard-Music-Live") == "1":
             got = live_audio(tid[3:])
             return self._stream_live(got) if isinstance(got, LiveDownload) else self._stream_file(got)
+        if tid.startswith("lib:") and LIB_ID.match(tid[4:]) and navidrome.active() and self._stream_navidrome(tid):
+            return
         path = audio_path(tid)
         return self._stream_file(path)
+
+    def _stream_navidrome(self, tid: str) -> bool:
+        """A library song's bytes from Navidrome (wizard-music#92), Range and all. False: play the file directly."""
+        up = navidrome.open_stream(sys.modules[__name__], tid, self.headers.get("Range") or "")
+        if up is None:
+            return False
+        with up:
+            status = getattr(up, "status", None) or getattr(up, "code", 200)
+            self.send_response(status)
+            for name in ("Content-Type", "Content-Length", "Content-Range", "Accept-Ranges", "ETag", "Last-Modified"):
+                if up.headers.get(name):
+                    self.send_header(name, up.headers[name])
+            self.send_header("Cache-Control", "private, max-age=86400")
+            self.end_headers()
+            if self.command == "HEAD" or status == 416:
+                return True
+            while True:
+                chunk = up.read(256 * 1024)
+                if not chunk:
+                    break
+                try:
+                    self.wfile.write(chunk)
+                except (BrokenPipeError, ConnectionResetError):
+                    break
+        return True
 
     def _stream_live(self, dl: LiveDownload):
         """Like _stream_file, for a song still downloading: its full size up front, bytes as they arrive."""
@@ -3328,7 +3389,7 @@ def main():
         print("hub binds loopback only", file=sys.stderr)
         sys.exit(1)
     identify.start()
-    scan_library()
+    _quiet(refresh_library)
     threading.Thread(target=_library_loop, daemon=True).start()
     threading.Thread(target=_info_loop, daemon=True).start()
     threading.Thread(target=_style_loop, daemon=True).start()

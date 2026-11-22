@@ -13,7 +13,7 @@ RUN python3 -m venv /opt/hub && /opt/hub/bin/pip install --no-cache-dir -r /opt/
 WORKDIR /app
 COPY --from=build /build/dist ./dist
 COPY server ./server
-COPY hub/hub.py hub/identify.py ./hub/
+COPY hub/hub.py hub/identify.py hub/navidrome.py ./hub/
 COPY hub/recognizers ./hub/recognizers
 RUN mkdir /data /music && chown node:node /data
 USER root
