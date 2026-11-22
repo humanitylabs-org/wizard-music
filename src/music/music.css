@@ -114,6 +114,14 @@ a.music-source:hover { background: color-mix(in srgb, var(--text) 5%, transparen
 .music-consent input:focus-visible { outline: 2px solid var(--wiz); outline-offset: 2px; }
 .music-consent input:disabled { opacity: .6; }
 .music-taste { margin: 0; color: var(--text-dim); font-size: var(--wz-text-sm, .8125rem); }
+/* Phone music apps (wizard-music#92, switch navidrome): the Subsonic address, under Sources. */
+.music-phone-apps { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid var(--line); border-radius: 18px; }
+.music-phone-apps strong { font-size: 1rem; font-weight: 650; }
+.music-phone-apps p { margin: 0; color: var(--text-2); font-size: var(--wz-text-sm, .8125rem); line-height: 1.5; }
+.music-phone-apps dl { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; margin: 0; font-size: var(--wz-text-sm, .8125rem); }
+.music-phone-apps dt { color: var(--text-dim); }
+.music-phone-apps dd { margin: 0; color: var(--text); overflow-wrap: anywhere; }
+.music-phone-apps code { font-family: var(--wz-font-mono, ui-monospace, monospace); user-select: all; }
 
 .music-icon-button { flex: none; display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 50%; background: none; color: var(--text-2); }
 .music-icon-button.big { width: 56px; height: 56px; color: var(--text); }
@@ -130,7 +138,7 @@ a.music-source:hover { background: color-mix(in srgb, var(--text) 5%, transparen
   .music-station { min-height: 76px; }
   .music-list { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; }
   .music-foot { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; column-gap: 24px; }
-  .music-foot > .music-taste, .music-foot > .music-consent { grid-column: 1 / -1; }
+  .music-foot > .music-taste, .music-foot > .music-consent, .music-foot > .music-phone-apps { grid-column: 1 / -1; }
 }
 @container musicmain (min-width: 1100px) {
   .music-shelf { grid-auto-columns: 196px; }
