@@ -25,11 +25,10 @@ const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; ch
 const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'self'"
 
 const tickets = createMediaTickets({ secret: process.env.WIZARD_MUSIC_HUB_TOKEN || '', base: BASE })
-const curated = () => switchOn('curated-radio')   // More like this stations (wizard-music#90)
 const navidromeOn = () => switchOn('navidrome')   // Navidrome as the library backend, Subsonic for phone apps (wizard-music#92)
 const NAVIDROME = process.env.WIZARD_MUSIC_NAVIDROME_URL || ''
 const handleSubsonic = createSubsonicProxy({ origin: NAVIDROME, base: BASE, on: navidromeOn })
-const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '', tickets, curated })
+const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '', tickets })
 
 function sendJson(response, status, value) {
   const raw = Buffer.from(JSON.stringify(value))
@@ -71,7 +70,7 @@ const server = createServer(async (request, response) => {
     // The page's Phone music apps card (wizard-music#92): whether it shows, and the address to type into the app.
     if (url.pathname === `${BASE}/api/view/navidrome` && (request.method === 'GET' || request.method === 'HEAD')) { const on = navidromeOn(); sendJson(response, 200, { on, bundled: Boolean(NAVIDROME), server: on && NAVIDROME ? serverAddress(request, BASE) : '' }); return }
     if (url.pathname === '/health' || url.pathname === `${BASE}/api/status`) { sendJson(response, 200, { ok: true, app: 'wizard-music', version: '0.2.0-test.28', release: process.env.WIZARD_MUSIC_RELEASE || 'development', configured, setup: configured ? 'ready' : 'backend-unavailable' }); return }
-    if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT, { curated: curated() }); return }
+    if (url.pathname === '/mcp') { await handleMcp(request, response, sendJson, PORT); return }
     if (url.pathname === BASE) { response.writeHead(308, { Location: `${BASE}/` }); response.end(); return }
     if (!url.pathname.startsWith(`${BASE}/`)) { sendJson(response, 404, { error: 'not_found' }); return }
     const sub = url.pathname.slice(BASE.length)

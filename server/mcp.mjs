@@ -35,7 +35,7 @@ export function songPlaylistRequest(name,a){
  if(name==='playlist_update') return Object.keys(body).length?{path:'/'+a.id,body}:null
  return {path:'/'+a.id+(name==='playlist_add_tracks'?'/add':'/remove'),body}
 }
-// More like this stations (wizard-music#90, switch curated-radio): listed and callable only while the switch is on.
+// More like this stations (wizard-music#90, on for everyone).
 const curateTool={name:'station_curate',description:'Owner-requested: start a "more like this" station in Music from one song: the owner\'s AI writes a sound profile of it and Music queues matching songs it can really play. Give track_id (from music_search or music_home) or query ("Trap Gui Boratto"), and note with the owner\'s own words about what they love in it. Returns the station title, its profile, the first 10 tracks read back from Music and an open link that plays it in Music; give the owner that link.',inputSchema:{type:'object',properties:{track_id:SONG_ID,query:{type:'string',minLength:1,maxLength:200},note:{type:'string',maxLength:500}},additionalProperties:false}}
 /** The hub body for station_curate, or null when the arguments are invalid. */
 export function curateRequest(a){
@@ -46,7 +46,7 @@ export function curateRequest(a){
  if(!a.track_id===!a.query) return null   // exactly one of track_id or query
  return {curate:true,...(a.track_id?{trackId:a.track_id}:{query:a.query.trim()}),...(a.note?{note:a.note}:{})}
 }
-export async function handleMcp(req,res,send,port,{curated=false}={}) {
+export async function handleMcp(req,res,send,port) {
  if(req.method !== 'POST') { send(res,405,{error:'method'}); return }
  if(!String(req.headers['content-type']).startsWith('application/json')) {send(res,415,{error:'json_required'});return}
  let size=0, chunks=[]
@@ -57,10 +57,10 @@ export async function handleMcp(req,res,send,port,{curated=false}={}) {
  const answer=result=>send(res,200,{jsonrpc:'2.0',id:m.id,result})
  if(m.method==='initialize'){answer({protocolVersion:'2024-11-05',capabilities:{tools:{}},serverInfo:{name:'wizard-music',version:'0.1.0'}});return}
  if(m.method==='ping'){answer({});return}
- if(m.method==='tools/list'){answer({tools:[...tools,...songTools,...(curated?[curateTool]:[])]});return}
+ if(m.method==='tools/list'){answer({tools:[...tools,...songTools,curateTool]});return}
  if(m.method!=='tools/call'){send(res,200,{jsonrpc:'2.0',id:m.id,error:{code:-32601,message:'Method not found'}});return}
  const name=m.params?.name, a=m.params?.arguments||{}
- if(name==='station_curate'&&curated){
+ if(name==='station_curate'){
   const body=curateRequest(a)
   if(!body){send(res,200,{jsonrpc:'2.0',id:m.id,error:{code:-32602,message:'Give track_id or query (one of them), and optionally note'}});return}
   const base=`http://127.0.0.1:${port}/wizard-music/api/station`
