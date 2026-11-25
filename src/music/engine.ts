@@ -1,5 +1,5 @@
 import { hostedAudioBridge } from './backgroundAudio'
-import { activeLevel, clampLevel } from './level'
+import { clampLevel, readLevel } from './level'
 // Wizard Music playback engine.
 //
 // One interface, two implementations:
@@ -588,7 +588,7 @@ export function musicEngine(): MusicEngine {
   if (engine) return engine
   const bridge = typeof window !== 'undefined' ? (window.WizardNativeMusic ||= hostedAudioBridge()) : undefined
   engine = bridge && typeof bridge.postMessage === 'function' ? new NativeEngine(bridge, browserSessionStore()) : new WebEngine(undefined, undefined, browserSessionStore())
-  engine.setLevel(activeLevel(browserSessionStore()))
+  engine.setLevel(readLevel(browserSessionStore()))
   return engine
 }
 export function browserSessionStore(): SessionStore | null {

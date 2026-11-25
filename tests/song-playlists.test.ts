@@ -41,10 +41,10 @@ it('clears a stored song-playlists value and keeps the live switches', async () 
   const before = process.env.WIZARD_SWITCHES_DIR
   process.env.WIZARD_SWITCHES_DIR = dir
   try {
-    writeFileSync(join(dir, 'switches.json'), JSON.stringify({ 'song-playlists': true, 'music-level': true }))
+    writeFileSync(join(dir, 'switches.json'), JSON.stringify({ 'song-playlists': true, 'navidrome': true }))
     const { pruneSwitches, switchesDoc } = await import('../server/switches.mjs')
     expect(pruneSwitches()).toBe(true)
-    expect(JSON.parse(readFileSync(join(dir, 'switches.json'), 'utf8'))).toEqual({ 'music-level': true })
+    expect(JSON.parse(readFileSync(join(dir, 'switches.json'), 'utf8'))).toEqual({ 'navidrome': true })
     expect(pruneSwitches()).toBe(false)
     expect(switchesDoc().switches.map((s: { id: string }) => s.id)).not.toContain('song-playlists')
   } finally { if (before === undefined) delete process.env.WIZARD_SWITCHES_DIR; else process.env.WIZARD_SWITCHES_DIR = before }

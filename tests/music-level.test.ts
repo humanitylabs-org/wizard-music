@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
-// Music level (wizard-music#35): a Music-only ceiling under the phone volume, behind the box switch `music-level`.
+// Music level (wizard-music#35): a Music-only ceiling under the phone volume, on for everyone (its switch `music-level` was removed).
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { NativeEngine, WebEngine } from '../src/music/engine'
-import { activeLevel, cacheSwitches, clampLevel, fetchSwitches, LEVEL_KEY, LEVEL_SWITCH, readLevel, writeLevel } from '../src/music/level'
+import { clampLevel, fetchSwitches, LEVEL_KEY, readLevel, writeLevel } from '../src/music/level'
 import { runMusicCommand } from '../src/music/voice'
 import { resetMusicEngineForTests } from '../src/music/engine'
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
@@ -28,11 +28,10 @@ const volumes = (sent: Record<string, unknown>[]) => sent.filter((s) => s.method
 
 afterEach(() => { resetMusicEngineForTests(null); vi.unstubAllGlobals() })
 
-describe('the music-level switch', () => {
-  it('is declared off by default and linked to this issue', () => {
-    const row = SWITCHES.find((s: { id: string }) => s.id === LEVEL_SWITCH)
-    expect(row).toMatchObject({ id: 'music-level', default: false, issues: ['humanitylabs-org/wizard-music#35'] })
-    expect(switchesDoc().switches.find((s: { id: string }) => s.id === LEVEL_SWITCH)?.on).toBe(false)
+describe('the music level is on for everyone', () => {
+  it('has no switch left', () => {
+    expect(SWITCHES.find((s: { id: string }) => s.id === 'music-level')).toBeUndefined()
+    expect(switchesDoc().switches.find((s: { id: string }) => s.id === 'music-level')).toBeUndefined()
   })
 
   it('reads the box state the page sees', async () => {
@@ -54,14 +53,10 @@ describe('the stored level', () => {
     expect(clampLevel('junk')).toBe(1)
   })
 
-  it('applies only while the switch is on', () => {
+  it('applies with no switch state at all', () => {
     const store = memory()
     writeLevel(store, 0.3)
-    expect(activeLevel(store)).toBe(1)
-    cacheSwitches(store, { [LEVEL_SWITCH]: true })
-    expect(activeLevel(store)).toBe(0.3)
-    cacheSwitches(store, { [LEVEL_SWITCH]: false })
-    expect(activeLevel(store)).toBe(1)
+    expect(readLevel(store)).toBe(0.3)
   })
 })
 
