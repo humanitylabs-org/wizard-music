@@ -304,8 +304,7 @@ export function PhoneApps() {
   </section>
 }
 
-// ---- More like this stations (wizard-music#90, switch curated-radio) ----------------------------------------------
-export const CURATED_SWITCH = 'curated-radio'
+// ---- More like this stations (wizard-music#90) -----------------------------------------------------------------
 type StationHead = Pick<MusicStation, 'picks' | 'profile'>
 const stationHeads = new Map<string, StationHead>()
 const headListeners = new Set<() => void>()
@@ -777,7 +776,6 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
   const [showPlayed, setShowPlayedState] = useState(() => { try { return localStorage.getItem(SHOW_PLAYED_KEY) === '1' } catch { return false } })
   const sheet = useRef<HTMLDivElement>(null)
   useSwipeDownToClose(sheet, onClose)
-  const curatedOn = useSwitchOn(CURATED_SWITCH)
   const head = useStationHead(snapshot.station)
   const headLine = stationLine(head)
   const [likeThis, setLikeThis] = useState('')
@@ -815,7 +813,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
   const duration = snapshot.durationMs || track.durationMs
   const position = scrub ?? snapshot.positionMs
 
-  // More like this (switch curated-radio): a new station from this song, picked by the owner's AI.
+  // More like this (wizard-music#90): a new station from this song, picked by the owner's AI.
   const moreLikeThis = async () => {
     if (likeThis) return
     setLikeThis(track.id)
@@ -875,7 +873,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
           {played.map(({ item, position: at }) => <TrackRow key={`${item.id}-${at}`} track={item} played onPlay={() => engine.jump(at)} />)}
           <TrackRow track={track} active onPlay={() => undefined} />
         </div>}
-        <div className="music-section-head"><h3>Up next</h3>{snapshot.station && <small>Endless · keeps going</small>}{curatedOn && <button type="button" className="music-pill music-more-like" disabled={Boolean(likeThis)} aria-busy={Boolean(likeThis)} onClick={() => void moreLikeThis()}>{likeThis ? <LoadingWheel label="Starting" /> : <PlayGlyph size={14} />}More like this</button>}</div>
+        <div className="music-section-head"><h3>Up next</h3>{snapshot.station && <small>Endless · keeps going</small>}<button type="button" className="music-pill music-more-like" disabled={Boolean(likeThis)} aria-busy={Boolean(likeThis)} onClick={() => void moreLikeThis()}>{likeThis ? <LoadingWheel label="Starting" /> : <PlayGlyph size={14} />}More like this</button></div>
         {upNext.map(({ item, position: at }) => <TrackRow key={`${item.id}-${at}`} track={item} onPlay={() => engine.jump(at)} />)}
         {!upNext.length && <p className="music-empty" role="status">{head?.picks === 'pending' ? 'Picking songs like this…' : snapshot.station ? 'Finding more…' : 'End of queue.'}</p>}
       </section>

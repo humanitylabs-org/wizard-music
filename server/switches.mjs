@@ -13,7 +13,6 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export const SWITCHES = [
-  { id: 'curated-radio', name: 'More like this stations', description: "A song's station is picked by your AI: a short sound profile of the song and songs that match it, instead of plain YouTube Music radio. Off-style tracks (anime, scores, lo-fi) stay out, the seed's artist at most twice in 15. Without an AI connection it falls back to radio with the same rules.", default: false, issues: ['humanitylabs-org/wizard-music#90'] },
   { id: 'navidrome', name: 'Navidrome library', description: 'Your own music files play from Navidrome, bundled with Music, instead of Music reading the folder itself. Your playlists and liked songs are copied into it, and any Subsonic phone app (Symfonium, Substreamer, play:Sub, Amperfy) can play your library over your tailnet. YouTube Music works as before. Off: Music reads the folder again, nothing lost.', default: false, issues: ['humanitylabs-org/wizard-music#92'] },
 ]
 const CONTRACT = 'wizard.app-switches/1'

@@ -1829,7 +1829,7 @@ def _radio_from(tid: str) -> list[str]:
 def create_station(seed: dict) -> dict:
     tid = seed.get("trackId") or ""
     title = ""
-    if seed.get("curate"):  # switch curated-radio: a song station picked by the owner's AI (wizard-music#90)
+    if seed.get("curate"):  # a song station picked by the owner's AI (wizard-music#90)
         if not tid and seed.get("query"):
             results = search(str(seed["query"])[:200])
             if not results:
@@ -2072,7 +2072,7 @@ def station_more(sid: str, n: int, request_id: str = "") -> list[dict]:
 
 
 # ---------------------------------------------------------------- Curated stations (wizard-music#90)
-# Switch curated-radio (the app server sends X-Wizard-Music-Curated: 1 only while it is on). A song station asks the
+# On for everyone (the app server sends X-Wizard-Music-Curated: 1 on every station start). A song station asks the
 # owner's AI, through the Connection Router, for a short sound profile of the seed and songs that match it, picked
 # from YouTube Music's radio for the seed plus its own suggestions. Music resolves every suggestion with its own search
 # and drops what it cannot find, so nothing unplayable is queued. Coherence rules (station_rule) apply to the AI's list
@@ -3166,7 +3166,7 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/settings":
                 return self._json(200, set_online(body.get("online")))
             if url.path == "/api/station":
-                # The app server sends X-Wizard-Music-Curated only while the curated-radio switch is on: then a
+                # The app server sends X-Wizard-Music-Curated on every station start (on for everyone): then a
                 # tapped song (or an explicit curate request) starts an AI-picked station (wizard-music#90).
                 plain_tap = bool(body.get("trackId")) and not any(body.get(k) for k in ("label", "queue", "pool", "query"))
                 curate_on = self.headers.get("X-Wizard-Music-Curated") == "1"

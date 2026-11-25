@@ -38,7 +38,7 @@ voice_routes:
     rest_param: q
 needs: []
 uses: [music-source]
-# More like this stations (wizard-music#90, switch curated-radio, off by default): the one AI need, reached through the
+# More like this stations (wizard-music#90, on for everyone): the one AI need, reached through the
 # Connection Router (wizard-os spec/CONNECTION_ROUTER.md). Optional: without it a station is plain radio.
 requires:
   models:
