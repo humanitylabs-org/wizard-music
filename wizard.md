@@ -2,7 +2,7 @@
 wizard: 0.2
 id: wizard-music
 name: Music
-version: 0.2.0-test.28
+version: 0.2.0-test.29
 type: service
 category: app
 voice_names: [music, songs, music player, wizard music]
