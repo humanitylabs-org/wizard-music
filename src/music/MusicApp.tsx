@@ -7,7 +7,7 @@ import { SwipeDeck, type SwipeDirection } from './swipe'
 import { Playlists } from './Playlists'
 import { AddGlyph, SongPlaylists } from './SongPlaylists'
 import { songPlaylistControl } from './songPlaylists'
-import { cacheSwitches, cachedSwitches, fetchSwitches, LEVEL_SWITCH, LEVEL_MIN, readLevel, writeLevel, type SwitchStates } from './level'
+import { cacheSwitches, cachedSwitches, fetchSwitches, LEVEL_MIN, readLevel, writeLevel, type SwitchStates } from './level'
 import { leaveEntry, likedBack, searchBack } from './back'
 import './music.css'
 
@@ -122,8 +122,6 @@ export function refreshSwitches(): Promise<void> {
     if (!states || ticket !== switchesAsked) return
     switchStates = states
     cacheSwitches(browserSessionStore(), states)
-    // Switch on: the stored level applies; switch off: back to full level.
-    createdEngine?.setLevel?.(states[LEVEL_SWITCH] === true ? readLevel(browserSessionStore()) : 1)
     switchListeners.forEach((listener) => listener())
   })
 }
@@ -779,7 +777,6 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
   const [showPlayed, setShowPlayedState] = useState(() => { try { return localStorage.getItem(SHOW_PLAYED_KEY) === '1' } catch { return false } })
   const sheet = useRef<HTMLDivElement>(null)
   useSwipeDownToClose(sheet, onClose)
-  const levelOn = useSwitchOn(LEVEL_SWITCH)
   const curatedOn = useSwitchOn(CURATED_SWITCH)
   const head = useStationHead(snapshot.station)
   const headLine = stationLine(head)
@@ -869,7 +866,7 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
       {snapshot.buffering && (snapshot.wantPlaying ?? true) && !snapshot.error && longStart(track) && <p className="music-status music-long-note" role="status">Getting this mix ready. Long mixes can take up to a minute the first time.</p>}
       {snapshot.error && <p className="music-status" role="status">{snapshot.error}</p>}
       {snapshot.error && !(snapshot.wantPlaying ?? snapshot.playing) && !snapshot.buffering && <button type="button" className="music-pill music-retry" onClick={() => engine.jump(snapshot.index)}>Try again</button>}
-      {levelOn && <MusicLevel engine={engine} />}
+      <MusicLevel engine={engine} />
       <section className="music-upnext" aria-label="Queue">
         {played.length > 0 && <button type="button" className={`music-played-toggle${showPlayed ? ' open' : ''}`} aria-expanded={showPlayed} onClick={() => setShowPlayed(!showPlayed)}>
           <span>{showPlayed ? 'Hide played' : `Played · ${played.length}`}</span><ChevronDown />
