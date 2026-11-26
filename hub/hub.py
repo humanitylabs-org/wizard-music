@@ -2581,9 +2581,23 @@ _dl_locks: dict[str, threading.Lock] = {}
 _dl_guard = threading.Lock()
 
 
-def _cache_path(vid: str) -> Path | None:
+# Opus audio (wizard-os#820, switch opus-audio): the app server asks for YouTube's Opus stream (X-Wizard-Music-Codec:
+# opus) only for a player that can decode it. Each song then has two cache variants side by side: <id>.m4a (AAC, every
+# player, as before) and <id>.webm (Opus). An AAC request never gets the webm, so Safari and Apple's players stay safe.
+CODEC_EXTS = {"aac": ("m4a", "mp3"), "opus": ("webm", "opus")}
+_no_opus: set[str] = set()  # songs YouTube has no Opus for: the connector sent AAC, so an Opus request reuses <id>.m4a
+_prefetch_codec = ["aac"]  # the variant the last player asked for, so songs fetched ahead match it
+
+
+def _codec(value) -> str:
+    return "opus" if value == "opus" else "aac"
+
+
+def _cache_path(vid: str, codec: str = "aac") -> Path | None:
     base = os.path.realpath(str(CACHE)) + os.sep
-    for ext in ("m4a", "webm", "opus", "mp3"):
+    if codec == "opus" and vid in _no_opus:
+        codec = "aac"
+    for ext in CODEC_EXTS[_codec(codec)]:
         # Checked inline (not via a helper) so code scanning sees the guard on every caller.
         full = os.path.realpath(str(CACHE / f"{vid}.{ext}"))
         if not full.startswith(base):
@@ -2687,9 +2701,11 @@ class LiveDownload:
         self.written = 0
         self.done = self.failed = self.attached = self.remuxing = False
 
-    def begin(self, path: Path, total: int | None):
+    ctype: str | None = None  # what the source sent, for an Opus download (wizard-os#820); None: audio/mp4 as before
+
+    def begin(self, path: Path, total: int | None, ctype: str | None = None):
         with self.cond:
-            self.path, self.total, self.written = path, total, 0
+            self.path, self.total, self.written, self.ctype = path, total, 0, ctype
             self.cond.notify_all()
 
     def grew(self, n: int):
@@ -2732,48 +2748,60 @@ def _live_kept(vid: str) -> bool:
     return time.time() - _live_read.get(vid, 0.0) < LIVE_KEEP_SECONDS
 
 
-def fetch_audio(vid: str, live: bool = False) -> Path:
+def _variant(vid: str, codec: str) -> str:
+    """Lock and live-download key of one cache variant: the plain id for AAC (as before), <id>.opus for Opus."""
+    return f"{vid}.opus" if codec == "opus" else vid
+
+
+def fetch_audio(vid: str, live: bool = False, codec: str = "aac") -> Path:
     if not ONLINE:
         raise LookupError("online sources disabled")
     m = YT_ID.fullmatch(vid or "")
     if not m:
         raise LookupError("bad id")
     vid = m.group(0)  # only [A-Za-z0-9_-]{11} from here on; never a path
-    hit = _cache_path(vid)
+    codec = _codec(codec)
+    key = _variant(vid, codec)
+    hit = _cache_path(vid, codec)
     if hit and (hit.name in _remux_failed or _live_kept(vid) or not is_fragmented_mp4(hit)):
         os.utime(hit)
         return hit
     with _dl_guard:
-        lock = _dl_locks.setdefault(vid, threading.Lock())
+        lock = _dl_locks.setdefault(key, threading.Lock())
     with lock:
         with _dl_guard:
-            dl = _live.setdefault(vid, LiveDownload())
+            dl = _live.setdefault(key, LiveDownload())
         made = None
         try:
-            made = _download_locked(vid, live, dl)
+            made = _download_locked(vid, live, dl, codec)
             return made
         finally:
             with _dl_guard:
-                if _live.get(vid) is dl:
-                    del _live[vid]
+                if _live.get(key) is dl:
+                    del _live[key]
             dl.finish(made)
 
 
-def _download_locked(vid: str, live: bool, dl: LiveDownload) -> Path:
-    hit = _cache_path(vid)
+def _download_locked(vid: str, live: bool, dl: LiveDownload, codec: str = "aac") -> Path:
+    hit = _cache_path(vid, codec)
     if hit:
         # Songs cached before the fix are still fragmented; fix each once, on its next play.
         return remux_plain(hit) if dl.claim_remux(vid) else hit
-    full = os.path.realpath(str(CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.m4a"))
+    opus = codec == "opus"
+    full = os.path.realpath(str(CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.{'webm' if opus else 'm4a'}"))
     if not full.startswith(os.path.realpath(str(CACHE)) + os.sep):
         raise LookupError("bad id")
     tmp = Path(full)
-    url = source_for(f"yt:{vid}").rstrip("/") + f"/api/music/audio/{vid}" + ("?live=1" if live else "")
+    query = "&".join(([] if not live else ["live=1"]) + (["codec=opus"] if opus else []))
+    url = source_for(f"yt:{vid}").rstrip("/") + f"/api/music/audio/{vid}" + (f"?{query}" if query else "")
+    sent_aac = False
     for attempt in range(len(AUDIO_RETRY_DELAYS) + 1):
         try:
             with online_urlopen(url, timeout=170) as r, tmp.open("wb") as out:
                 length = r.headers.get("Content-Length") or ""
-                dl.begin(tmp, int(length) if length.isdigit() else None)
+                ctype = (r.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+                sent_aac = opus and ctype == "audio/mp4"  # YouTube has no Opus for this song: the connector sent AAC
+                dl.begin(tmp, int(length) if length.isdigit() else None, (ctype or "audio/webm") if opus else None)
                 read = getattr(r, "read1", r.read)
                 while chunk := read(262144):
                     out.write(chunk)
@@ -2796,6 +2824,16 @@ def _download_locked(vid: str, live: bool, dl: LiveDownload) -> Path:
     if not ONLINE or tmp.stat().st_size == 0:
         tmp.unlink(missing_ok=True)
         raise RuntimeError("download failed")
+    if sent_aac:
+        full = os.path.realpath(str(CACHE / f".{vid}.{uuid.uuid4().hex[:6]}.m4a"))
+        if not full.startswith(os.path.realpath(str(CACHE)) + os.sep):
+            raise LookupError("bad id")
+        aac = Path(full)
+        with dl.cond:
+            tmp.replace(aac)  # under the lock, so a live reader that misses the old name finds dl.final below
+            dl.path = aac
+        tmp = aac
+        _no_opus.add(vid)
     made = [remux_plain(tmp) if dl.claim_remux(vid) else tmp]
     final = CACHE / f"{vid}{made[0].suffix}"
     with dl.cond:
@@ -2805,7 +2843,7 @@ def _download_locked(vid: str, live: bool, dl: LiveDownload) -> Path:
     return final
 
 
-def live_audio(vid: str) -> Path | LiveDownload:
+def live_audio(vid: str, codec: str = "aac") -> Path | LiveDownload:
     """The song file, or its running download once the first bytes are in (wizard-music#46)."""
     if not ONLINE:
         raise LookupError("online sources disabled")
@@ -2813,16 +2851,18 @@ def live_audio(vid: str) -> Path | LiveDownload:
     if not m:
         raise LookupError("bad id")
     vid = m.group(0)
+    codec = _codec(codec)
+    key = _variant(vid, codec)
     _live_read[vid] = time.time()  # first: no rewrite may start under this player from now on
     with _dl_guard:
-        dl = _live.get(vid)
-        if dl is None and not _cache_path(vid):
-            dl = _live[vid] = LiveDownload()
-            threading.Thread(target=_live_worker, args=(vid, dl), daemon=True).start()
+        dl = _live.get(key)
+        if dl is None and not _cache_path(vid, codec):
+            dl = _live[key] = LiveDownload()
+            threading.Thread(target=_live_worker, args=(vid, dl, codec), daemon=True).start()
     if dl is None or not dl.attach():
         if dl is not None:
             dl.wait(lambda: False, 300)
-        return fetch_audio(vid)
+        return fetch_audio(vid, codec=codec)
     dl.wait(lambda: dl.written >= LIVE_FIRST_BYTES, 300)
     if dl.total is None or not dl.written:
         dl.wait(lambda: False, 300)  # no size known: the whole file first, as before
@@ -2834,16 +2874,17 @@ def live_audio(vid: str) -> Path | LiveDownload:
     return dl.final if dl.done else dl
 
 
-def _live_worker(vid: str, dl: LiveDownload):
+def _live_worker(vid: str, dl: LiveDownload, codec: str = "aac"):
     made = None
+    key = _variant(vid, codec)
     try:
-        made = fetch_audio(vid, live=True)
+        made = fetch_audio(vid, live=True, codec=codec)
     except Exception as exc:
         print("live download failed", vid, exc, file=sys.stderr)
     finally:
         with _dl_guard:
-            if _live.get(vid) is dl:
-                del _live[vid]
+            if _live.get(key) is dl:
+                del _live[key]
         dl.finish(made)
 
 
@@ -2913,8 +2954,9 @@ def _evict():
 
 
 def prefetch(tid: str):
-    if ONLINE and tid.startswith("yt:") and not _cache_path(tid[3:]):
-        threading.Thread(target=lambda: _quiet(fetch_audio, tid[3:]), daemon=True).start()
+    codec = _prefetch_codec[0]
+    if ONLINE and tid.startswith("yt:") and not _cache_path(tid[3:], codec):
+        threading.Thread(target=lambda: _quiet(fetch_audio, tid[3:], False, codec), daemon=True).start()
 
 
 def _quiet(fn, *a):
@@ -2924,9 +2966,9 @@ def _quiet(fn, *a):
         print("prefetch failed", a, exc, file=sys.stderr)
 
 
-def audio_path(tid: str) -> Path:
+def audio_path(tid: str, codec: str = "aac") -> Path:
     if tid.startswith("yt:"):
-        return fetch_audio(tid[3:])
+        return fetch_audio(tid[3:], codec=codec)
     if tid.startswith("lib:") and LIB_ID.match(tid[4:]):
         rows = db("SELECT path FROM tracks WHERE id=? AND source='library'", (tid,))
         if rows:
@@ -3240,12 +3282,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(502, {"error": "source_unavailable"})
 
     def _stream(self, tid: str):
+        codec = _codec(self.headers.get("X-Wizard-Music-Codec"))  # opus only when the app server asks (wizard-os#820)
+        if tid.startswith("yt:"):
+            _prefetch_codec[0] = codec
         if tid.startswith("yt:") and self.headers.get("X-Wizard-Music-Live") == "1":
-            got = live_audio(tid[3:])
+            got = live_audio(tid[3:], codec)
             return self._stream_live(got) if isinstance(got, LiveDownload) else self._stream_file(got)
         if tid.startswith("lib:") and LIB_ID.match(tid[4:]) and navidrome.active() and self._stream_navidrome(tid):
             return
-        path = audio_path(tid)
+        path = audio_path(tid, codec)
         return self._stream_file(path)
 
     def _stream_navidrome(self, tid: str) -> bool:
@@ -3276,7 +3321,7 @@ class Handler(BaseHTTPRequestHandler):
     def _stream_live(self, dl: LiveDownload):
         """Like _stream_file, for a song still downloading: its full size up front, bytes as they arrive."""
         size = dl.total
-        span = self._send_range_head(size, "audio/mp4")
+        span = self._send_range_head(size, dl.ctype or "audio/mp4")
         if span is None:
             return
         pos, end = span

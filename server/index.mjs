@@ -28,7 +28,7 @@ const tickets = createMediaTickets({ secret: process.env.WIZARD_MUSIC_HUB_TOKEN 
 const navidromeOn = () => switchOn('navidrome')   // Navidrome as the library backend, Subsonic for phone apps (wizard-music#92)
 const NAVIDROME = process.env.WIZARD_MUSIC_NAVIDROME_URL || ''
 const handleSubsonic = createSubsonicProxy({ origin: NAVIDROME, base: BASE, on: navidromeOn })
-const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '', tickets })
+const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '', tickets, opus: () => switchOn('opus-audio') })
 
 function sendJson(response, status, value) {
   const raw = Buffer.from(JSON.stringify(value))
