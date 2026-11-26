@@ -11,6 +11,7 @@ const UA = {
   chromeAndroid: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Mobile Safari/537.36',
   webviewAndroid: 'Mozilla/5.0 (Linux; Android 14; Pixel 8; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/131.0.0.0 Mobile Safari/537.36 WizardOS-DocScroll',
   androidPlayer: 'WizardBackgroundAudio/1',
+  headless: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/145.0.0.0 Safari/537.36',
   firefox: 'Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0',
   edge: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
   safariMac: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.1 Safari/605.1.15',
@@ -43,7 +44,7 @@ describe('Opus audio (wizard-os#820)', () => {
   })
 
   it('knows which players can decode Opus', () => {
-    for (const ua of [UA.chromeMac, UA.chromeAndroid, UA.webviewAndroid, UA.androidPlayer, UA.firefox, UA.edge]) expect(opusPlayer(ua)).toBe(true)
+    for (const ua of [UA.chromeMac, UA.chromeAndroid, UA.webviewAndroid, UA.androidPlayer, UA.firefox, UA.edge, UA.headless]) expect(opusPlayer(ua)).toBe(true)
     for (const ua of [UA.safariMac, UA.macApp, UA.iphoneSafari, UA.iphoneChrome, UA.iphoneFirefox, UA.iosPlayer, UA.ipadDesktop, '', 'curl/8.5.0']) expect(opusPlayer(ua)).toBe(false)
   })
 

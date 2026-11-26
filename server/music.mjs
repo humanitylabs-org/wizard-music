@@ -46,7 +46,7 @@ export function opusPlayer(userAgent = '') {
   const ua = String(userAgent)
   if (/\bWizardBackgroundAudio\//.test(ua)) return true
   if (/iPhone|iPad|iPod|AppleCoreMedia|CriOS|FxiOS|EdgiOS/.test(ua)) return false
-  return /\b(?:Chrome|Chromium|Firefox)\/\d/.test(ua)
+  return /\b(?:HeadlessChrome|Chrome|Chromium|Firefox)\/\d/.test(ua)
 }
 
 /** @param {{ origin?: string, token?: string, timeoutMs?: number, base?: string, tickets?: { addTickets(text: string): string }, opus?: () => boolean }} [options] */
