@@ -35,8 +35,22 @@ export function rewriteHubPaths(text, base = BASE) {
   return text.split(JSON.stringify(HUB_PREFIX).slice(1, -1)).join(`${base}/`).split(HUB_PREFIX).join(`${base}/`)
 }
 
-/** @param {{ origin?: string, token?: string, timeoutMs?: number, base?: string, tickets?: { addTickets(text: string): string } }} [options] */
-export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000, base: appBase = BASE, tickets } = {}) {
+/**
+ * Opus audio (wizard-os#820): true when the player fetching a song can decode Opus in webm, judged by the User-Agent
+ * of that request, because the player that fetches the bytes is the one that decodes them (the Android app's Media3
+ * player fetches its own songs). Chrome, Edge, Firefox and other Chromium browsers on desktop and Android, Android
+ * WebViews and the Android app's player can. Safari, the Mac app (WebKit), the iPhone/iPad app (AVPlayer, which says
+ * AppleCoreMedia) and every iOS browser can't, and anything unknown stays on AAC.
+ */
+export function opusPlayer(userAgent = '') {
+  const ua = String(userAgent)
+  if (/\bWizardBackgroundAudio\//.test(ua)) return true
+  if (/iPhone|iPad|iPod|AppleCoreMedia|CriOS|FxiOS|EdgiOS/.test(ua)) return false
+  return /\b(?:Chrome|Chromium|Firefox)\/\d/.test(ua)
+}
+
+/** @param {{ origin?: string, token?: string, timeoutMs?: number, base?: string, tickets?: { addTickets(text: string): string }, opus?: () => boolean }} [options] */
+export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000, base: appBase = BASE, tickets, opus = () => false } = {}) {
   const hub = origin ? new URL(origin) : null
   if (hub && (hub.protocol !== 'http:' || hub.hostname !== '127.0.0.1' || hub.pathname !== '/' || hub.search || hub.username)) {
     throw new Error('Wizard Music hub must be an exact loopback HTTP origin')
@@ -54,6 +68,9 @@ export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000,
     // Progressive play (wizard-music#46, on for everyone since it was approved): the hub starts a song while it is
     // still downloading.
     if (route === 'media' && sub.startsWith('/stream/')) headers['X-Wizard-Music-Live'] = '1'
+    // Opus audio (wizard-os#820, switch opus-audio, off by default): YouTube's best signed-out stream (Opus ~130-160k)
+    // instead of AAC 128k, only for a player that can decode it. Off: the hub is asked exactly as before.
+    if (route === 'media' && sub.startsWith('/stream/') && opus() && opusPlayer(request.headers['user-agent'])) headers['X-Wizard-Music-Codec'] = 'opus'
     // More like this stations (wizard-music#90, on for everyone since it was approved): a tapped song starts a
     // station the owner's AI picks.
     if (request.method === 'POST' && sub === '/api/station') headers['X-Wizard-Music-Curated'] = '1'
