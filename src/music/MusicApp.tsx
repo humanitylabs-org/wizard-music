@@ -601,13 +601,16 @@ export function MiniPlayer({ onOpen, notify }: { onOpen: () => void; notify: (me
   const track = snapshot.queue[snapshot.index]
   if (!track) return null
   const progress = snapshot.durationMs ? Math.min(1, snapshot.positionMs / snapshot.durationMs) : 0
-  return <div className={`music-mini${snapshot.stale ? ' music-stale' : ''}`} role="region" aria-label="Now playing">
+  const reconnecting = Boolean(snapshot.reconnecting)
+  return <div className={`music-mini${snapshot.stale ? ' music-stale' : ''}${reconnecting ? ' music-reconnecting' : ''}`} role="region" aria-label="Now playing">
     <button type="button" className="music-mini-open" onClick={onOpen} aria-label={`Open player: ${track.title} by ${track.artist}`}>
       <SwipeDeck className="music-mini-deck" gap={24} {...neighbours(snapshot)} onCommit={(direction, to) => swipeTo(direction, to, track, snapshot)}
         render={(item) => <><Art track={item} size="mini" /><span className="music-row-text"><strong>{item.title}</strong><small>{item.artist}</small></span></>} />
     </button>
     <button type="button" className="music-mini-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph size={22} /></button>
-    <button type="button" className="music-mini-toggle" data-wz-key="p" data-wz-key-label="Play / pause" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engineIfStarted()?.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph /> : <PlayGlyph />}</button>
+    {reconnecting
+      ? <button type="button" className="music-mini-toggle" aria-label={snapshot.error ? 'Try again' : 'Reconnecting'} disabled={!snapshot.error} onClick={() => engineIfStarted()?.reconnect?.()}>{snapshot.error ? <PlayGlyph /> : <LoadingWheel label="Reconnecting" />}</button>
+      : <button type="button" className="music-mini-toggle" data-wz-key="p" data-wz-key-label="Play / pause" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engineIfStarted()?.toggle()}>{(snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph /> : <PlayGlyph />}</button>}
     <button type="button" className="music-mini-next" data-wz-key="k" data-wz-key-label="Next" aria-label="Next song" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
     <button type="button" className="music-mini-close" aria-label="Close: stop this song and end the session" onClick={endListening}><CloseGlyph size={20} /></button>
     <span className="music-mini-progress" style={{ transform: `scaleX(${progress})` }} />
@@ -831,7 +834,9 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
     void sendFeedback(track.id, next ? 'like' : 'unlike').catch(() => notify('Could not save that like.'))
   }
 
-  return <div ref={sheet} className={`music-now${snapshot.stale ? ' music-stale' : ''}`} role="dialog" aria-modal="true" aria-label="Now playing">
+  // Back in view but the phone player has not answered: the song may be old, so it is dimmed and never shown as playing (wizard-music#115).
+  const reconnecting = Boolean(snapshot.reconnecting)
+  return <div ref={sheet} className={`music-now${snapshot.stale ? ' music-stale' : ''}${reconnecting ? ' music-reconnecting' : ''}`} role="dialog" aria-modal="true" aria-label="Now playing">
     <header className="music-now-head">
       <button type="button" className="icon-button" aria-label="Close player" onClick={onClose}><ChevronDown /></button>
       <div><small>{snapshot.station ? 'Station' : 'Playing'}</small><strong>{snapshot.station?.title ?? sourceLabel(track.source)}</strong>{headLine && <span className="music-now-profile" title={headLine}>{headLine}</span>}</div>
@@ -848,22 +853,26 @@ export function NowPlaying({ onClose, notify }: { onClose: () => void; notify: (
           </div>
         </>} />
       <div className="music-seek">
-        <input type="range" min={0} max={Math.max(1, duration)} step={1000} value={Math.min(position, duration || position)} aria-label="Seek"
+        <input type="range" min={0} max={Math.max(1, duration)} step={1000} value={Math.min(position, duration || position)} aria-label="Seek" disabled={reconnecting}
           onChange={(event) => setScrub(Number(event.target.value))}
           onPointerUp={() => { if (scrub !== null) { engine.seek(scrub); setScrub(null) } }}
           onKeyUp={() => { if (scrub !== null) { engine.seek(scrub); setScrub(null) } }} />
-        <div className="music-seek-times"><span>{time(position)}</span><span>{snapshot.buffering ? 'Loading…' : sourceLabel(track.source)}</span><span>{time(duration)}</span></div>
+        <div className="music-seek-times"><span>{time(position)}</span><span>{reconnecting ? (snapshot.error ? 'Not connected' : 'Reconnecting…') : snapshot.buffering ? 'Loading…' : sourceLabel(track.source)}</span><span>{time(duration)}</span></div>
       </div>
       <div className="music-controls">
         <button type="button" className="music-icon-button music-thumb music-thumb-down" aria-label="Thumbs down: stop this song" onClick={() => thumbsDown(track, notify)}><ThumbDownGlyph /></button>
         <button type="button" className="music-icon-button big" data-wz-key="j" data-wz-key-label="Previous" aria-label="Previous" onClick={() => engine.previous()}><PrevGlyph /></button>
-        <button type="button" className="music-play" data-wz-key="p" data-wz-key-label="Play / pause" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engine.toggle()}>{snapshot.buffering && (snapshot.wantPlaying ?? true) ? <LoadingWheel label="Loading" /> : (snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph size={30} /> : <PlayGlyph size={30} />}</button>
+        {reconnecting
+          ? <button type="button" className="music-play" aria-label={snapshot.error ? 'Not connected' : 'Reconnecting'} disabled>{snapshot.error ? null : <LoadingWheel label="Reconnecting" />}</button>
+          : <button type="button" className="music-play" data-wz-key="p" data-wz-key-label="Play / pause" aria-label={(snapshot.wantPlaying ?? snapshot.playing) ? 'Pause' : 'Play'} onClick={() => engine.toggle()}>{snapshot.buffering && (snapshot.wantPlaying ?? true) ? <LoadingWheel label="Loading" /> : (snapshot.wantPlaying ?? snapshot.playing) ? <PauseGlyph size={30} /> : <PlayGlyph size={30} />}</button>}
         <button type="button" className="music-icon-button big" data-wz-key="k" data-wz-key-label="Next" aria-label="Next" onClick={() => changeTrack('next', track, snapshot)}><NextGlyph /></button>
         <button type="button" className={`music-icon-button music-thumb music-like${liked ? ' on' : ''}`} aria-pressed={liked} aria-label={liked ? 'Thumbs up (on)' : 'Thumbs up'} onClick={like}><ThumbUpGlyph filled={liked} /></button>
       </div>
       {snapshot.buffering && (snapshot.wantPlaying ?? true) && !snapshot.error && longStart(track) && <p className="music-status music-long-note" role="status">Getting this mix ready. Long mixes can take up to a minute the first time.</p>}
+      {reconnecting && !snapshot.error && <p className="music-status music-reconnecting-note" role="status">Reconnecting to the phone player…</p>}
       {snapshot.error && <p className="music-status" role="status">{snapshot.error}</p>}
-      {snapshot.error && !(snapshot.wantPlaying ?? snapshot.playing) && !snapshot.buffering && <button type="button" className="music-pill music-retry" onClick={() => engine.jump(snapshot.index)}>Try again</button>}
+      {reconnecting && snapshot.error && <button type="button" className="music-pill music-retry" onClick={() => engine.reconnect?.()}>Try again</button>}
+      {!reconnecting && snapshot.error && !(snapshot.wantPlaying ?? snapshot.playing) && !snapshot.buffering && <button type="button" className="music-pill music-retry" onClick={() => engine.jump(snapshot.index)}>Try again</button>}
       <MusicLevel engine={engine} />
       <section className="music-upnext" aria-label="Queue">
         {played.length > 0 && <button type="button" className={`music-played-toggle${showPlayed ? ' open' : ''}`} aria-expanded={showPlayed} onClick={() => setShowPlayed(!showPlayed)}>

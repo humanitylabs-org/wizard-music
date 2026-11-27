@@ -38,6 +38,8 @@ export type MusicSnapshot = {
   engine: 'native' | 'web'
   /** The phone player may have moved on while Music was out of sight; hide the song until it answers. */
   stale?: boolean
+  /** Back in view but the phone player has not answered yet: the song shown may be old, so it is never shown as playing (wizard-music#115). */
+  reconnecting?: boolean
 }
 
 export interface MusicEngine {
@@ -64,9 +66,13 @@ export interface MusicEngine {
   /** Music level (wizard-music#35): a ceiling 0.05..1 the player gain is scaled by. 1 = no ceiling. */
   level(): number
   setLevel(value: number): void
+  /** Ask the phone player again after it stopped answering (the Try again under "did not answer"). */
+  reconnect?(): void
 }
 
 export const REFILL_THRESHOLD = 5
+/** What Music says when the phone player stopped answering. */
+export const NO_ANSWER = 'Background music did not answer.'
 /** Where the web engine keeps the listening session, so a Wizard restart picks up the same song, spot and station. */
 export const SESSION_KEY = 'wizard-music.session.v1'
 /** Music that was playing when Wizard closed resumes on its own if you come back within this window; later it waits paused. */
@@ -460,21 +466,40 @@ export class NativeEngine implements MusicEngine {
     this.state = { ...this.state, stale: true }
     this.emitter.emit(this.state)
   }
+  /** The player answered after Music came back: show the song it is really on. */
   private unstale(ticket: number) {
-    if (ticket !== this.freshTicket || !this.state.stale) return
+    if (ticket !== this.freshTicket || !(this.state.stale || this.state.reconnecting)) return
     this.clearOnNextAccept = 0
-    this.state = { ...this.state, stale: false }
+    this.state = { ...this.state, stale: false, reconnecting: false }
+    this.emitter.emit(this.state)
+  }
+  /** No answer yet: show the song dimmed as "Reconnecting…", never as playing (wizard-music#115). */
+  private startReconnecting(ticket: number) {
+    if (ticket !== this.freshTicket || !this.state.stale) return
+    this.state = { ...this.state, stale: false, reconnecting: true }
+    this.emitter.emit(this.state)
+  }
+  private giveUp(ticket: number) {
+    if (ticket !== this.freshTicket || !this.state.reconnecting || this.state.error) return
+    this.state = { ...this.state, error: NO_ANSWER }
     this.emitter.emit(this.state)
   }
   /** Ask the player right now (not at the next poll) and show the song once its answer is in. */
   refresh() {
-    if (!this.state.stale) { this.send('state'); return }
+    if (!this.state.stale && !this.state.reconnecting) { this.send('state'); return }
     const ticket = ++this.freshTicket, before = this.acceptCount
     void this.send('state', { fresh: true }).then(() => {
-      if (this.acceptCount > before) this.unstale(ticket)
+      if (this.acceptCount > before && !this.state.error) this.unstale(ticket)
       else this.clearOnNextAccept = ticket // bridges that answer later via onmessage
     })
-    window.setTimeout(() => this.unstale(ticket), 1500) // never leave the player blank
+    window.setTimeout(() => this.startReconnecting(ticket), 1500) // never leave the player blank, never show it as live
+    window.setTimeout(() => this.giveUp(ticket), 5000) // the plain error with Try again, not 22 s of silence
+  }
+  reconnect() {
+    if (!this.state.queue[this.state.index]) { this.send('state'); return }
+    this.state = { ...this.state, reconnecting: true, error: '' }
+    this.emitter.emit(this.state)
+    this.refresh()
   }
 
   private saveSession(force = false) { this.saver.save(this.state, this.state.wantPlaying ?? this.state.playing, force) }
@@ -519,7 +544,10 @@ export class NativeEngine implements MusicEngine {
       if (value[key] !== undefined) (patch as Record<string, unknown>)[key] = value[key]
     }
     if (value.station !== undefined) patch.station = value.station
-    if (this.clearOnNextAccept && this.clearOnNextAccept === this.freshTicket) { this.clearOnNextAccept = 0; patch.stale = false }
+    // A real player answer (not a bridge error) after coming back ends hiding and reconnecting.
+    const live = identity.sessionId !== undefined || value.index !== undefined || Array.isArray(value.queue)
+    if (live && this.clearOnNextAccept && this.clearOnNextAccept === this.freshTicket) { this.clearOnNextAccept = 0; patch.stale = false }
+    if (live && this.state.reconnecting) patch.reconnecting = false
     this.acceptCount++
     this.state = { ...this.state, ...patch }
     if (identity.sessionId || Array.isArray(value.queue)) { this.heard = true; this.markAnswered() }

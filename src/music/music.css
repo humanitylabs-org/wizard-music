@@ -219,6 +219,11 @@ a.music-source:hover { background: color-mix(in srgb, var(--text) 5%, transparen
 /* Back in view before the phone player answers: show no song rather than the old one, then fade the right one in. */
 .music-now-body, .music-mini > * { transition: opacity 140ms ease-out; }
 .music-now.music-stale .music-now-body, .music-mini.music-stale > * { opacity: 0; transition: none; }
+/* Still no answer after 1.5 s (wizard-music#115): the song is dimmed and the controls claim neither Play nor Pause. */
+.music-now.music-reconnecting .music-now-deck, .music-now.music-reconnecting .music-seek, .music-mini.music-reconnecting .music-mini-open { opacity: .45; }
+.music-now.music-reconnecting .music-play { background: color-mix(in srgb, var(--text) 14%, transparent); color: var(--text-2); }
+.music-now.music-reconnecting .music-play:disabled { cursor: default; }
+.music-reconnecting-note { color: var(--text-2); }
 
 /* Tap a song: the player opens at once with a loading wheel until the audio starts. */
 .music-search .music-busy{padding:0;color:var(--wz-accent,var(--wiz))}.music-search .music-wheel{width:20px;height:20px;border-width:2px}.music-search .music-busy>span:last-child{display:none}
