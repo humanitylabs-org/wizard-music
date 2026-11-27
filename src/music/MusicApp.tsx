@@ -274,22 +274,19 @@ export const longStart = (track: MusicTrack) => track.id.startsWith('yt:') && (!
 const LoadingWheel = ({ label }: { label: string }) => <span className="music-wheel" role="progressbar" aria-label={label} />
 
 /** `lead` is the one Identify entry, first on the home page (kept out of this module so Identify stays its own). */
-// ---- Navidrome library + phone music apps (wizard-music#92, switch navidrome) -------------------------------------
-export const NAVIDROME_SWITCH = 'navidrome'
+// ---- Navidrome library + phone music apps (wizard-music#92) ---------------------------------------------------
 type PhoneAppsInfo = { on: boolean; bundled: boolean; server: string }
-/** Under Sources, while the switch is on: the address a Subsonic phone app needs. Tailscale signs it in. */
+/** Under Sources: the address a Subsonic phone app needs. Tailscale signs it in. */
 export function PhoneApps() {
-  const on = useSwitchOn(NAVIDROME_SWITCH)
   const [info, setInfo] = useState<PhoneAppsInfo | null>(null)
   useEffect(() => {
-    if (!on) { setInfo(null); return }
     let live = true
     fetch(BASE + 'api/view/navidrome', { credentials: 'include', headers: { Accept: 'application/json' } })
       .then((response) => response.ok ? response.json() as Promise<PhoneAppsInfo> : null)
       .then((value) => { if (live) setInfo(value) }, () => { if (live) setInfo(null) })
     return () => { live = false }
-  }, [on])
-  if (!on || !info?.on) return null
+  }, [])
+  if (!info?.on) return null
   return <section className="music-phone-apps" aria-label="Phone music apps">
     <strong>Phone music apps</strong>
     {info.server

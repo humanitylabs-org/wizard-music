@@ -1,4 +1,4 @@
-"""Navidrome as the library backend (wizard-music#92, switch navidrome): a fake Navidrome speaking Subsonic."""
+"""Navidrome as the library backend (wizard-music#92, on for everyone): a fake Navidrome speaking Subsonic."""
 import hashlib
 import importlib
 import json
@@ -131,10 +131,11 @@ def env(tmp_path, monkeypatch):
     h = importlib.reload(h)
     h.navidrome = n
 
-    def switch(on):
-        (tmp_path / 'sw').mkdir(exist_ok=True)
-        (tmp_path / 'sw' / 'switches.json').write_text(json.dumps({'navidrome': on}))
-    yield h, n, nd, switch, lib
+    url = n.URL
+
+    def bundle(on):   # this install ships Navidrome (WIZARD_MUSIC_NAVIDROME_URL set), or not
+        n.URL = url if on else ''
+    yield h, n, nd, bundle, lib
     server.shutdown()
     h._db.close()
 
@@ -143,23 +144,36 @@ def lib_id(rel):
     return 'lib:' + hashlib.sha256(rel.encode()).hexdigest()[:20]
 
 
-def test_off_by_default_the_hub_scans_the_folder_itself(env):
-    h, n, nd, switch, lib = env
+def test_on_without_a_switch_and_a_stale_stored_value_changes_nothing(env, tmp_path):
+    h, n, nd, bundle, lib = env
+    (tmp_path / 'sw').mkdir(exist_ok=True)
+    (tmp_path / 'sw' / 'switches.json').write_text(json.dumps({'navidrome': False}))   # left from the old switch
+    assert n.active() and not hasattr(n, 'switch_on')
+    assert h.refresh_library() == 2
+    assert 'search3' in {c[0] for c in nd.calls}
+    assert h.home()['sources'][-1]['name'] == 'Wizard Library · Navidrome'
+
+
+def test_an_install_without_navidrome_scans_the_folder_itself(env):
+    h, n, nd, bundle, lib = env
+    bundle(False)
     assert not n.active()
     assert h.refresh_library() == 2
-    assert nd.calls == []   # nothing asks Navidrome while the switch is off
-    assert h.home()['sources'][-1]['name'] == 'Wizard Library'
+    assert nd.calls == []
+    card = h.home()['sources'][-1]
+    assert card['name'] == 'Wizard Library' and "isn't part of this install" in card['detail']
 
 
 def test_on_the_library_comes_from_navidrome_with_the_same_ids(env):
-    h, n, nd, switch, lib = env
+    h, n, nd, bundle, lib = env
+    bundle(False)
     h.refresh_library()   # the old backend first: a like and a playlist on a library song
     song1 = lib_id('Test Artist/Album One/01 Song 1.mp3')
     assert song1 == f"lib:{h._lib_id(lib / 'Test Artist' / 'Album One' / '01 Song 1.mp3')}"
     h.db('INSERT INTO likes VALUES(?,?,?)', (song1, 1, time.time()))
     h.db('INSERT INTO tracks VALUES(?,?,?,?,?,?,?,?,?)', ('yt:abcdefghijk', 'Online', 'Someone', '', 1000, '', 'youtube', '', time.time()))
     mine = h.create_song_playlist({'name': 'Mix', 'trackIds': ['yt:abcdefghijk', song1, lib_id('loose.mp3')]})
-    switch(True)
+    bundle(True)
     assert n.active()
     assert h.refresh_library() == 2
     assert nd.users == {'wizard'} and set(nd.headers) == {'wizard'}   # its one user, made by Music, trusted by header
@@ -188,9 +202,10 @@ def test_on_the_library_comes_from_navidrome_with_the_same_ids(env):
 
 
 def test_a_scan_in_progress_never_drops_songs_and_navidrome_down_falls_back_to_the_folder(env):
-    h, n, nd, switch, lib = env
+    h, n, nd, bundle, lib = env
+    bundle(False)
     h.refresh_library()
-    switch(True)
+    bundle(True)
     nd.songs = nd.songs[:1]
     nd.scanning = True
     h.refresh_library()
@@ -204,22 +219,22 @@ def test_a_scan_in_progress_never_drops_songs_and_navidrome_down_falls_back_to_t
     assert not card['ok'] and 'reads the folder itself' in card['detail']
 
 
-def test_switching_off_is_the_old_backend_with_nothing_lost(env):
-    h, n, nd, switch, lib = env
-    switch(True)
+def test_without_navidrome_again_nothing_is_lost(env):
+    h, n, nd, bundle, lib = env
+    bundle(True)
     h.refresh_library()
     song1 = lib_id('Test Artist/Album One/01 Song 1.mp3')
     h.db('INSERT INTO likes VALUES(?,?,?)', (song1, 1, time.time()))
     p = h.create_song_playlist({'name': 'Keep', 'trackIds': [song1]})
-    switch(False)
+    bundle(False)
     assert h.refresh_library() == 2
     assert h.track(song1)['liked'] and h.song_playlist(p['id'])['trackIds'] == [song1]
     assert h.track(song1)['title'] == '01 Song 1'   # the folder scan's own name again (no tags in the fake file)
 
 
 def test_stream_and_art_come_from_navidrome(env):
-    h, n, nd, switch, lib = env
-    switch(True)
+    h, n, nd, bundle, lib = env
+    bundle(True)
     h.refresh_library()
     song1 = lib_id('Test Artist/Album One/01 Song 1.mp3')
     server = ThreadingHTTPServer(('127.0.0.1', 0), h.Handler)

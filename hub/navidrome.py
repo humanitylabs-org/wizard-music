@@ -1,10 +1,11 @@
-"""Navidrome as Music's library backend (wizard-music#92, switch `navidrome`, off by default).
+"""Navidrome as Music's library backend (wizard-music#92; on for everyone, the `navidrome` switch is gone).
 
-Navidrome (stock image, bundled in runtipi/docker-compose.yml) reads the same /music folder as the hub. While the
-switch is on, the hub stops scanning the folder itself: the library rows, their art and their audio come from
+Navidrome (stock image, bundled in runtipi/docker-compose.yml) reads the same /music folder as the hub. When it is
+bundled, the hub stops scanning the folder itself: the library rows, their art and their audio come from
 Navidrome's Subsonic API, and Music's own playlists and liked songs are copied into Navidrome so a Subsonic phone app
 sees them too. Track ids stay `lib:<sha of the path>`, so likes, history, mixes and playlists keep pointing at the
-same songs. Nothing in the hub's own tables is deleted, so switching off is the old backend again, as it was.
+same songs. Nothing in the hub's own tables is deleted, and when Navidrome doesn't answer the hub reads the folder
+itself again.
 
 Navidrome answers only on the app's own Docker network (no published port). It trusts one header naming its user
 (`ND_EXTAUTH_USERHEADER`), so no password is stored anywhere: the hub sends it, and Music's app server sends it for
@@ -23,7 +24,6 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-SWITCH = "navidrome"
 URL = os.environ.get("WIZARD_MUSIC_NAVIDROME_URL", "").rstrip("/")   # e.g. http://navidrome:4533/wizard-music
 USER = "wizard"
 USER_HEADER = "X-Wizard-Navidrome-User"
@@ -37,25 +37,13 @@ _user_ready = False
 state = {"ok": None, "error": "", "songs": 0, "at": 0.0}
 
 
-def switches_file() -> Path:
-    # The app server's switch store (server/switches.mjs): $WIZARD_SWITCHES_DIR or $DATA_DIR or /data.
-    return Path(os.environ.get("WIZARD_SWITCHES_DIR") or os.environ.get("DATA_DIR") or "/data") / "switches.json"
-
-
-def switch_on() -> bool:
-    try:
-        return json.loads(switches_file().read_text()).get(SWITCH) is True
-    except (OSError, ValueError, AttributeError):
-        return False
-
-
 def bundled() -> bool:
     return bool(URL)
 
 
 def active() -> bool:
-    """Navidrome serves the library: switched on and bundled with this install."""
-    return bundled() and switch_on()
+    """Navidrome serves the library: it is bundled with this install."""
+    return bundled()
 
 
 class Unavailable(Exception):
@@ -271,7 +259,7 @@ def art(h, tid: str) -> bytes | None:
 
 
 def card(count: int) -> dict:
-    """The library row under Sources while the switch is on."""
+    """The library row under Sources."""
     if not bundled():
         return {"id": "library", "name": "Wizard Library", "status": "connected", "ok": True,
                 "detail": f"{count} track{'s' if count != 1 else ''} on your Wizard · Navidrome isn't part of this install"}

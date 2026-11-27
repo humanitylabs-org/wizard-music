@@ -25,7 +25,7 @@ services:
       WIZARD_TRUSTED_ORIGINS: ${WIZARD_TRUSTED_ORIGINS:-}
       # The App Manager's read-only /wizard grants directory: where the Connection Router answers (wizard-music#90).
       WIZARD_GRANTS_FILE: /wizard/grants.json
-      # Navidrome, below (wizard-music#92, switch navidrome, off by default): Music's library backend and the Subsonic
+      # Navidrome, below (wizard-music#92): Music's library backend and the Subsonic
       # API for phone music apps, at /wizard-music/rest/ behind Music's own address.
       WIZARD_MUSIC_NAVIDROME_URL: http://navidrome:4533/wizard-music
     volumes:
