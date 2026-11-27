@@ -13,7 +13,6 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export const SWITCHES = [
-  { id: 'navidrome', name: 'Navidrome library', description: 'Your own music files play from Navidrome, bundled with Music, instead of Music reading the folder itself. Your playlists and liked songs are copied into it, and any Subsonic phone app (Symfonium, Substreamer, play:Sub, Amperfy) can play your library over your tailnet. YouTube Music works as before. Off: Music reads the folder again, nothing lost.', default: false, issues: ['humanitylabs-org/wizard-music#92'] },
   { id: 'opus-audio', name: 'Best YouTube audio (Opus)', description: "YouTube songs play in YouTube's best quality without signing in: Opus at about 130-160 kbps instead of AAC at 128 kbps. Only on players that can play Opus (Chrome, Edge, Firefox, Android and the Android app); Safari, the Mac app and iPhones keep AAC. A song you already played downloads again in the better format the next time it plays. Off: songs play as AAC again.", default: false, issues: ['humanitylabs-org/wizard-os#820'] },
 ]
 const CONTRACT = 'wizard.app-switches/1'

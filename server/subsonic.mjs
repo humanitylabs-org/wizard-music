@@ -1,4 +1,4 @@
-// Subsonic for phone music apps (wizard-music#92, switch `navidrome`, off by default).
+// Subsonic for phone music apps (wizard-music#92, on for everyone).
 //
 // Navidrome (stock image, runtipi/docker-compose.yml) answers only on Music's own Docker network. A Subsonic app on the
 // owner's phone (Symfonium, Substreamer, play:Sub, Amperfy, ...) reaches it here, at <this address>/wizard-music, so it
@@ -34,11 +34,10 @@ export function serverAddress(req, base) {
   return host && !/[\s/@\\]/.test(host) ? `${proto}://${host}${base}` : ''
 }
 
-/** @param {{ origin?: string, base: string, on: () => boolean }} options */
-export function createSubsonicProxy({ origin = '', base, on }) {
+/** @param {{ origin?: string, base: string }} options */
+export function createSubsonicProxy({ origin = '', base }) {
   const upstream = origin ? new URL(origin) : null   // e.g. http://navidrome:4533/wizard-music (ND_BASEURL = base)
   return async function handleSubsonic(request, response, url, sendJson) {
-    if (!on()) { sendJson(response, 404, { error: 'switched_off' }); return }
     if (!upstream) { sendJson(response, 503, { error: 'navidrome_not_bundled' }); return }
     const method = request.method || 'GET'
     if (!['GET', 'HEAD', 'POST'].includes(method)) { sendJson(response, 405, { error: 'method' }); return }

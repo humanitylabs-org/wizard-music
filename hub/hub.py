@@ -34,7 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))  # identify.py lives beside the hub, however it is loaded
 import identify  # noqa: E402
-import navidrome  # noqa: E402  (wizard-music#92: Navidrome as the library backend, switch navidrome)
+import navidrome  # noqa: E402  (wizard-music#92: Navidrome as the library backend)
 
 HOST = os.environ.get("WIZARD_MUSIC_HUB_HOST", "127.0.0.1")
 PORT = int(os.environ.get("WIZARD_MUSIC_HUB_PORT", "8793"))
@@ -575,7 +575,7 @@ _library_kick = threading.Event()
 
 
 def refresh_library() -> int:
-    """Navidrome's library while its switch is on (wizard-music#92), else Music's own scan of the folder. When
+    """Navidrome's library when it is bundled (wizard-music#92), else Music's own scan of the folder. When
     Navidrome doesn't answer, Music scans the folder itself, so the library never goes away."""
     if navidrome.active():
         try:
@@ -3046,8 +3046,7 @@ def home() -> dict:
     return {
         "settings": online_settings(),
         "sources": [source_card(x) for x in sources_status()] + [
-            navidrome.card(count) if navidrome.switch_on() else
-            {"id": "library", "name": "Wizard Library", "status": "connected", "detail": f"{count} track{'s' if count != 1 else ''} on your Wizard", "ok": True},
+            navidrome.card(count),
         ],
         "vibes": ([{"id": f"mix-{m['key'].replace(' ', '-')}", "label": m["name"], "count": len(m["ids"])} for m in mixes()]
                   + [{"id": f"mine-{c['style'].replace(' ', '-')}", "label": c["label"], "count": c["count"]} for c in collections(6)]
