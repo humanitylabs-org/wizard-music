@@ -49,8 +49,8 @@ export function opusPlayer(userAgent = '') {
   return /\b(?:HeadlessChrome|Chrome|Chromium|Firefox)\/\d/.test(ua)
 }
 
-/** @param {{ origin?: string, token?: string, timeoutMs?: number, base?: string, tickets?: { addTickets(text: string): string }, opus?: () => boolean }} [options] */
-export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000, base: appBase = BASE, tickets, opus = () => false } = {}) {
+/** @param {{ origin?: string, token?: string, timeoutMs?: number, base?: string, tickets?: { addTickets(text: string): string } }} [options] */
+export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000, base: appBase = BASE, tickets } = {}) {
   const hub = origin ? new URL(origin) : null
   if (hub && (hub.protocol !== 'http:' || hub.hostname !== '127.0.0.1' || hub.pathname !== '/' || hub.search || hub.username)) {
     throw new Error('Wizard Music hub must be an exact loopback HTTP origin')
@@ -68,9 +68,9 @@ export function createMusicProxy({ origin = '', token = '', timeoutMs = 150_000,
     // Progressive play (wizard-music#46, on for everyone since it was approved): the hub starts a song while it is
     // still downloading.
     if (route === 'media' && sub.startsWith('/stream/')) headers['X-Wizard-Music-Live'] = '1'
-    // Opus audio (wizard-os#820, switch opus-audio, off by default): YouTube's best signed-out stream (Opus ~130-160k)
-    // instead of AAC 128k, only for a player that can decode it. Off: the hub is asked exactly as before.
-    if (route === 'media' && sub.startsWith('/stream/') && opus() && opusPlayer(request.headers['user-agent'])) headers['X-Wizard-Music-Codec'] = 'opus'
+    // Opus audio (wizard-os#820, on for everyone since it was approved): YouTube's best signed-out stream (Opus
+    // ~130-160k) instead of AAC 128k, only for a player that can decode it; every other player gets AAC as before.
+    if (route === 'media' && sub.startsWith('/stream/') && opusPlayer(request.headers['user-agent'])) headers['X-Wizard-Music-Codec'] = 'opus'
     // More like this stations (wizard-music#90, on for everyone since it was approved): a tapped song starts a
     // station the owner's AI picks.
     if (request.method === 'POST' && sub === '/api/station') headers['X-Wizard-Music-Curated'] = '1'

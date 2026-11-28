@@ -2581,7 +2581,7 @@ _dl_locks: dict[str, threading.Lock] = {}
 _dl_guard = threading.Lock()
 
 
-# Opus audio (wizard-os#820, switch opus-audio): the app server asks for YouTube's Opus stream (X-Wizard-Music-Codec:
+# Opus audio (wizard-os#820, on for everyone since it was approved): the app server asks for YouTube's Opus stream (X-Wizard-Music-Codec:
 # opus) only for a player that can decode it. Each song then has two cache variants side by side: <id>.m4a (AAC, every
 # player, as before) and <id>.webm (Opus). An AAC request never gets the webm, so Safari and Apple's players stay safe.
 CODEC_EXTS = {"aac": ("m4a", "mp3"), "opus": ("webm", "opus")}
