@@ -12,9 +12,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-export const SWITCHES = [
-  { id: 'opus-audio', name: 'Best YouTube audio (Opus)', description: "YouTube songs play in YouTube's best quality without signing in: Opus at about 130-160 kbps instead of AAC at 128 kbps. Only on players that can play Opus (Chrome, Edge, Firefox, Android and the Android app); Safari, the Mac app and iPhones keep AAC. A song you already played downloads again in the better format the next time it plays. Off: songs play as AAC again.", default: false, issues: ['humanitylabs-org/wizard-os#820'] },
-]
+export const SWITCHES = []
 const CONTRACT = 'wizard.app-switches/1'
 const ROUTE = /^(?:\/[a-z0-9][a-z0-9-]{0,62})?\/api\/switches\/?$/
 const LOCAL = new Set(['localhost', '127.0.0.1', '::1', '[::1]', '0.0.0.0'])

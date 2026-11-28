@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { BASE, createMusicProxy } from './music.mjs'
 import { handleMcp } from './mcp.mjs'
 import { createCatalogLookup } from './catalog.mjs'
-import { handleSwitches, pruneSwitches, switchesDoc, switchOn } from './switches.mjs'
+import { handleSwitches, pruneSwitches, switchesDoc } from './switches.mjs'
 import { createMediaTickets } from './media-ticket.mjs'
 import { createSubsonicProxy, serverAddress, SUBSONIC } from './subsonic.mjs'
 
@@ -27,7 +27,7 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inl
 const tickets = createMediaTickets({ secret: process.env.WIZARD_MUSIC_HUB_TOKEN || '', base: BASE })
 const NAVIDROME = process.env.WIZARD_MUSIC_NAVIDROME_URL || ''   // Navidrome as the library backend, Subsonic for phone apps (wizard-music#92)
 const handleSubsonic = createSubsonicProxy({ origin: NAVIDROME, base: BASE })
-const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '', tickets, opus: () => switchOn('opus-audio') })
+const handleMusic = createMusicProxy({ origin: process.env.WIZARD_MUSIC_HUB_ORIGIN || '', token: process.env.WIZARD_MUSIC_HUB_TOKEN || '', tickets })
 
 function sendJson(response, status, value) {
   const raw = Buffer.from(JSON.stringify(value))

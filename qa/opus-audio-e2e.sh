@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Opus audio end to end (wizard-os#820, switch opus-audio): the YouTube Music connector, this hub and this app server,
+# Opus audio end to end (wizard-os#820, on for everyone): the YouTube Music connector, this hub and this app server,
 # run as processes on 127.0.0.1, with only YouTube itself replaced. YouTube refuses data-centre machines, so a local
 # web server plays YouTube: it lists the formats YouTube offers for a song signed out (itags 139/140 AAC, 249/250/251
 # Opus) and serves real audio files for them. The connector runs the REAL yt-dlp (its pinned version), which picks the
 # format with its own selector and downloads it; only the page fetch is swapped for that format list
-# (--load-info-json). Then it asks Music for the song as different players would, with the switch off and on, and
+# (--load-info-json). Then it asks Music for the song as different players would, and
 # prints what each one got (ffprobe).
 #
 #   bash qa/opus-audio-e2e.sh            # connector: wizard-youtube-music main, or its PR #18 while main lacks ?codec=opus
@@ -77,7 +77,7 @@ mkdir -p "$work/conn" "$work/hub" "$work/lib" "$work/sw"
 for p in "$port_conn" "$port_hub" "$port_app"; do for _ in $(seq 60); do curl -s -o /dev/null "127.0.0.1:$p" && break; sleep 0.5; done; done
 curl -s -X POST -H "Authorization: Bearer qa" -H 'content-type: application/json' -d '{"online":true}' "127.0.0.1:$port_hub/api/settings" >/dev/null
 
-# 4. Ask for songs as each player would, switch off then on.
+# 4. Ask for songs as each player would.
 declare -A UA=(
   [chrome-desktop]="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
   [android-app]="WizardBackgroundAudio/1"
@@ -86,21 +86,18 @@ declare -A UA=(
   [iphone-app]="AppleCoreMedia/1.0.0.22B83 (iPhone; U; CPU OS 18_1 like Mac OS X; en_us)"
 )
 bad=0
-play() {  # switch player song expected-codec
-  printf '{"opus-audio": %s}' "$1" > "$work/sw/switches.json"
-  curl -s -o "$work/got" -A "${UA[$2]}" "http://127.0.0.1:$port_app/wizard-music/stream/yt:$3"
+play() {  # player song expected-codec
+  curl -s -o "$work/got" -A "${UA[$1]}" "http://127.0.0.1:$port_app/wizard-music/stream/yt:$2"
   got="$(ffprobe -v error -select_streams a:0 -show_entries stream=codec_name,sample_rate -of csv=p=0 "$work/got" 2>/dev/null || echo none)"
   itag=?; for f in "$work"/yt/*.*; do cmp -s "$f" "$work/got" && itag="$(basename "${f%.*}")"; done
-  want_itag=140; [ "$4" = opus ] && want_itag=251
-  ok=ok; [ "${got%%,*}" = "$4" ] && [ "$itag" = "$want_itag" ] || { ok=WRONG; bad=1; }
-  printf '%-6s %-15s %-12s -> %-12s itag %-4s (want %s, itag %s) %s\n' "$([ "$1" = true ] && echo on || echo off)" "$2" "$3" "$got" "$itag" "$4" "$want_itag" "$ok"
+  want_itag=140; [ "$3" = opus ] && want_itag=251
+  ok=ok; [ "${got%%,*}" = "$3" ] && [ "$itag" = "$want_itag" ] || { ok=WRONG; bad=1; }
+  printf '%-15s %-12s -> %-12s itag %-4s (want %s, itag %s) %s\n' "$1" "$2" "$got" "$itag" "$3" "$want_itag" "$ok"
 }
-echo "switch player          song            got            "
-for p in chrome-desktop android-app safari-mac iphone-app; do play false "$p" zKmWd8DPrEc aac; done
-for p in chrome-desktop android-app firefox; do play true "$p" zKmWd8DPrEc opus; done
-for p in safari-mac iphone-app; do play true "$p" zKmWd8DPrEc aac; done
-play true chrome-desktop noOpusSong1 aac
-play false chrome-desktop zKmWd8DPrEc aac
+echo "player          song            got            "
+for p in chrome-desktop android-app firefox; do play "$p" zKmWd8DPrEc opus; done
+for p in safari-mac iphone-app; do play "$p" zKmWd8DPrEc aac; done
+play chrome-desktop noOpusSong1 aac
 echo; echo "formats yt-dlp was asked for:"; sort "$work/yt-dlp.log" | uniq -c
 echo "connector cache: $(ls "$work/conn/audio" | tr '\n' ' ')"
 echo "hub cache:       $(ls "$work/hub/cache" | tr '\n' ' ')"

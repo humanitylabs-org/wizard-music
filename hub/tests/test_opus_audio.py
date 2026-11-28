@@ -1,4 +1,4 @@
-"""wizard-os#820 (switch opus-audio): YouTube's Opus stream for players that can play it, AAC for everyone else.
+"""wizard-os#820 (on for everyone): YouTube's Opus stream for players that can play it, AAC for everyone else.
 
 The app server adds X-Wizard-Music-Codec: opus to a song stream only when the switch is on and the player can decode
 Opus. The hub then asks the connector for ?codec=opus, keeps the Opus file as <id>.webm beside <id>.m4a and serves it
